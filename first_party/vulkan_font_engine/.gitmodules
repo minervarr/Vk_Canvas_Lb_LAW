@@ -1,0 +1,6 @@
+[submodule "app/src/main/freetype"]
+	path = app/src/main/freetype
+	url = https://github.com/freetype/freetype.git
+[submodule "first_party/vulkan_font_engine"]
+	path = first_party/vulkan_font_engine
+	url = https://github.com/minervarr/vulkan_font_engine
