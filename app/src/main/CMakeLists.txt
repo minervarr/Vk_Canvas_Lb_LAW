@@ -51,8 +51,10 @@ add_library(vk_canvas SHARED
     cpp/app.cc
     cpp/renderer.cc
     cpp/canvas.cc
+    cpp/textarea.cc
     ${FONT_ENGINE_DIR}/cpp/font.cc
     ${FONT_ENGINE_DIR}/cpp/glyphs.cc
+    ${FONT_ENGINE_DIR}/cpp/msdf.cc
     ${NATIVE_APP_GLUE}/android_native_app_glue.c
 )
 
