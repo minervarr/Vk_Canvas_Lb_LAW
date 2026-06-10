@@ -9,7 +9,7 @@ class  MsdfFont;
 struct Color { float r, g, b, a; };
 
 namespace col {
-  constexpr Color bg      = {0.05f, 0.05f, 0.07f, 1.0f};  // Deep dark background
+  constexpr Color bg      = {0.0f, 0.0f, 0.0f, 1.0f};  // Pure black background
   constexpr Color panel   = {0.11f, 0.11f, 0.14f, 1.0f};  // Elevated panel
   constexpr Color text    = {0.96f, 0.96f, 0.98f, 1.0f};  // Crisp white
   constexpr Color dim     = {0.45f, 0.45f, 0.50f, 1.0f};  // Dimmed text
@@ -90,6 +90,14 @@ public:
   void setClip(float x, float y, float w, float h);
   void clearClip();
 
+  // Rotate all subsequently-emitted overlay geometry by `radians` (clockwise in
+  // screen space, y-down) about the pivot (pivotX, pivotY), until clearRotation().
+  // Intended for rotating a whole UI overlay group (e.g. to follow device
+  // orientation) while the underlying preview stays fixed. Applies to the MSDF
+  // text/quad path (text/button labels via useMsdf, and quadMsdfRect).
+  void setRotation(float radians, float pivotX, float pivotY);
+  void clearRotation();
+
 private:
   std::vector<float>& out_;
   uint32_t screenW_, screenH_;
@@ -101,6 +109,19 @@ private:
 
   bool  clipActive_ = false;
   float clipX0_ = 0.0f, clipY0_ = 0.0f, clipX1_ = 0.0f, clipY1_ = 0.0f;
+
+  bool  rotActive_ = false;
+  float rotCos_ = 1.0f, rotSin_ = 0.0f, rotPx_ = 0.0f, rotPy_ = 0.0f;
+  // Rotate (x,y) about the pivot in place when a rotation is active.
+  void  xform_(float& x, float& y) const;
+  // Rotate the point-based curve records (types 3/4/5/6) appended at/after
+  // startIdx and recompute their bounding boxes. Used for the curve text path.
+  void  rotateRecordsFrom_(size_t startIdx);
+  // Emit a filled rectangle as a type-3 capsule (SDF segment + radius): a
+  // rotatable, isotropic substitute for the axis-aligned rounded-box SDF box.
+  // Lives in the SDF pass (not the winding pass), so winding text composites
+  // cleanly on top without colour interference.
+  void  emitRotatableRect_(float x, float y, float w, float h, Color c);
 
   // Clip records appended at/after startIdx against the active clip rect.
   void clipFrom_(size_t startIdx);

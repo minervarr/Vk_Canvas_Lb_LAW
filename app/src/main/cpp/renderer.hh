@@ -1,21 +1,59 @@
 #pragma once
+#define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_android.h>
 #include <android/native_window.h>
+#include <android/asset_manager.h>
+#include <android/hardware_buffer.h>
+#include <android/looper.h>
+#include <vector>
+#include <unordered_map>
+#include <mutex>
+#include <atomic>
+#include <functional>
 #include "canvas.hh"
+#include "overlay.hh"
 
 class Renderer {
 public:
-    explicit Renderer(ANativeWindow* window);
+    Renderer(ANativeWindow* window, AAssetManager* asset_manager);
     ~Renderer();
 
-    void draw(const Canvas& canvas);
+    // Composite the camera frame and then the UI overlay described by
+    // overlay_curves (Canvas curve records) on top of it, rotated by
+    // overlay_rotation_deg (0/90/180/270) to follow device orientation.
+    void draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg);
+    void update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb = nullptr);
+    void clear_camera_frames();
+
+    // While recording the camera delivers HLG frames; this enables the shader's
+    // HLG->SDR tone-map so the preview isn't washed out.
+    void set_camera_hlg(bool hlg) { camera_hlg_ = hlg ? 1.0f : 0.0f; }
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
 
+    // Frame pacing: update_camera_frame() (camera callback thread) sets a flag and
+    // wakes the render loop's looper, so the loop can present exactly once per
+    // camera frame instead of busy-presenting every iteration. Matching the
+    // preview's present rate to the 30fps content (vs ~60-120 half-duplicate
+    // presents/sec) stops SurfaceFlinger hunting the LTPO refresh rate — the
+    // ~once-per-second ~90ms vkWaitForFences stall seen only while recording.
+    void set_wake_looper(ALooper* looper) { wake_looper_ = looper; }
+    bool consume_frame_ready() { return frame_ready_.exchange(false); }
+
 private:
+    ALooper*          wake_looper_  = nullptr;
+    std::atomic<bool> frame_ready_{false};
+
     uint32_t width_  = 0;
     uint32_t height_ = 0;
+    float          camera_hlg_ = 0.0f;
+
+    // Perf instrumentation (logged once per second).
+    int64_t pv_prev_ns_ = 0, pv_window_ns_ = 0, pv_max_gap_ns_ = 0; int pv_frames_ = 0;
+    int64_t dr_window_ns_ = 0, dr_max_ns_ = 0; int dr_frames_ = 0;
+    AAssetManager* asset_manager_ = nullptr;
 
     VkInstance       instance_       = VK_NULL_HANDLE;
     VkSurfaceKHR     surface_        = VK_NULL_HANDLE;
@@ -24,10 +62,78 @@ private:
     VkQueue          queue_          = VK_NULL_HANDLE;
     VkSwapchainKHR   swapchain_      = VK_NULL_HANDLE;
 
+    // Swapchain pixel format/colorspace — resolved at create_swapchain(): 10-bit
+    // HDR (A2B10G10R10 + an HDR colorspace) when the surface supports it, else
+    // the 8-bit SDR default. Shared by the render pass and framebuffer views.
+    VkFormat         swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
+    VkColorSpaceKHR  swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    bool             swapchain_hdr_        = false;
+    bool             ext_swapchain_colorspace_ = false;  // instance ext enabled
+
+    VkRenderPass                 render_pass_ = VK_NULL_HANDLE;
+    std::vector<VkImage>         swapchain_images_;
+    std::vector<VkImageView>     swapchain_image_views_;
+    std::vector<VkFramebuffer>   framebuffers_;
+    
+    VkCommandPool                cmd_pool_ = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> cmd_buffers_;
+    
+    VkSemaphore image_available_sem_ = VK_NULL_HANDLE;
+    VkSemaphore render_finished_sem_ = VK_NULL_HANDLE;
+    VkFence     in_flight_fence_     = VK_NULL_HANDLE;
+
+    // AHardwareBuffer specific
+    PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID_ = nullptr;
+    PFN_vkCreateSamplerYcbcrConversion vkCreateSamplerYcbcrConversion_ = nullptr;
+    PFN_vkDestroySamplerYcbcrConversion vkDestroySamplerYcbcrConversion_ = nullptr;
+    
+    std::mutex hwb_mutex_;
+    AHardwareBuffer* pending_hwb_ = nullptr;
+    std::function<void()> current_release_cb_;
+    std::function<void()> pending_release_cb_;
+    
+    
+    struct HwbCache {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet desc_set = VK_NULL_HANDLE;
+    };
+    std::unordered_map<AHardwareBuffer*, HwbCache> hwb_cache_;
+
+    AHardwareBuffer* current_hwb_ = nullptr;
+    VkSamplerYcbcrConversion ycbcr_conversion_ = VK_NULL_HANDLE;
+    VkSampler hwb_sampler_ = VK_NULL_HANDLE;
+    VkImage hwb_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;
+    VkImageView hwb_view_ = VK_NULL_HANDLE;
+    
+    uint64_t last_external_format_ = 0;
+
+    // Pipeline
+    VkDescriptorSetLayout desc_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
+    
+    VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
+    VkPipeline pipeline_ = VK_NULL_HANDLE;
+
+    // UI overlay (canvas curve records rasterised + composited over the camera).
+    OverlayRasterizer overlay_;
+
     void create_instance();
     void create_surface(ANativeWindow* window);
     void pick_physical_device();
     void create_logical_device();
     void create_swapchain();
+    void create_render_pass();
+    void create_framebuffers();
+    void create_sync_objects();
+    void create_command_buffers();
+    
+    void setup_hwb_resources(AHardwareBuffer* hwb);
+    void cleanup_hwb_resources();
+    void bind_hwb(AHardwareBuffer* hwb);
+
+    uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
     void cleanup();
 };

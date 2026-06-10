@@ -5,6 +5,7 @@
 #include "utf8.hh"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 // Layout of a curve record (20 floats); bounding box lives at [14..17].
@@ -34,10 +35,15 @@ void Canvas::clear(Color c) {
 
 void Canvas::rect(float x, float y, float w, float h, Color c, float radius) {
     size_t start = out_.size();
-    emitFilledRect(out_,
-                   x + w * 0.5f, y + h * 0.5f,
-                   w * 0.5f,     h * 0.5f,
-                   c.r, c.g, c.b, c.a, radius);
+    if (rotActive_) {
+        // Rounded-box SDF can't be rotated; emit a rotatable capsule instead.
+        emitRotatableRect_(x, y, w, h, c);
+    } else {
+        emitFilledRect(out_,
+                       x + w * 0.5f, y + h * 0.5f,
+                       w * 0.5f,     h * 0.5f,
+                       c.r, c.g, c.b, c.a, radius);
+    }
     clipFrom_(start);
 }
 
@@ -55,6 +61,7 @@ void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
         y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
     }
     auto vert = [&](float vx, float vy) {
+        xform_(vx, vy);
         quads_->push_back(vx); quads_->push_back(vy);
         quads_->push_back(uc); quads_->push_back(vc);
         quads_->push_back(c.r); quads_->push_back(c.g);
@@ -62,6 +69,76 @@ void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
     };
     vert(x0, y0); vert(x1, y0); vert(x1, y1);
     vert(x0, y0); vert(x1, y1); vert(x0, y1);
+}
+
+void Canvas::setRotation(float radians, float pivotX, float pivotY) {
+    rotActive_ = true;
+    rotCos_ = std::cos(radians);
+    rotSin_ = std::sin(radians);
+    rotPx_  = pivotX;
+    rotPy_  = pivotY;
+}
+
+void Canvas::clearRotation() { rotActive_ = false; }
+
+void Canvas::xform_(float& x, float& y) const {
+    if (!rotActive_) return;
+    float dx = x - rotPx_, dy = y - rotPy_;
+    x = rotPx_ + dx * rotCos_ - dy * rotSin_;
+    y = rotPy_ + dx * rotSin_ + dy * rotCos_;
+}
+
+void Canvas::rotateRecordsFrom_(size_t startIdx) {
+    if (!rotActive_) return;
+    for (size_t r = startIdx; r + kCurveFloats <= out_.size(); r += kCurveFloats) {
+        int type = static_cast<int>(out_[r]);
+        // Number of (x,y) points stored at slots [1..]: cubic=4, quad=3,
+        // line/segment=2. Other (SDF box/parabola/halfplane) types aren't
+        // closed under rotation and are not emitted while a rotation is active.
+        int npts = (type == 4) ? 4 : (type == 5) ? 3 : (type == 6 || type == 3) ? 2 : 0;
+        if (npts == 0) continue;
+        float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+        for (int k = 0; k < npts; ++k) {
+            float px = out_[r + 1 + 2 * k], py = out_[r + 2 + 2 * k];
+            xform_(px, py);
+            out_[r + 1 + 2 * k] = px; out_[r + 2 + 2 * k] = py;
+            minX = std::min(minX, px); minY = std::min(minY, py);
+            maxX = std::max(maxX, px); maxY = std::max(maxY, py);
+        }
+        out_[r + kBBoxMinX] = minX; out_[r + kBBoxMinY] = minY;
+        out_[r + kBBoxMaxX] = maxX; out_[r + kBBoxMaxY] = maxY;
+    }
+}
+
+void Canvas::emitRotatableRect_(float x, float y, float w, float h, Color c) {
+    // A horizontal capsule of half-thickness h/2 spanning [x, x+w] at mid-height:
+    // segment endpoints inset by the radius so the rounded ends land at x and x+w.
+    float hh = h * 0.5f;
+    float ax = x + hh, ay = y + hh;
+    float bx = x + w - hh, by = y + hh;
+    if (bx < ax) { ax = bx = x + w * 0.5f; }  // degenerate (very short) button
+    xform_(ax, ay); xform_(bx, by);
+
+    // Tiling bbox: the rotated rectangle's 4 corners (the capsule fits inside).
+    float cxs[4] = {x, x + w, x + w, x};
+    float cys[4] = {y, y, y + h, y + h};
+    float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+    for (int i = 0; i < 4; ++i) {
+        float px = cxs[i], py = cys[i];
+        xform_(px, py);
+        minX = std::min(minX, px); minY = std::min(minY, py);
+        maxX = std::max(maxX, px); maxY = std::max(maxY, py);
+    }
+
+    float rec[kCurveFloats] = {0};
+    rec[0] = 3.0f;                 // SDF segment
+    rec[1] = ax; rec[2] = ay;
+    rec[3] = bx; rec[4] = by;
+    rec[9] = c.r; rec[10] = c.g; rec[11] = c.b; rec[12] = c.a;
+    rec[13] = hh;                  // lineWidth = capsule radius → filled pill
+    rec[kBBoxMinX] = minX; rec[kBBoxMinY] = minY;
+    rec[kBBoxMaxX] = maxX; rec[kBBoxMaxY] = maxY;
+    out_.insert(out_.end(), rec, rec + kCurveFloats);
 }
 
 void Canvas::setClip(float x, float y, float w, float h) {
@@ -101,6 +178,7 @@ void Canvas::emitText_(std::string_view str, float x, float baselineY, float siz
         font_->emitString(out_, str, x, baselineY, size, c.r, c.g, c.b, c.a);
     else
         emitString(out_, str, x, baselineY, size, size * 0.07f, c.r, c.g, c.b, c.a);
+    rotateRecordsFrom_(start);  // rotate glyph cubics when a rotation is active
     clipFrom_(start);
 }
 
@@ -131,6 +209,7 @@ void Canvas::emitTextMsdf_(std::string_view str, float x, float baselineY, float
             u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
         }
         auto vert = [&](float vx, float vy, float vu, float vv) {
+            xform_(vx, vy);
             quads_->push_back(vx); quads_->push_back(vy);
             quads_->push_back(vu); quads_->push_back(vv);
             quads_->push_back(c.r); quads_->push_back(c.g);
