@@ -852,9 +852,14 @@ void Renderer::create_sync_objects() {
 }
 
 void Renderer::cleanup_hwb_resources() {
-    if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
-    if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
-    
+    // Null every handle right after destroying it: clear_camera_frames() is called
+    // at the end of this function and ALSO touches desc_pool_ / hwb_cache_ (it
+    // vkResetDescriptorPool's the pool). Without nulling, that reset hits the
+    // already-destroyed pool → the Mali driver locks a freed mutex → SIGABRT
+    // ("pthread_mutex_lock called on a destroyed mutex") on every teardown.
+    if (pipeline_) { vkDestroyPipeline(device_, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
+    if (pipeline_layout_) { vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr); pipeline_layout_ = VK_NULL_HANDLE; }
+
     for (auto& pair : hwb_cache_) {
         vkDestroyImageView(device_, pair.second.view, nullptr);
         vkDestroyImage(device_, pair.second.image, nullptr);
@@ -862,11 +867,11 @@ void Renderer::cleanup_hwb_resources() {
     }
     hwb_cache_.clear();
 
-    if (desc_pool_) vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
-    if (desc_layout_) vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr);
-    
-    if (hwb_sampler_) vkDestroySampler(device_, hwb_sampler_, nullptr);
-    if (ycbcr_conversion_ && vkDestroySamplerYcbcrConversion_) vkDestroySamplerYcbcrConversion_(device_, ycbcr_conversion_, nullptr);
+    if (desc_pool_) { vkDestroyDescriptorPool(device_, desc_pool_, nullptr); desc_pool_ = VK_NULL_HANDLE; }
+    if (desc_layout_) { vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr); desc_layout_ = VK_NULL_HANDLE; }
+
+    if (hwb_sampler_) { vkDestroySampler(device_, hwb_sampler_, nullptr); hwb_sampler_ = VK_NULL_HANDLE; }
+    if (ycbcr_conversion_ && vkDestroySamplerYcbcrConversion_) { vkDestroySamplerYcbcrConversion_(device_, ycbcr_conversion_, nullptr); ycbcr_conversion_ = VK_NULL_HANDLE; }
     clear_camera_frames();
 }
 
