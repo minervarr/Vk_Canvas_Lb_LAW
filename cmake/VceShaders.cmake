@@ -10,10 +10,19 @@
 # (add_dependencies(<your_lib> <target_name>) to force them to build first).
 #
 # The slangc binary is resolved from the VCE_SLANGC cache variable. It defaults
-# to the Windows Vulkan SDK install path this project is developed against; a
-# host with the SDK elsewhere overrides it with -DVCE_SLANGC=/path/to/slangc.
+# to $ENV{VULKAN_SDK}, falling back to the Windows Vulkan SDK install path this
+# project is developed against; override with -DVCE_SLANGC=/path/to/slangc.
 
-set(VCE_SLANGC "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe"
+if(DEFINED ENV{VULKAN_SDK})
+    if(CMAKE_HOST_WIN32)
+        set(_vce_slangc_default "$ENV{VULKAN_SDK}/Bin/slangc.exe")
+    else()
+        set(_vce_slangc_default "$ENV{VULKAN_SDK}/bin/slangc")
+    endif()
+else()
+    set(_vce_slangc_default "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe")
+endif()
+set(VCE_SLANGC "${_vce_slangc_default}"
     CACHE FILEPATH "Path to the Slang compiler (slangc) from the Vulkan SDK")
 
 function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
