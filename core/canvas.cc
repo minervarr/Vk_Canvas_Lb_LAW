@@ -62,6 +62,21 @@ void Canvas::image(TextureHandle tex, float x, float y, float w, float h,
   images_->push_back(d);
 }
 
+void Canvas::imageFg(TextureHandle tex, float x, float y, float w, float h,
+                      float u0, float v0, float u1, float v1) {
+  if (!imagesFg_ || tex == kInvalidTexture) return;
+  ImageDraw d;
+  d.tex = tex;
+  d.x = x; d.y = y; d.w = w; d.h = h;
+  d.u0 = u0; d.v0 = v0; d.u1 = u1; d.v1 = v1;
+  if (clipActive_) {
+    d.hasClip = true;
+    d.clipX = clipX0_; d.clipY = clipY0_;
+    d.clipW = clipX1_ - clipX0_; d.clipH = clipY1_ - clipY0_;
+  }
+  imagesFg_->push_back(d);
+}
+
 void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color c) {
     xform_(ax, ay);
     xform_(bx, by);

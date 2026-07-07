@@ -23,12 +23,15 @@ public:
     Renderer(SurfaceProvider& surface, AssetReader& assets);
     ~Renderer();
 
-    // Composite the camera frame (if any), then textured quads (album art,
-    // icons — background layer), then the UI overlay described by
-    // overlay_curves (Canvas curve records) on top of it all, rotated by
-    // overlay_rotation_deg (0/90/180/270) to follow device orientation.
+    // Composite, in order: the camera frame (if any); background textured
+    // quads (album art — behind UI chrome); the UI overlay described by
+    // overlay_curves (Canvas curve records), rotated by overlay_rotation_deg
+    // (0/90/180/270) to follow device orientation; then foreground textured
+    // quads (icons/buttons — on top of UI chrome, e.g. a button's own
+    // background rect).
     void draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
-              const std::vector<ImageDraw>& images = {});
+              const std::vector<ImageDraw>& images = {},
+              const std::vector<ImageDraw>& foregroundImages = {});
 
     // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
     // Canvas::image() draws. See ImageLayer::create_texture for details.

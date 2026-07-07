@@ -65,6 +65,12 @@ public:
   // default) to make image() a no-op, e.g. for hosts that never draw art.
   void useImages(std::vector<ImageDraw>* out) { images_ = out; }
 
+  // Same, for imageFg() — foreground images (icons, buttons) that must
+  // render ON TOP of vector/text UI, the opposite of image()'s background
+  // layer (album art, sitting BEHIND UI chrome). Renderer::draw() composites
+  // in the order: background images -> vector overlay -> foreground images.
+  void useImagesFg(std::vector<ImageDraw>* out) { imagesFg_ = out; }
+
   // Measure text width in pixels at the given cap-height size.
   float textWidth(std::string_view str, float size) const;
 
@@ -82,6 +88,10 @@ public:
   // this engine are never drawn rotated) — screen-space only.
   void image(TextureHandle tex, float x, float y, float w, float h,
              float u0 = 0.0f, float v0 = 0.0f, float u1 = 1.0f, float v1 = 1.0f);
+
+  // Same as image(), but drawn in the foreground layer (see useImagesFg()).
+  void imageFg(TextureHandle tex, float x, float y, float w, float h,
+               float u0 = 0.0f, float v0 = 0.0f, float u1 = 1.0f, float v1 = 1.0f);
 
   // Draw text. x,y is the top-left corner of the text box.
   void text(std::string_view str, float x, float y, float size, Color c);
@@ -155,6 +165,7 @@ private:
   const MsdfFont* msdf_ = nullptr;
   std::vector<float>* quads_ = nullptr;
   std::vector<ImageDraw>* images_ = nullptr;
+  std::vector<ImageDraw>* imagesFg_ = nullptr;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
   float contentW_, contentH_;
 

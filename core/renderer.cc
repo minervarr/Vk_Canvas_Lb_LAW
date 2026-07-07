@@ -399,7 +399,8 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
 #endif  // __ANDROID__
 
 void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
-                    const std::vector<ImageDraw>& images) {
+                    const std::vector<ImageDraw>& images,
+                    const std::vector<ImageDraw>& foregroundImages) {
     if (!device_) return;
     int64_t draw_t0 = now_ns();
     overlay_.uploadCurves(overlay_curves.data(),
@@ -515,6 +516,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     if (!overlay_curves.empty()) {
         overlay_.recordComposite(cmd_buffers_[image_index], overlay_rotation_deg);
+    }
+
+    if (!foregroundImages.empty()) {
+        image_layer_.recordComposite(cmd_buffers_[image_index], foregroundImages, width_, height_);
     }
 
     vkCmdEndRenderPass(cmd_buffers_[image_index]);
