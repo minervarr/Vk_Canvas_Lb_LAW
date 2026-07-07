@@ -1,6 +1,6 @@
 # vulkan_canvas_engine
 
-Android Vulkan canvas engine. Uses [vulkan_font_engine](https://github.com/minervarr/vulkan_font_engine) as a submodule for GPU text rendering.
+Cross-platform Vulkan canvas engine (Android + Windows; Linux/Wayland planned). Uses [vulkan_font_engine](https://github.com/minervarr/vulkan_font_engine) as a submodule for GPU text rendering.
 
 ## Setup
 
@@ -11,7 +11,11 @@ git submodule update --init --recursive
 ## Build
 
 ```bash
-./gradlew assembleDebug
+# Android
+cd platform/android && ./gradlew assembleDebug
+
+# Windows (MSVC + Ninja + Vulkan SDK)
+./Build.bat
 ```
 ## License
 

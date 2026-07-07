@@ -9,7 +9,7 @@ add_subdirectory(${REPO_ROOT}/core ${CMAKE_BINARY_DIR}/core)
 # the Gradle module's assets/ so AGP packages them into the APK).
 include(${REPO_ROOT}/cmake/VceShaders.cmake)
 vce_compile_slang(compile_shaders
-    ${REPO_ROOT}/app/src/main/assets/shaders
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/src/main/assets/shaders
     ${REPO_ROOT}/shaders_src
     composite_vert
     composite_frag
