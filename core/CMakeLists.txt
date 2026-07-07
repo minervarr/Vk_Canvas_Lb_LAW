@@ -1,10 +1,9 @@
-cmake_minimum_required(VERSION 3.22.1)
-project(vk_canvas_android)
+# Platform-agnostic canvas/text engine, built as the vk_canvas_core static
+# library. Consumed by platform/*/CMakeLists.txt; core code depends only on
+# platform.hh seams (AssetReader / SurfaceProvider / FrameWaker), never on
+# platform SDK headers.
 
-set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
-
-set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
-set(FONT_ENGINE_DIR ${REPO_ROOT}/first_party/vulkan_font_engine/app/src/main)
+set(FONT_ENGINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../first_party/vulkan_font_engine/app/src/main)
 
 # FreeType lives inside the font engine submodule.
 # Override with: cmake -DFREETYPE_SOURCE_DIR=/your/path/to/freetype-src
@@ -36,57 +35,42 @@ set(MSDFGEN_DISABLE_PNG ON CACHE BOOL "" FORCE)
 set(MSDFGEN_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${FONT_ENGINE_DIR}/msdfgen ${CMAKE_BINARY_DIR}/msdfgen)
 
-# Slang shader compilation (shared sources at repo root; .spv packaged from assets/)
-include(${REPO_ROOT}/cmake/VceShaders.cmake)
-vce_compile_slang(compile_shaders
-    ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
-    ${REPO_ROOT}/shaders_src
-    composite_vert
-    composite_frag
-    tiling
-    coverage
-    overlay_vert
-    overlay_frag
-)
-
-add_library(vk_canvas SHARED
-    cpp/main.cc
-    cpp/app.cc
-    cpp/android_platform.cc
-    cpp/renderer.cc
-    cpp/overlay.cc
-    cpp/canvas.cc
-    cpp/textarea.cc
-    cpp/widgets.cc
+add_library(vk_canvas_core STATIC
+    renderer.cc
+    overlay.cc
+    canvas.cc
+    textarea.cc
+    widgets.cc
     ${FONT_ENGINE_DIR}/cpp/font.cc
     ${FONT_ENGINE_DIR}/cpp/glyphs.cc
     ${FONT_ENGINE_DIR}/cpp/msdf.cc
-    ${NATIVE_APP_GLUE}/android_native_app_glue.c
 )
+# WIP — moved here but not yet ported to the platform seams, deliberately not
+# compiled: canvas_host vulkan_state compute_context text_editor text_buffer
+# undo_redo pager plotview gesture
 
-add_dependencies(vk_canvas compile_shaders)
-
-target_include_directories(vk_canvas PRIVATE
-    ${NATIVE_APP_GLUE}
-    cpp/
+target_include_directories(vk_canvas_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${FONT_ENGINE_DIR}/cpp
     ${FONT_ENGINE_DIR}/msdfgen
     ${FREETYPE_SOURCE_DIR}/include
 )
 
-target_compile_options(vk_canvas PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
-    -O2
-)
+target_compile_features(vk_canvas_core PUBLIC cxx_std_17)
+target_compile_options(vk_canvas_core PRIVATE -O2)
 
 # msdfgen-core linked explicitly (msdfgen-ext links it only PRIVATE): its PUBLIC
 # `MSDFGEN_PUBLIC=` define makes msdfgen/core/base.h skip the generated
 # msdfgen-config.h, which only exists under MSDFGEN_INSTALL.
-target_link_libraries(vk_canvas
+target_link_libraries(vk_canvas_core PUBLIC
     freetype
     msdfgen::msdfgen-ext
     msdfgen::msdfgen-core
-    android
-    log
     vulkan
 )
+
+if(ANDROID)
+    # log.hh routes to logcat; the submodule's msdf.cc still uses <android/log.h>
+    # and the camera path imports AHardwareBuffers.
+    target_link_libraries(vk_canvas_core PUBLIC android log)
+endif()
