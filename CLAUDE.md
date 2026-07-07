@@ -24,13 +24,13 @@ git submodule update --init --recursive
 **Prerequisites:**
 - Android NDK 29.0.14206865 (set `ANDROID_NDK_HOME`)
 - CMake 3.22.1+
-- FreeType source — lives inside the `vulkan_font_engine` submodule at `first_party/vulkan_font_engine/app/src/main/freetype` (init submodules first)
-- Slang compiler (`slangc.exe`) from Vulkan SDK 1.4.341.1 — required for recompiling shaders
+- FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/app/src/main/` (init submodules first)
+- Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
 - No tests to run; this is a demo app with no test framework
 
 ## Shader Compilation
 
-Shaders are written in **Slang** (in `app/src/main/shaders_src/`) and compiled to SPIR-V (into `app/src/main/assets/shaders/`). CMake invokes `slangc.exe` automatically. To recompile manually:
+Shaders are written in **Slang** in the repo-root `shaders_src/` and compiled to SPIR-V into `app/src/main/assets/shaders/` (packaged into the APK). Six shaders: `composite_vert`, `composite_frag`, `tiling`, `coverage`, `overlay_vert`, `overlay_frag`. CMake invokes slangc via `cmake/VceShaders.cmake`. To recompile manually:
 
 ```bash
 slangc.exe <shader>.slang -target spirv -o <output>.spv
@@ -38,22 +38,44 @@ slangc.exe <shader>.slang -target spirv -o <output>.spv
 
 ## Architecture
 
-The canvas engine renders 2D content (currently text) on the GPU via Vulkan compute shaders. Font rasterisation is provided by the `vulkan_font_engine` submodule at `first_party/vulkan_font_engine`; its `font.cc` / `glyphs.cc` / `font.hh` are compiled directly into `vk_canvas`.
+One platform-agnostic engine core plus thin per-platform backends:
+
+```
+core/                      # vk_canvas_core STATIC lib — no platform SDK includes
+  platform.hh              # the seam: AssetReader / SurfaceProvider / FrameWaker + DeviceCaps
+  renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
+  canvas_host.* vulkan_state.* compute_context.* text_editor.*
+  text_buffer.* undo_redo.* pager.* plotview.* gesture.*  (WIP — moved, not compiled)
+shaders_src/               # shared Slang sources
+platform/
+  android/                 # NDK glue + CMake entry point consumed by Gradle
+  windows/                 # planned Win32 backend (README only)
+  linux/                   # planned Wayland backend (README only)
+first_party/vulkan_font_engine/   # submodule (FreeType, msdfgen, font/glyphs/msdf sources)
+app/                       # Gradle module: manifest + packaged assets only, no C++ sources
+```
+
+Rules of the structure:
+- **Core never includes platform SDK headers.** Platform needs go through `core/platform.hh`: `AssetReader` (shader/font bytes), `SurfaceProvider` (instance extensions + VkSurfaceKHR creation + extent), `FrameWaker` (wake the render loop). Android implements these in `platform/android/android_platform.{hh,cc}`.
+- **Feature use is capability-driven, never platform-hardcoded.** `Renderer` fills a `DeviceCaps` struct at physical-device selection; optional techniques gate on caps so mobile limits never cap PC.
+- The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/renderer.cc` under `#if defined(__ANDROID__)`.
+- `platform/android/CMakeLists.txt` is the CMake entry (`app/build.gradle` → `externalNativeBuild.cmake.path`); it `add_subdirectory`s `core/`.
 
 ### Component Map
 
 | File | Role |
 |------|------|
-| `main.cc` | Android NDK `android_main()` entry; event loop, window lifecycle |
-| `app.hh/cc` | Vulkan bootstrap and lifecycle; owns Renderer and Canvas |
-| `renderer.hh/cc` | Vulkan device/swapchain setup; draws a Canvas each frame |
-| `canvas.hh/cc` | Scene description: list of text draw calls with position + size |
-| `font.hh/cc` | (from submodule) FreeType wrapper; converts glyphs to CurveRecords |
-| `glyphs.hh/cc` | (from submodule) Hardcoded fallback glyphs when FreeType is unavailable |
+| `platform/android/main.cc` | Android NDK `android_main()` entry |
+| `platform/android/app.hh/cc` | ALooper event loop, window lifecycle, seam wiring, test scene |
+| `platform/android/android_platform.*` | Android impls of the platform.hh seams |
+| `core/renderer.hh/cc` | Vulkan instance/device/swapchain; draws curve buffer each frame |
+| `core/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame |
+| `core/canvas.hh/cc` | Immediate-mode scene builder emitting 20-float curve records |
+| `font.hh/cc`, `glyphs.hh/cc`, `msdf.*` | (from submodule) FreeType wrapper / fallback glyphs / MSDF atlas |
 
 ### Submodule
 
-`first_party/vulkan_font_engine` — GPU font rendering library. Provides FreeType integration, curve rasterisation shaders, and the CurveRecord format consumed by the canvas renderer.
+`first_party/vulkan_font_engine` — GPU font rendering library. Provides FreeType integration, msdfgen, curve rasterisation shaders, and the CurveRecord format consumed by the canvas renderer. Known Phase 2 task: its `msdf.cc/.hh` still use `<android/log.h>` and `AAssetManager` in their API (needs a commit in that repo before desktop builds).
 
 ## Project Configuration
 
