@@ -5,6 +5,7 @@
 #include "renderer.hh"
 #include "canvas.hh"
 #include "texture.hh"
+#include "input.hh"
 #include "log.hh"
 
 #include <vector>
@@ -18,15 +19,60 @@ namespace {
 
 bool g_running = true;
 
+// Demo InputSink: hover/press state for one button, driven entirely by the
+// input seam (win32_translate_input -> onPointer), exercising it end-to-end.
+// btnRect is updated each frame in draw_frame() to track the button's current
+// screen position (which moves/rescales with the window on resize).
+struct DemoInput : InputSink {
+    Rect btnRect{0, 0, 0, 0};
+    bool hover = false;
+    bool pressed = false;
+    int  clicks = 0;
+
+    void onPointer(const PointerEvent& e) override {
+        switch (e.action) {
+            case PointerAction::Move:
+            case PointerAction::Enter:
+                hover = btnRect.contains(e.x, e.y);
+                break;
+            case PointerAction::Leave:
+                hover = false;
+                pressed = false;
+                break;
+            case PointerAction::Down:
+                if (e.button == 0 && btnRect.contains(e.x, e.y)) pressed = true;
+                break;
+            case PointerAction::Up:
+                if (e.button == 0) {
+                    if (pressed && btnRect.contains(e.x, e.y)) {
+                        clicks++;
+                        LOGI("demo button clicked (%d total)", clicks);
+                    }
+                    pressed = false;
+                }
+                break;
+        }
+    }
+    void onWheel(const WheelEvent& e) override {
+        LOGI("wheel deltaY=%.2f at (%.0f,%.0f)", e.deltaY, e.x, e.y);
+    }
+    void onKey(const KeyEvent& e) override {
+        if (e.down) LOGI("key down: %d", e.keyCode);
+    }
+};
+
+DemoInput g_input;
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (win32_translate_input(hwnd, msg, wp, lp, g_input)) {
+        if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { g_running = false; PostQuitMessage(0); }
+        return 0;
+    }
     switch (msg) {
         case WM_CLOSE:
         case WM_DESTROY:
             g_running = false;
             PostQuitMessage(0);
-            return 0;
-        case WM_KEYDOWN:
-            if (wp == VK_ESCAPE) { g_running = false; PostQuitMessage(0); }
             return 0;
         case WM_SIZE:
             // No explicit action needed: the next draw() call's
@@ -103,6 +149,16 @@ void draw_frame(Renderer& renderer, std::vector<float>& curves,
     canvas.image(testTex, w * 0.35f, h * 0.15f, w * 0.3f, w * 0.3f);
     canvas.rect(w * 0.1f, h * 0.4f, w * 0.8f, h * 0.2f, col::panel, w * 0.02f);
     canvas.text("VK CANVAS", w * 0.15f, h * 0.47f, h * 0.05f, col::text);
+
+    // Demo button exercising the input seam: hover/press state comes entirely
+    // from DemoInput::onPointer, driven by win32_translate_input in wnd_proc.
+    g_input.btnRect = {w * 0.1f, h * 0.7f, w * 0.25f, h * 0.08f};
+    Color btnColor = g_input.pressed ? col::accent : (g_input.hover ? col::btnIdle : col::panel2);
+    canvas.rect(g_input.btnRect.x, g_input.btnRect.y, g_input.btnRect.w, g_input.btnRect.h,
+                btnColor, h * 0.02f);
+    canvas.text("CLICK ME", g_input.btnRect.x + w * 0.02f,
+               g_input.btnRect.y + g_input.btnRect.h * 0.3f, h * 0.03f, col::text);
+
     renderer.draw(curves, /*overlay_rotation_deg=*/0, images);
 }
 

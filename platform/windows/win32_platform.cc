@@ -3,8 +3,10 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_win32.h>
+#include <windowsx.h>  // GET_X_LPARAM/GET_Y_LPARAM/GET_WHEEL_DELTA_WPARAM
 
 #include <cstdio>
+#include <unordered_map>
 
 FileAssetReader::FileAssetReader() {
     char exe[MAX_PATH]{};
@@ -51,4 +53,63 @@ VkExtent2D Win32SurfaceProvider::extent() const {
     GetClientRect(hwnd_, &rc);
     return { static_cast<uint32_t>(rc.right - rc.left),
              static_cast<uint32_t>(rc.bottom - rc.top) };
+}
+
+namespace {
+// Per-HWND "are we currently subscribed to WM_MOUSELEAVE" flag — TrackMouseEvent
+// resets itself after each leave, so it must be re-armed on every fresh
+// WM_MOUSEMOVE that follows one.
+std::unordered_map<HWND, bool> g_tracking_leave;
+}  // namespace
+
+bool win32_translate_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, InputSink& sink) {
+    switch (msg) {
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN: {
+            int button = (msg == WM_LBUTTONDOWN) ? 0 : (msg == WM_RBUTTONDOWN) ? 1 : 2;
+            sink.onPointer({PointerAction::Down, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), button});
+            return true;
+        }
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONUP: {
+            int button = (msg == WM_LBUTTONUP) ? 0 : (msg == WM_RBUTTONUP) ? 1 : 2;
+            sink.onPointer({PointerAction::Up, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), button});
+            return true;
+        }
+        case WM_MOUSEMOVE: {
+            if (!g_tracking_leave[hwnd]) {
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize    = sizeof(tme);
+                tme.dwFlags   = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                TrackMouseEvent(&tme);
+                g_tracking_leave[hwnd] = true;
+                sink.onPointer({PointerAction::Enter, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), 0});
+            }
+            sink.onPointer({PointerAction::Move, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), 0});
+            return true;
+        }
+        case WM_MOUSELEAVE: {
+            g_tracking_leave[hwnd] = false;
+            sink.onPointer({PointerAction::Leave, 0, 0, 0});
+            return true;
+        }
+        case WM_MOUSEWHEEL: {
+            // Wheel messages carry SCREEN coordinates, unlike every other
+            // mouse message here — convert to client space for consistency.
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            sink.onWheel({(float)pt.x, (float)pt.y,
+                         (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA});
+            return true;
+        }
+        case WM_KEYDOWN:
+        case WM_KEYUP:
+            sink.onKey({(int)wp, msg == WM_KEYDOWN});
+            return true;
+        default:
+            return false;
+    }
 }
