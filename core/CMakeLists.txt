@@ -57,7 +57,12 @@ target_include_directories(vk_canvas_core PUBLIC
 )
 
 target_compile_features(vk_canvas_core PUBLIC cxx_std_17)
-target_compile_options(vk_canvas_core PRIVATE -O2)
+if(MSVC)
+    # Sources contain UTF-8 comments; cl mis-decodes them without /utf-8.
+    target_compile_options(vk_canvas_core PRIVATE /utf-8)
+else()
+    target_compile_options(vk_canvas_core PRIVATE -O2)
+endif()
 
 # msdfgen-core linked explicitly (msdfgen-ext links it only PRIVATE): its PUBLIC
 # `MSDFGEN_PUBLIC=` define makes msdfgen/core/base.h skip the generated
@@ -66,11 +71,13 @@ target_link_libraries(vk_canvas_core PUBLIC
     freetype
     msdfgen::msdfgen-ext
     msdfgen::msdfgen-core
-    vulkan
 )
 
 if(ANDROID)
-    # log.hh routes to logcat; the submodule's msdf.cc still uses <android/log.h>
-    # and the camera path imports AHardwareBuffers.
-    target_link_libraries(vk_canvas_core PUBLIC android log)
+    # NDK provides libvulkan directly; log.hh routes to logcat and the camera
+    # path imports AHardwareBuffers.
+    target_link_libraries(vk_canvas_core PUBLIC vulkan android log)
+else()
+    find_package(Vulkan REQUIRED)  # headers + loader from $ENV{VULKAN_SDK}
+    target_link_libraries(vk_canvas_core PUBLIC Vulkan::Vulkan)
 endif()

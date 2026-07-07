@@ -581,22 +581,26 @@ void Renderer::create_instance() {
     // Windowing extensions come from the platform's SurfaceProvider
     // (VK_KHR_surface + VK_KHR_android_surface / VK_KHR_win32_surface / ...).
     std::vector<const char*> extensions = surface_provider_.instance_extensions();
-    extensions.push_back("VK_KHR_external_memory_capabilities");
-    extensions.push_back("VK_KHR_get_physical_device_properties2");
 
-    // VK_EXT_swapchain_colorspace exposes HDR colorspaces (BT2020/HLG/PQ) on the
-    // surface. Only request it if the loader reports it, otherwise instance
-    // creation would fail; absence just means we fall back to SDR.
+    // Optional extensions: request only what the loader reports, otherwise
+    // instance creation would fail. VK_EXT_swapchain_colorspace exposes HDR
+    // colorspaces (BT2020/HLG/PQ); absence just means we fall back to SDR.
     uint32_t ext_count = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
     std::vector<VkExtensionProperties> avail(ext_count);
     vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, avail.data());
-    for (auto& e : avail) {
-        if (std::strcmp(e.extensionName, "VK_EXT_swapchain_colorspace") == 0) {
-            extensions.push_back("VK_EXT_swapchain_colorspace");
-            ext_swapchain_colorspace_ = true;
-            break;
-        }
+    auto has = [&](const char* name) {
+        for (auto& e : avail)
+            if (std::strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    };
+    if (has("VK_KHR_external_memory_capabilities"))
+        extensions.push_back("VK_KHR_external_memory_capabilities");
+    if (has("VK_KHR_get_physical_device_properties2"))
+        extensions.push_back("VK_KHR_get_physical_device_properties2");
+    if (has("VK_EXT_swapchain_colorspace")) {
+        extensions.push_back("VK_EXT_swapchain_colorspace");
+        ext_swapchain_colorspace_ = true;
     }
 
     VkInstanceCreateInfo ci{};
