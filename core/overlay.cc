@@ -117,6 +117,10 @@ void OverlayRasterizer::createBuffers() {
     vkMapMemory(device_, curveBufferMemory_, 0, curveBufferSize, 0, &curveBufferMapped_);
     std::memset(curveBufferMapped_, 0, static_cast<size_t>(curveBufferSize));
 
+    createTileRowBuffers();
+}
+
+void OverlayRasterizer::createTileRowBuffers() {
     const uint32_t tileCountX = (width_  + TILE_SIZE - 1) / TILE_SIZE;
     const uint32_t tileCountY = (height_ + TILE_SIZE - 1) / TILE_SIZE;
 
@@ -279,15 +283,7 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     sa.pSetLayouts        = &compSetLayout_;
     vkAllocateDescriptorSets(device_, &sa, &compSet_);
 
-    VkDescriptorImageInfo ii{outputSampler_, outputImageView_,
-                             VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet wr{};
-    wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr.dstSet          = compSet_;
-    wr.descriptorCount = 1;
-    wr.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wr.pImageInfo      = &ii;
-    vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
+    updateCompositeImageDescriptor();
 
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -351,6 +347,49 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpci, nullptr, &compPipeline_);
     vkDestroyShaderModule(device_, vm, nullptr);
     vkDestroyShaderModule(device_, fm, nullptr);
+}
+
+void OverlayRasterizer::updateCompositeImageDescriptor() {
+    VkDescriptorImageInfo ii{outputSampler_, outputImageView_, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr{};
+    wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet          = compSet_;
+    wr.descriptorCount = 1;
+    wr.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo      = &ii;
+    vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
+}
+
+void OverlayRasterizer::resize(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return;              // minimized; keep old resources
+    if (width == width_ && height == height_) return;
+
+    if (outputSampler_)     vkDestroySampler(device_, outputSampler_, nullptr);
+    if (outputImageView_)   vkDestroyImageView(device_, outputImageView_, nullptr);
+    if (outputImage_)       vkDestroyImage(device_, outputImage_, nullptr);
+    if (outputImageMemory_) vkFreeMemory(device_, outputImageMemory_, nullptr);
+    outputSampler_ = VK_NULL_HANDLE; outputImageView_ = VK_NULL_HANDLE;
+    outputImage_   = VK_NULL_HANDLE; outputImageMemory_ = VK_NULL_HANDLE;
+
+    if (tileBuffer_)       vkDestroyBuffer(device_, tileBuffer_, nullptr);
+    if (tileBufferMemory_) vkFreeMemory(device_, tileBufferMemory_, nullptr);
+    if (rowBuffer_)        vkDestroyBuffer(device_, rowBuffer_, nullptr);
+    if (rowBufferMemory_)  vkFreeMemory(device_, rowBufferMemory_, nullptr);
+    tileBuffer_ = VK_NULL_HANDLE; tileBufferMemory_ = VK_NULL_HANDLE;
+    rowBuffer_  = VK_NULL_HANDLE; rowBufferMemory_  = VK_NULL_HANDLE;
+
+    width_ = width;
+    height_ = height;
+
+    createTileRowBuffers();
+    createOutputImage();
+    writeDescriptors();               // rewires descSet_ to the new image/buffers
+    updateCompositeImageDescriptor(); // rewires compSet_ to the new image
+
+    // Buffers were recreated (fresh, unbound descriptors) and the image's
+    // contents are undefined again — force a full re-dispatch next frame.
+    firstRun_    = true;
+    curvesDirty_ = true;
 }
 
 void OverlayRasterizer::uploadCurves(const float* curveData, uint32_t count) {

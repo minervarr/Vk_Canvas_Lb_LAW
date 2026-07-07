@@ -442,7 +442,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     uint32_t image_index;
     VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, image_available_sem_, VK_NULL_HANDLE, &image_index);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) return;
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        recreate_swapchain();
+        return;  // skip this frame; the next draw() call uses the new swapchain
+    }
     int64_t t_afteracquire = now_ns();
 
     vkResetFences(device_, 1, &in_flight_fence_);
@@ -542,7 +545,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     present_info.pSwapchains = swapchains;
     present_info.pImageIndices = &image_index;
 
-    vkQueuePresentKHR(queue_, &present_info);
+    VkResult present_result = vkQueuePresentKHR(queue_, &present_info);
+    if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
+        recreate_swapchain();
+    }
 
     // ── Instrumentation: per-frame phase breakdown on slow frames ───────────
     int64_t t_end = now_ns();
@@ -747,6 +753,15 @@ void Renderer::create_swapchain() {
     if (caps.maxImageCount > 0 && desired_images > caps.maxImageCount) desired_images = caps.maxImageCount;
     LOGI("Swapchain present mode=%d, images=%u", present_mode, desired_images);
 
+    VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (!(caps.supportedCompositeAlpha & composite_alpha)) {
+        // Fall back to whatever the surface actually advertises.
+        for (auto bit : {VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+                         VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR}) {
+            if (caps.supportedCompositeAlpha & bit) { composite_alpha = bit; break; }
+        }
+    }
+
     VkSwapchainCreateInfoKHR ci{};
     ci.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface          = surface_;
@@ -756,6 +771,8 @@ void Renderer::create_swapchain() {
     ci.imageExtent      = { width_, height_ };
     ci.imageArrayLayers = 1;
     ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    ci.preTransform     = caps.currentTransform;
+    ci.compositeAlpha   = composite_alpha;
     ci.presentMode      = present_mode;
     ci.clipped          = VK_TRUE;
 
@@ -890,6 +907,49 @@ void Renderer::cleanup_hwb_resources() {
 }
 #endif  // __ANDROID__
 
+void Renderer::destroy_swapchain_resources() {
+    for (auto fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
+    framebuffers_.clear();
+    for (auto iv : swapchain_image_views_) vkDestroyImageView(device_, iv, nullptr);
+    swapchain_image_views_.clear();
+    swapchain_images_.clear();
+    if (swapchain_) { vkDestroySwapchainKHR(device_, swapchain_, nullptr); swapchain_ = VK_NULL_HANDLE; }
+}
+
+void Renderer::recreate_swapchain() {
+    VkExtent2D ext = surface_provider_.extent();
+    if (ext.width == 0 || ext.height == 0) return;  // minimized; retry next draw()
+
+    vkDeviceWaitIdle(device_);
+    destroy_swapchain_resources();
+
+    width_  = ext.width;
+    height_ = ext.height;
+    create_swapchain();
+    create_framebuffers();
+
+    // Swapchain image count is deterministic from caps.min/maxImageCount for
+    // a given surface, so this is normally a no-op — guarded in case it ever
+    // changes (e.g. a driver update) so cmd_buffers_[image_index] can't go
+    // out of bounds in draw().
+    if (cmd_buffers_.size() != framebuffers_.size()) {
+        if (!cmd_buffers_.empty())
+            vkFreeCommandBuffers(device_, cmd_pool_, (uint32_t)cmd_buffers_.size(), cmd_buffers_.data());
+        cmd_buffers_.resize(framebuffers_.size());
+        VkCommandBufferAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = cmd_pool_;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
+        vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+    }
+
+    overlay_.resize(width_, height_);
+    // image_layer_ has no size-dependent resources (per-texture, not per-screen).
+
+    LOGI("Swapchain recreated (%ux%u)", width_, height_);
+}
+
 void Renderer::cleanup() {
     if (device_) vkDeviceWaitIdle(device_);
     overlay_.cleanup();
@@ -902,10 +962,8 @@ void Renderer::cleanup() {
     if (render_finished_sem_) vkDestroySemaphore(device_, render_finished_sem_, nullptr);
     if (in_flight_fence_)     vkDestroyFence(device_, in_flight_fence_, nullptr);
     if (cmd_pool_)            vkDestroyCommandPool(device_, cmd_pool_, nullptr);
-    for (auto fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
-    for (auto iv : swapchain_image_views_) vkDestroyImageView(device_, iv, nullptr);
+    destroy_swapchain_resources();
     if (render_pass_) vkDestroyRenderPass(device_, render_pass_, nullptr);
-    if (swapchain_) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     if (device_)    vkDestroyDevice(device_, nullptr);
     if (surface_)   vkDestroySurfaceKHR(instance_, surface_, nullptr);
     if (instance_)  vkDestroyInstance(instance_, nullptr);

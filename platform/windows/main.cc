@@ -28,6 +28,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) { g_running = false; PostQuitMessage(0); }
             return 0;
+        case WM_SIZE:
+            // No explicit action needed: the next draw() call's
+            // vkAcquireNextImageKHR/vkQueuePresentKHR will report
+            // OUT_OF_DATE/SUBOPTIMAL once the swapchain extent no longer
+            // matches the surface, and Renderer::recreate_swapchain() picks
+            // up the new size from Win32SurfaceProvider::extent() (live
+            // GetClientRect). Minimizing (wp == SIZE_MINIMIZED, 0x0 client
+            // rect) is handled by recreate_swapchain()'s own 0x0 guard.
+            return 0;
         default:
             return DefWindowProcW(hwnd, msg, wp, lp);
     }
@@ -45,9 +54,7 @@ HWND create_window(uint32_t w, uint32_t h) {
     wc.lpszClassName = L"vk_canvas_window";
     RegisterClassExW(&wc);
 
-    // Fixed-size window for now: the renderer doesn't recreate the swapchain
-    // on resize yet, so no thick frame / maximize box.
-    DWORD style = WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    DWORD style = WS_OVERLAPPEDWINDOW;  // resizable: renderer recreates the swapchain on resize
     RECT rc{ 0, 0, static_cast<LONG>(w), static_cast<LONG>(h) };
     AdjustWindowRect(&rc, style, FALSE);
 

@@ -158,6 +158,13 @@ private:
     void create_sync_objects();
     void create_command_buffers();
 
+    // Destroys framebuffers/image-views/swapchain and recreates them (plus
+    // overlay_'s size-dependent resources) at the surface's current extent.
+    // Called on VK_ERROR_OUT_OF_DATE_KHR/VK_SUBOPTIMAL_KHR from draw(). No-op
+    // if the surface is currently 0x0 (minimized) — retried next draw() call.
+    void recreate_swapchain();
+    void destroy_swapchain_resources();
+
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
     void cleanup();
 };

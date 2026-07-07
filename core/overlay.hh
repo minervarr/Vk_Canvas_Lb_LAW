@@ -36,6 +36,13 @@ public:
               uint32_t width, uint32_t height);
     void cleanup();
 
+    // Recreates the size-dependent resources (output image, tile/row buffers)
+    // for a new screen size — the curve buffer and pipelines are size-
+    // independent and left untouched. Caller must vkDeviceWaitIdle() first
+    // (Renderer does this before recreating its swapchain). No-op if either
+    // dimension is 0 (minimized window) or unchanged.
+    void resize(uint32_t width, uint32_t height);
+
     bool ready() const { return coveragePipeline_ != VK_NULL_HANDLE &&
                                 compPipeline_ != VK_NULL_HANDLE; }
 
@@ -93,10 +100,19 @@ private:
 
     void createDescriptorLayoutAndPool();
     void createBuffers();
+    // The tile/row (winding) buffers alone — the part of createBuffers() that
+    // is screen-size-dependent; re-run by resize(). The curve buffer is fixed
+    // at MAX_CURVES and created once by createBuffers().
+    void createTileRowBuffers();
     void createOutputImage();
     void createComputePipelines();
     void writeDescriptors();
     void createCompositePipeline(VkRenderPass renderPass);
+    // Rewrites just compSet_'s image binding to the current outputImageView_
+    // — used standalone by resize() after the output image is recreated,
+    // since createCompositePipeline() (pipeline + descriptor set + this same
+    // write) only runs once at init().
+    void updateCompositeImageDescriptor();
 
     uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags required);
     VkShaderModule loadShader(const char* path);
