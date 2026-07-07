@@ -47,7 +47,7 @@ add_library(vk_canvas_core STATIC
 )
 # WIP — moved here but not yet ported to the platform seams, deliberately not
 # compiled: canvas_host vulkan_state compute_context text_editor text_buffer
-# undo_redo pager plotview gesture
+# undo_redo pager plotview gesture archive
 
 target_include_directories(vk_canvas_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

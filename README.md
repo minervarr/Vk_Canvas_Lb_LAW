@@ -15,7 +15,7 @@ git submodule update --init --recursive
 cd platform/android && ./gradlew assembleDebug
 
 # Windows (MSVC + Ninja + Vulkan SDK)
-./Build.bat
+cd platform/windows && ./Build.bat
 ```
 ## License
 

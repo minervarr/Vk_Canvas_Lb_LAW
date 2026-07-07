@@ -15,8 +15,9 @@ cd platform/android
 ./install.bat                # install on connected device
 ./gradlew clean              # clean build artifacts
 
-# Windows (from repo root; vswhere -> vcvars64 -> Ninja -> cl)
-./Build.bat                  # produces build/vk_canvas.exe
+# Windows (vswhere -> vcvars64 -> Ninja -> cl)
+cd platform/windows
+./Build.bat                  # produces platform/windows/build/vk_canvas.exe
 ```
 
 **Prerequisites:**
@@ -28,7 +29,7 @@ cd platform/android
 
 ## Shader Compilation
 
-Shaders are written in **Slang** in the repo-root `shaders_src/` and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `build/assets/shaders/` (next to the Windows exe). Six shaders: `composite_vert`, `composite_frag`, `tiling`, `coverage`, `overlay_vert`, `overlay_frag`. CMake invokes slangc via `cmake/VceShaders.cmake`. To recompile manually:
+Shaders are written in **Slang** in the repo-root `shaders_src/` and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe). Six shaders: `composite_vert`, `composite_frag`, `tiling`, `coverage`, `overlay_vert`, `overlay_frag`. CMake invokes slangc via `cmake/VceShaders.cmake`. To recompile manually:
 
 ```bash
 slangc.exe <shader>.slang -target spirv -o <output>.spv
@@ -42,24 +43,24 @@ One platform-agnostic engine core plus thin per-platform backends:
 core/                      # vk_canvas_core STATIC lib — no platform SDK includes
   platform.hh              # the seam: AssetReader / SurfaceProvider / FrameWaker + DeviceCaps
   renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
-  canvas_host.* vulkan_state.* compute_context.* text_editor.*
-  text_buffer.* undo_redo.* pager.* plotview.* gesture.*  (WIP — moved, not compiled)
+  canvas_host.* vulkan_state.* compute_context.* text_editor.* text_buffer.*
+  undo_redo.* pager.* plotview.* gesture.* archive.*      (WIP — moved, not compiled)
 shaders_src/               # shared Slang sources
 platform/
   android/                 # self-contained Gradle project: gradlew, build.gradle,
                            #   settings.gradle, install/logcat/screenshot .bat,
                            #   NDK glue + CMake entry, app/ module (manifest + assets)
-  windows/                 # Win32 backend (raw windows.h, no GLFW)
+  windows/                 # self-contained Win32 backend (raw windows.h, no GLFW):
+                           #   Build.bat + build_msvc.ps1 + standalone CMakeLists
   linux/                   # planned Wayland backend (README only)
 first_party/vulkan_font_engine/   # submodule (FreeType, msdfgen, font/glyphs/msdf sources)
-CMakeLists.txt + Build.bat + build_msvc.ps1   # desktop build entry (root)
 ```
 
 Rules of the structure:
 - **Core never includes platform SDK headers.** Platform needs go through `core/platform.hh`: `AssetReader` (shader/font bytes), `SurfaceProvider` (instance extensions + VkSurfaceKHR creation + extent), `FrameWaker` (wake the render loop). Android implements these in `platform/android/android_platform.{hh,cc}`.
 - **Feature use is capability-driven, never platform-hardcoded.** `Renderer` fills a `DeviceCaps` struct at physical-device selection; optional techniques gate on caps so mobile limits never cap PC.
 - The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/renderer.cc` under `#if defined(__ANDROID__)`.
-- `platform/android/CMakeLists.txt` is the Android CMake entry (`platform/android/app/build.gradle` → `externalNativeBuild.cmake.path`); the root `CMakeLists.txt` is the desktop entry. Both `add_subdirectory` `core/`.
+- Each platform folder owns its CMake entry: `platform/android/CMakeLists.txt` (reached via `platform/android/app/build.gradle` → `externalNativeBuild.cmake.path`) and `platform/windows/CMakeLists.txt` (standalone project, reached via its `Build.bat`). Both `add_subdirectory` `core/`; there is no root CMakeLists.
 
 ### Component Map
 
