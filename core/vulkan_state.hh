@@ -6,8 +6,11 @@
 #include <vector>
 #include <cstdint>
 
-#include "vulkan_canvas_engine/vulkan_font_engine/app/src/main/cpp/renderer.hh"
-#include "vulkan_canvas_engine/vulkan_font_engine/app/src/main/cpp/msdf.hh"
+// WIP — not yet ported to the platform seams, so not compiled (see core/CMakeLists.txt).
+// This still leans on the font engine's *demo* Renderer (renderer_.msdfReady etc.);
+// a real port would target the core renderer instead.
+#include "../first_party/vulkan_font_engine/platform/android/renderer.hh"
+#include "msdf.hh"   // from vk_font_core
 #include "font_weight.hh"
 
 class VulkanState {

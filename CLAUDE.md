@@ -23,7 +23,7 @@ cd platform/windows
 **Prerequisites:**
 - Android NDK 29.0.14206865 (set `ANDROID_NDK_HOME`)
 - CMake 3.22.1+
-- FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/app/src/main/` (init submodules first)
+- FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
 - No tests to run; this is a demo app with no test framework
 
@@ -53,7 +53,7 @@ platform/
   windows/                 # self-contained Win32 backend (raw windows.h, no GLFW):
                            #   Build.bat + build_msvc.ps1 + standalone CMakeLists
   linux/                   # planned Wayland backend (README only)
-first_party/vulkan_font_engine/   # submodule (FreeType, msdfgen, font/glyphs/msdf sources)
+first_party/vulkan_font_engine/   # submodule: core/ (vk_font_core lib) + third_party/ (FreeType, msdfgen) + platform/android/ demo
 ```
 
 Rules of the structure:
@@ -76,7 +76,7 @@ Rules of the structure:
 
 ### Submodule
 
-`first_party/vulkan_font_engine` — GPU font rendering library. Provides FreeType integration, msdfgen, curve rasterisation shaders, and the CurveRecord format consumed by the canvas renderer. Known Phase 2 task: its `msdf.cc/.hh` still use `<android/log.h>` and `AAssetManager` in their API (needs a commit in that repo before desktop builds).
+`first_party/vulkan_font_engine` — GPU font rendering library. Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. `core/msdf.cc/.hh` guard their APK-asset API behind `__ANDROID__`; desktop text loading through it is still a TODO (byte-buffer path), but the curve/coverage path the demo scene uses is fully cross-platform.
 
 ## Project Configuration
 
