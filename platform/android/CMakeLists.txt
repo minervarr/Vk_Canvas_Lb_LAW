@@ -17,6 +17,8 @@ vce_compile_slang(compile_shaders
     coverage
     overlay_vert
     overlay_frag
+    image_vert
+    image_frag
 )
 
 set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)

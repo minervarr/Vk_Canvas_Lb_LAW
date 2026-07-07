@@ -15,16 +15,27 @@
 #include "platform.hh"
 #include "canvas.hh"
 #include "overlay.hh"
+#include "image_layer.hh"
+#include "texture.hh"
 
 class Renderer {
 public:
     Renderer(SurfaceProvider& surface, AssetReader& assets);
     ~Renderer();
 
-    // Composite the camera frame (if any) and then the UI overlay described by
-    // overlay_curves (Canvas curve records) on top of it, rotated by
+    // Composite the camera frame (if any), then textured quads (album art,
+    // icons — background layer), then the UI overlay described by
+    // overlay_curves (Canvas curve records) on top of it all, rotated by
     // overlay_rotation_deg (0/90/180/270) to follow device orientation.
-    void draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg);
+    void draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
+              const std::vector<ImageDraw>& images = {});
+
+    // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
+    // Canvas::image() draws. See ImageLayer::create_texture for details.
+    TextureHandle create_texture(const uint8_t* rgba, uint32_t w, uint32_t h) {
+        return image_layer_.create_texture(rgba, w, h);
+    }
+    void destroy_texture(TextureHandle handle) { image_layer_.destroy_texture(handle); }
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
@@ -134,6 +145,8 @@ private:
 
     // UI overlay (canvas curve records rasterised + composited over the camera).
     OverlayRasterizer overlay_;
+    // Textured quads (album art, icons) composited as a background layer.
+    ImageLayer image_layer_;
 
     void create_instance();
     void create_surface();

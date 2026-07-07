@@ -11,6 +11,7 @@ add_subdirectory(${FONT_ENGINE_DIR}/core ${CMAKE_BINARY_DIR}/vk_font_core)
 add_library(vk_canvas_core STATIC
     renderer.cc
     overlay.cc
+    image_layer.cc
     canvas.cc
     textarea.cc
     widgets.cc

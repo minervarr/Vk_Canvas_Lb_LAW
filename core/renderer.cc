@@ -29,6 +29,7 @@ Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets)
     create_command_buffers();
     create_sync_objects();
     overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_);
+    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_);
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
 }
@@ -397,7 +398,8 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
 }
 #endif  // __ANDROID__
 
-void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg) {
+void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
+                    const std::vector<ImageDraw>& images) {
     if (!device_) return;
     int64_t draw_t0 = now_ns();
     overlay_.uploadCurves(overlay_curves.data(),
@@ -503,6 +505,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
     }
 #endif  // __ANDROID__
+
+    if (!images.empty()) {
+        image_layer_.recordComposite(cmd_buffers_[image_index], images, width_, height_);
+    }
 
     if (!overlay_curves.empty()) {
         overlay_.recordComposite(cmd_buffers_[image_index], overlay_rotation_deg);
@@ -887,6 +893,7 @@ void Renderer::cleanup_hwb_resources() {
 void Renderer::cleanup() {
     if (device_) vkDeviceWaitIdle(device_);
     overlay_.cleanup();
+    image_layer_.cleanup();
 #if defined(__ANDROID__)
     cleanup_hwb_resources();
 #endif

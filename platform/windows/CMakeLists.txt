@@ -16,6 +16,8 @@ vce_compile_slang(compile_shaders
     coverage
     overlay_vert
     overlay_frag
+    image_vert
+    image_frag
 )
 
 add_executable(vk_canvas

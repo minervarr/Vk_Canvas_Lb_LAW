@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <string_view>
+#include "texture.hh"
 
 struct Font;
 class  MsdfFont;
@@ -59,6 +60,11 @@ public:
     msdf_ = font; quads_ = quadOut;
   }
 
+  // Route Canvas::image() draws into `out` (appended to, not cleared — caller
+  // clears once per frame alongside the curve buffer). Pass nullptr (the
+  // default) to make image() a no-op, e.g. for hosts that never draw art.
+  void useImages(std::vector<ImageDraw>* out) { images_ = out; }
+
   // Measure text width in pixels at the given cap-height size.
   float textWidth(std::string_view str, float size) const;
 
@@ -67,6 +73,15 @@ public:
 
   // Filled axis-aligned rectangle with optional rounded corners.
   void rect(float x, float y, float w, float h, Color c, float radius = 0.0f);
+
+  // Draw a textured quad (album art, icons) at screen rect (x,y,w,h) sampling
+  // the UV sub-rect [u0,v0]-[u1,v1] (default: whole texture). Requires
+  // useImages() to have been called with a non-null output vector, and `tex`
+  // to have come from Renderer::create_texture(); a no-op otherwise. Honors
+  // the active clip rect (setClip); does not honor setRotation (art/icons in
+  // this engine are never drawn rotated) — screen-space only.
+  void image(TextureHandle tex, float x, float y, float w, float h,
+             float u0 = 0.0f, float v0 = 0.0f, float u1 = 1.0f, float v1 = 1.0f);
 
   // Draw text. x,y is the top-left corner of the text box.
   void text(std::string_view str, float x, float y, float size, Color c);
@@ -139,6 +154,7 @@ private:
   const Font* font_;
   const MsdfFont* msdf_ = nullptr;
   std::vector<float>* quads_ = nullptr;
+  std::vector<ImageDraw>* images_ = nullptr;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
   float contentW_, contentH_;
 
