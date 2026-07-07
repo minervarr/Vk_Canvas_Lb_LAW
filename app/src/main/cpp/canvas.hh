@@ -5,6 +5,7 @@
 
 struct Font;
 class  MsdfFont;
+enum class FontStyle : uint8_t;   // defined in msdf.hh (Roman/Bold/Math/Italic)
 
 struct Color { float r, g, b, a; };
 
@@ -70,6 +71,13 @@ public:
   // Draw text. x,y is the top-left corner of the text box.
   void text(std::string_view str, float x, float y, float size, Color c);
 
+  // Draw text in a named style (Roman/Bold/Italic/Math) via the MSDF style map.
+  // x,y is the top-left corner. Codepoints the style lacks fall back to the
+  // default face. Roman delegates to text(). Requires an MSDF font.
+  void textStyled(std::string_view str, float x, float y, float size, Color c, FontStyle style);
+  // Width of `str` in `style` at `size` (matches textStyled's advance).
+  float textWidthStyled(std::string_view str, float size, FontStyle style) const;
+
   // Draw text right-aligned: right edge of the text lands at rightX.
   void textRight(std::string_view str, float rightX, float y, float size, Color c);
 
@@ -87,8 +95,35 @@ public:
   // Draw a fast solid rectangular quad using MSDF (bypassing curve generation)
   void quadMsdfRect(float x, float y, float w, float h, Color c);
 
+  // Antialiased line segment of the given pixel thickness, drawn as an SDF
+  // capsule (curve record type 3). Reusable for plot curves, grids, axes, trace
+  // cursors and underlines. Respects the active clip and rotation.
+  void segment(float x0, float y0, float x1, float y1, float thickness, Color c);
+
+  // Antialiased polyline through `count` screen points (xy = x0,y0,x1,y1,...).
+  // Zero-length segments are skipped; callers break a curve by issuing separate
+  // polyline() calls around invalid samples (asymptotes / NaN).
+  void polyline(const float* xy, int count, float thickness, Color c);
+
+  // The active MSDF font (for 2D math layout that needs OpenType MATH metrics,
+  // constants and stretchy constructions). nullptr if text isn't MSDF-routed.
+  const MsdfFont* msdfFont() const { return msdf_; }
+
+  // Draw one math glyph addressed by key = (fontId<<24)|gid at pen (penX,
+  // baselineY), honoring the active clip + rotation. For math-italic atoms and
+  // stretched radical/delimiter assembly parts emitted by mathlayout.
+  void mathGlyph(uint32_t key, float penX, float baselineY, float size, Color c);
+
   void setClip(float x, float y, float w, float h);
   void clearClip();
+
+  // Cull every text glyph already emitted whose center lies inside `rect`, an
+  // opaque occluder. All MSDF text composites in a single pass *after* all SDF
+  // geometry, so draw order alone can't make a later panel hide earlier text —
+  // call occlude(panelRect) right before drawing a modal/overlay and the text
+  // beneath it can never bleed through. Generic; any host modal stays a clean
+  // layer with one call (no per-screen visibility hacks).
+  void occlude(float x, float y, float w, float h);
 
   // Rotate all subsequently-emitted overlay geometry by `radians` (clockwise in
   // screen space, y-down) about the pivot (pivotX, pivotY), until clearRotation().
@@ -122,6 +157,11 @@ private:
   // Lives in the SDF pass (not the winding pass), so winding text composites
   // cleanly on top without colour interference.
   void  emitRotatableRect_(float x, float y, float w, float h, Color c);
+
+  // Emit one SDF capsule (type-3) between two points with the given radius,
+  // applying the active rotation and computing its bounding box. Shared by
+  // segment()/polyline().
+  void  emitCapsule_(float ax, float ay, float bx, float by, float radius, Color c);
 
   // Clip records appended at/after startIdx against the active clip rect.
   void clipFrom_(size_t startIdx);

@@ -22,7 +22,11 @@ public:
     static constexpr uint32_t MAX_CURVES           = 8192;
     static constexpr uint32_t CURVE_FLOATS         = 20;
     static constexpr uint32_t TILE_SIZE            = 16;
-    static constexpr uint32_t MAX_CURVES_PER_TILE  = 64;
+    // Per-tile capacity. Overflow drops a RANDOM subset (the tiling pass grabs
+    // slots with atomics in parallel), so headroom matters more than memory:
+    // dense plot scenes (curves coiled into a few tiles at far zoom-out) plus
+    // panels must fit or later-drawn UI vanishes in those tiles.
+    static constexpr uint32_t MAX_CURVES_PER_TILE  = 96;
     static constexpr uint32_t TILE_STRIDE_U32      = MAX_CURVES_PER_TILE + 1;
     static constexpr uint32_t MAX_WINDING_PER_TILE = 64;
     static constexpr uint32_t WIND_STRIDE_U32      = MAX_WINDING_PER_TILE + 1;
@@ -57,6 +61,7 @@ private:
     uint32_t         width_  = 0;
     uint32_t         height_ = 0;
     uint32_t         curveCount_ = 0;
+    uint32_t         hasWinding_ = 0;   // 1 if any uploaded curve is type 4/5/6
 
     // Compute (curve rasterisation) resources
     VkDescriptorSetLayout descLayout_ = VK_NULL_HANDLE;

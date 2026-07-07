@@ -47,6 +47,47 @@ void Canvas::rect(float x, float y, float w, float h, Color c, float radius) {
     clipFrom_(start);
 }
 
+void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color c) {
+    xform_(ax, ay);
+    xform_(bx, by);
+    float minX = std::min(ax, bx) - r, maxX = std::max(ax, bx) + r;
+    float minY = std::min(ay, by) - r, maxY = std::max(ay, by) + r;
+
+    float rec[kCurveFloats] = {0};
+    rec[0] = 3.0f;                       // SDF segment
+    rec[1] = ax; rec[2] = ay;
+    rec[3] = bx; rec[4] = by;
+    rec[9] = c.r; rec[10] = c.g; rec[11] = c.b; rec[12] = c.a;
+    rec[13] = r;                         // capsule radius (half thickness)
+    rec[kBBoxMinX] = minX; rec[kBBoxMinY] = minY;
+    rec[kBBoxMaxX] = maxX; rec[kBBoxMaxY] = maxY;
+    out_.insert(out_.end(), rec, rec + kCurveFloats);
+}
+
+void Canvas::segment(float x0, float y0, float x1, float y1, float thickness, Color c) {
+    size_t start = out_.size();
+    emitCapsule_(x0, y0, x1, y1, thickness * 0.5f, c);
+    clipFrom_(start);
+}
+
+void Canvas::polyline(const float* xy, int count, float thickness, Color c) {
+    if (count < 2) return;
+    size_t start = out_.size();
+    float r = thickness * 0.5f;
+    for (int i = 1; i < count; ++i) {
+        float ax = xy[2 * (i - 1)], ay = xy[2 * (i - 1) + 1];
+        float bx = xy[2 * i],       by = xy[2 * i + 1];
+        // Skip degenerate/non-finite segments: a zero-length capsule divides by
+        // zero in the coverage shader's SDF, and NaN sneaks past the equality
+        // check (NaN == NaN is false) then corrupts tile bboxes.
+        if (ax == bx && ay == by) continue;
+        if (!std::isfinite(ax) || !std::isfinite(ay) ||
+            !std::isfinite(bx) || !std::isfinite(by)) continue;
+        emitCapsule_(ax, ay, bx, by, r, c);
+    }
+    clipFrom_(start);
+}
+
 void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
     if (!msdf_ || !quads_) { rect(x, y, w, h, c, 0.0f); return; }
     GlyphQuad q;
@@ -148,6 +189,24 @@ void Canvas::setClip(float x, float y, float w, float h) {
 
 void Canvas::clearClip() { clipActive_ = false; }
 
+void Canvas::occlude(float x, float y, float w, float h) {
+    if (!quads_ || quads_->empty()) return;
+    const float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    std::vector<float>& q = *quads_;
+    constexpr int kFloatsPerGlyph = 48;  // 6 verts × 8 floats (pos.xy, uv, rgba)
+    size_t write = 0;
+    for (size_t g = 0; g + kFloatsPerGlyph <= q.size(); g += kFloatsPerGlyph) {
+        float cx = 0.0f, cy = 0.0f;       // glyph centre = mean of its 6 verts
+        for (int v = 0; v < 6; v++) { cx += q[g + v * 8]; cy += q[g + v * 8 + 1]; }
+        cx /= 6.0f; cy /= 6.0f;
+        if (cx >= x0 && cx < x1 && cy >= y0 && cy < y1) continue;  // occluded → drop
+        if (write != g) std::copy(q.begin() + g, q.begin() + g + kFloatsPerGlyph,
+                                  q.begin() + write);
+        write += kFloatsPerGlyph;
+    }
+    q.resize(write);
+}
+
 void Canvas::clipFrom_(size_t startIdx) {
     if (!clipActive_) return;
     size_t write = startIdx;
@@ -207,6 +266,81 @@ void Canvas::emitTextMsdf_(std::string_view str, float x, float baselineY, float
             float rv0 = v0 + fv0 * (v1 - v0), rv1 = v0 + fv1 * (v1 - v0);
             x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1;
             u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
+        }
+        auto vert = [&](float vx, float vy, float vu, float vv) {
+            xform_(vx, vy);
+            quads_->push_back(vx); quads_->push_back(vy);
+            quads_->push_back(vu); quads_->push_back(vv);
+            quads_->push_back(c.r); quads_->push_back(c.g);
+            quads_->push_back(c.b); quads_->push_back(c.a);
+        };
+        vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
+        vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+    }
+}
+
+void Canvas::mathGlyph(uint32_t key, float penX, float baselineY, float size, Color c) {
+    if (!msdf_ || !quads_) return;
+    GlyphQuad q;
+    msdf_->layoutByKey(key, penX, baselineY, size, q);
+    if (!q.draw) return;
+
+    float x0 = q.x0, y0 = q.y0, x1 = q.x1, y1 = q.y1;
+    float u0 = q.u0, v0 = q.v0, u1 = q.u1, v1 = q.v1;
+    if (clipActive_) {
+        if (x1 <= clipX0_ || x0 >= clipX1_ || y1 <= clipY0_ || y0 >= clipY1_) return;
+        float nx0 = std::max(x0, clipX0_), nx1 = std::min(x1, clipX1_);
+        float ny0 = std::max(y0, clipY0_), ny1 = std::min(y1, clipY1_);
+        float fu0 = (nx0 - x0) / (x1 - x0), fu1 = (nx1 - x0) / (x1 - x0);
+        float fv0 = (ny0 - y0) / (y1 - y0), fv1 = (ny1 - y0) / (y1 - y0);
+        float ru0 = u0 + fu0 * (u1 - u0), ru1 = u0 + fu1 * (u1 - u0);
+        float rv0 = v0 + fv0 * (v1 - v0), rv1 = v0 + fv1 * (v1 - v0);
+        x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1;
+        u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
+    }
+    auto vert = [&](float vx, float vy, float vu, float vv) {
+        xform_(vx, vy);
+        quads_->push_back(vx); quads_->push_back(vy);
+        quads_->push_back(vu); quads_->push_back(vv);
+        quads_->push_back(c.r); quads_->push_back(c.g);
+        quads_->push_back(c.b); quads_->push_back(c.a);
+    };
+    vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
+    vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+}
+
+float Canvas::textWidthStyled(std::string_view str, float size, FontStyle style) const {
+    if (style == FontStyle::Roman || !msdf_) return textWidth(str, size);
+    float w = 0.0f;
+    for (size_t i = 0; i < str.size(); ) {
+        uint32_t cp = utf8::nextCodepoint(str, i);
+        uint32_t key = msdf_->keyForStyle(style, cp);
+        w += key ? msdf_->advanceKey(key, size) : msdf_->advance(cp, size);
+    }
+    return w;
+}
+
+void Canvas::textStyled(std::string_view str, float x, float y, float size, Color c, FontStyle style) {
+    if (style == FontStyle::Roman || !msdf_ || !quads_) { text(str, x, y, size, c); return; }
+    float baselineY = y + size, pen = x;
+    for (size_t i = 0; i < str.size(); ) {
+        uint32_t cp = utf8::nextCodepoint(str, i);
+        uint32_t key = msdf_->keyForStyle(style, cp);
+        GlyphQuad q;
+        pen = key ? msdf_->layoutByKey(key, pen, baselineY, size, q)
+                  : msdf_->layout(cp, pen, baselineY, size, q);   // fall back to default face
+        if (!q.draw) continue;
+        float x0 = q.x0, y0 = q.y0, x1 = q.x1, y1 = q.y1;
+        float u0 = q.u0, v0 = q.v0, u1 = q.u1, v1 = q.v1;
+        if (clipActive_) {
+            if (x1 <= clipX0_ || x0 >= clipX1_ || y1 <= clipY0_ || y0 >= clipY1_) continue;
+            float nx0 = std::max(x0, clipX0_), nx1 = std::min(x1, clipX1_);
+            float ny0 = std::max(y0, clipY0_), ny1 = std::min(y1, clipY1_);
+            float fu0 = (nx0 - x0) / (x1 - x0), fu1 = (nx1 - x0) / (x1 - x0);
+            float fv0 = (ny0 - y0) / (y1 - y0), fv1 = (ny1 - y0) / (y1 - y0);
+            float ru0 = u0 + fu0 * (u1 - u0), ru1 = u0 + fu1 * (u1 - u0);
+            float rv0 = v0 + fv0 * (v1 - v0), rv1 = v0 + fv1 * (v1 - v0);
+            x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1; u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
         }
         auto vert = [&](float vx, float vy, float vu, float vv) {
             xform_(vx, vy);

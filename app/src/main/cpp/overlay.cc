@@ -191,7 +191,7 @@ void OverlayRasterizer::createComputePipelines() {
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushRange.offset     = 0;
-    pushRange.size       = sizeof(uint32_t) * 5;
+    pushRange.size       = sizeof(uint32_t) * 6;
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -366,6 +366,15 @@ void OverlayRasterizer::uploadCurves(const float* curveData, uint32_t count) {
     if (changed) {
         lastCurves_.assign(curveData, curveData + newSize);
         curvesDirty_ = true;
+        // Detect winding curves (types 4/5/6) so the coverage pass can skip its
+        // per-pixel tile-row scan entirely when the scene has none.
+        hasWinding_ = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            if (static_cast<uint32_t>(curveData[i * CURVE_FLOATS + 0]) >= 4u) {
+                hasWinding_ = 1;
+                break;
+            }
+        }
         if (count > 0 && curveBufferMapped_) {
             std::memcpy(curveBufferMapped_, curveData, newSize * sizeof(float));
         }
@@ -394,7 +403,7 @@ void OverlayRasterizer::recordDispatch(VkCommandBuffer cmd) {
 
     const uint32_t tileCountX = (width_  + TILE_SIZE - 1) / TILE_SIZE;
     const uint32_t tileCountY = (height_ + TILE_SIZE - 1) / TILE_SIZE;
-    uint32_t pushData[5] = {width_, height_, curveCount_, tileCountX, tileCountY};
+    uint32_t pushData[6] = {width_, height_, curveCount_, tileCountX, tileCountY, hasWinding_};
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             computePipelineLayout_, 0, 1, &descSet_, 0, nullptr);
@@ -404,7 +413,9 @@ void OverlayRasterizer::recordDispatch(VkCommandBuffer cmd) {
     const VkDeviceSize rowBufferSize =
         static_cast<VkDeviceSize>(tileCountX) * tileCountY * WIND_STRIDE_U32 * sizeof(uint32_t);
     vkCmdFillBuffer(cmd, tileBuffer_, 0, tileBufferSize, 0);
-    vkCmdFillBuffer(cmd, rowBuffer_,  0, rowBufferSize,  0);
+    // The row (winding) buffer is only read by Pass 2; skip clearing it entirely
+    // when the scene has no winding curves.
+    if (hasWinding_) vkCmdFillBuffer(cmd, rowBuffer_, 0, rowBufferSize, 0);
 
     {
         VkBufferMemoryBarrier bb[2]{};
