@@ -1,15 +1,44 @@
 #include "app.hh"
 #include "renderer.hh"
 #include "canvas.hh"
+#include "android_platform.hh"
 #include <android/log.h>
+#include <android/native_window.h>
+#include <dlfcn.h>
 #include <vector>
 
 #define LOG_TAG "vk_canvas"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static Renderer*          g_renderer = nullptr;
-static std::vector<float> g_curves;
+// Platform seam objects must outlive the Renderer that references them.
+static AndroidSurfaceProvider* g_surface  = nullptr;
+static AndroidAssetReader*     g_assets   = nullptr;
+static Renderer*               g_renderer = nullptr;
+static std::vector<float>      g_curves;
+
+// Pin the window to 30fps with FIXED_SOURCE compatibility so SurfaceFlinger
+// knows we are the rate source and stops hunting the LTPO refresh mode.
+// ONLY_IF_SEAMLESS (not ALWAYS) lets the display driver pick the right moment —
+// ALWAYS forced mode switches on Samsung's LTPO driver were themselves causing
+// brief refresh-rate transitions.
+static void pin_frame_rate(ANativeWindow* window) {
+    using WithStrategyFn = int32_t (*)(ANativeWindow*, float, int8_t, int8_t);
+    auto fn_ex = reinterpret_cast<WithStrategyFn>(
+        dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRateWithChangeStrategy"));
+    if (fn_ex) {
+        fn_ex(window, 30.0f, /*FIXED_SOURCE*/ 1, /*ONLY_IF_SEAMLESS*/ 0);
+        LOGI("Pinned window frame rate to 30fps FIXED_SOURCE ONLY_IF_SEAMLESS");
+    } else {
+        using SetFrameRateFn = int32_t (*)(ANativeWindow*, float, int8_t);
+        auto fn = reinterpret_cast<SetFrameRateFn>(
+            dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate"));
+        if (fn) {
+            fn(window, 30.0f, /*FIXED_SOURCE*/ 1);
+            LOGI("Pinned window frame rate to 30fps FIXED_SOURCE");
+        }
+    }
+}
 
 App::App(android_app* state) : state_(state) {
     state_->userData = this;
@@ -47,12 +76,17 @@ void App::draw_frame() {
 }
 
 void App::init_vulkan() {
-    g_renderer = new Renderer(state_->window, state_->activity->assetManager);
+    g_surface  = new AndroidSurfaceProvider(state_->window);
+    g_assets   = new AndroidAssetReader(state_->activity->assetManager);
+    g_renderer = new Renderer(*g_surface, *g_assets);
+    pin_frame_rate(state_->window);
     LOGI("Vulkan canvas initialised (%ux%u)", g_renderer->width(), g_renderer->height());
 }
 
 void App::destroy_vulkan() {
     delete g_renderer; g_renderer = nullptr;
+    delete g_surface;  g_surface  = nullptr;
+    delete g_assets;   g_assets   = nullptr;
 }
 
 void App::handle_cmd(android_app* app, int32_t cmd) {

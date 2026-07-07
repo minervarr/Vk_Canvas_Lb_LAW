@@ -1,12 +1,12 @@
 #include "overlay.hh"
-#include <android/log.h>
+#include "log.hh"
 #include <cstring>
 #include <cmath>
 #include <vector>
 
 #define LOG_TAG "OverlayRasterizer"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
+#define LOGI(...) VCE_LOGI(LOG_TAG, __VA_ARGS__)
 
 uint32_t OverlayRasterizer::findMemoryType(uint32_t typeBits,
                                            VkMemoryPropertyFlags required) {
@@ -21,17 +21,16 @@ uint32_t OverlayRasterizer::findMemoryType(uint32_t typeBits,
 }
 
 VkShaderModule OverlayRasterizer::loadShader(const char* path) {
-    AAsset* asset = AAssetManager_open(assetManager_, path, AASSET_MODE_BUFFER);
-    if (!asset) { LOGE("Could not open shader asset: %s", path); return VK_NULL_HANDLE; }
-    size_t size = AAsset_getLength(asset);
-    std::vector<uint32_t> code(size / sizeof(uint32_t));
-    AAsset_read(asset, code.data(), size);
-    AAsset_close(asset);
+    std::vector<uint8_t> code;
+    if (!assets_->read(path, code)) {
+        LOGE("Could not open shader asset: %s", path);
+        return VK_NULL_HANDLE;
+    }
 
     VkShaderModuleCreateInfo info{};
     info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = size;
-    info.pCode    = code.data();
+    info.codeSize = code.size();
+    info.pCode    = reinterpret_cast<const uint32_t*>(code.data());
     VkShaderModule mod = VK_NULL_HANDLE;
     if (vkCreateShaderModule(device_, &info, nullptr, &mod) != VK_SUCCESS) {
         LOGE("Could not create shader module: %s", path);
@@ -41,11 +40,11 @@ VkShaderModule OverlayRasterizer::loadShader(const char* path) {
 }
 
 void OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
-                             AAssetManager* assetManager, VkRenderPass renderPass,
+                             AssetReader& assets, VkRenderPass renderPass,
                              uint32_t width, uint32_t height) {
     device_         = device;
     physicalDevice_ = physicalDevice;
-    assetManager_   = assetManager;
+    assets_         = &assets;
     width_          = width;
     height_         = height;
 

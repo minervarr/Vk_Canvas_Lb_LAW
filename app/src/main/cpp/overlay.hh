@@ -1,9 +1,8 @@
 #pragma once
-#define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
-#include <android/asset_manager.h>
 #include <cstdint>
 #include <vector>
+#include "platform.hh"
 
 // ---------------------------------------------------------------------------
 // OverlayRasterizer: renders a Canvas's curve records (20-float Bézier records,
@@ -33,7 +32,7 @@ public:
 
     // Attach to an existing device + render pass; create all GPU resources.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
-              AAssetManager* assetManager, VkRenderPass renderPass,
+              AssetReader& assets, VkRenderPass renderPass,
               uint32_t width, uint32_t height);
     void cleanup();
 
@@ -57,7 +56,7 @@ public:
 private:
     VkDevice         device_         = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
-    AAssetManager*   assetManager_   = nullptr;
+    AssetReader*     assets_         = nullptr;
     uint32_t         width_  = 0;
     uint32_t         height_ = 0;
     uint32_t         curveCount_ = 0;

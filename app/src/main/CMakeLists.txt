@@ -52,6 +52,7 @@ vce_compile_slang(compile_shaders
 add_library(vk_canvas SHARED
     cpp/main.cc
     cpp/app.cc
+    cpp/android_platform.cc
     cpp/renderer.cc
     cpp/overlay.cc
     cpp/canvas.cc

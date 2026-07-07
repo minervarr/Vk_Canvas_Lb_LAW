@@ -1,10 +1,9 @@
 #include "renderer.hh"
-#include <android/log.h>
+#include "log.hh"
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
 #include <chrono>
-#include <dlfcn.h>
 
 static inline int64_t now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -12,14 +11,16 @@ static inline int64_t now_ns() {
 }
 
 #define LOG_TAG "vk_canvas"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) VCE_LOGI(LOG_TAG, __VA_ARGS__)
+#define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
 
-Renderer::Renderer(ANativeWindow* window, AAssetManager* asset_manager) : asset_manager_(asset_manager) {
-    width_  = static_cast<uint32_t>(ANativeWindow_getWidth(window));
-    height_ = static_cast<uint32_t>(ANativeWindow_getHeight(window));
+Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets)
+    : surface_provider_(surface), assets_(assets) {
+    VkExtent2D ext = surface_provider_.extent();
+    width_  = ext.width;
+    height_ = ext.height;
     create_instance();
-    create_surface(window);
+    create_surface();
     pick_physical_device();
     create_logical_device();
     create_swapchain();
@@ -27,30 +28,7 @@ Renderer::Renderer(ANativeWindow* window, AAssetManager* asset_manager) : asset_
     create_framebuffers();
     create_command_buffers();
     create_sync_objects();
-    overlay_.init(device_, physical_dev_, asset_manager_, render_pass_, width_, height_);
-
-    // Pin the window to 30fps (matches the camera cadence) with FIXED_SOURCE
-    // compatibility so SurfaceFlinger knows we are the rate source and stops
-    // hunting the LTPO refresh mode. ONLY_IF_SEAMLESS (not ALWAYS) lets the
-    // display driver pick the right moment — ALWAYS forced mode switches on
-    // Samsung's LTPO driver were themselves causing brief refresh-rate transitions.
-    {
-        using WithStrategyFn = int32_t (*)(ANativeWindow*, float, int8_t, int8_t);
-        auto fn_ex = reinterpret_cast<WithStrategyFn>(
-            dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRateWithChangeStrategy"));
-        if (fn_ex) {
-            fn_ex(window, 30.0f, /*FIXED_SOURCE*/ 1, /*ONLY_IF_SEAMLESS*/ 0);
-            LOGI("Pinned window frame rate to 30fps FIXED_SOURCE ONLY_IF_SEAMLESS");
-        } else {
-            using SetFrameRateFn = int32_t (*)(ANativeWindow*, float, int8_t);
-            auto fn = reinterpret_cast<SetFrameRateFn>(
-                dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate"));
-            if (fn) {
-                fn(window, 30.0f, /*FIXED_SOURCE*/ 1);
-                LOGI("Pinned window frame rate to 30fps FIXED_SOURCE");
-            }
-        }
-    }
+    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_);
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
 }
@@ -59,6 +37,7 @@ Renderer::~Renderer() {
     cleanup();
 }
 
+#if defined(__ANDROID__)
 void Renderer::update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb) {
     // ── Instrumentation: rate camera frames ARRIVE at the renderer ──────────
     {
@@ -94,7 +73,7 @@ void Renderer::update_camera_frame(AHardwareBuffer* hwb, std::function<void()> r
     // Signal the render loop that a fresh frame is ready and wake it from its
     // blocking poll, so it presents promptly at the camera's cadence.
     frame_ready_.store(true, std::memory_order_release);
-    if (wake_looper_) ALooper_wake(wake_looper_);
+    if (waker_) waker_->wake();
 }
 
 void Renderer::clear_camera_frames() {
@@ -210,15 +189,14 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
 
     // Pipeline
     auto loadShader = [this](const char* path) -> VkShaderModule {
-        AAsset* asset = AAssetManager_open(asset_manager_, path, AASSET_MODE_BUFFER);
-        if (!asset) return VK_NULL_HANDLE;
+        std::vector<uint8_t> code;
+        if (!assets_.read(path, code)) return VK_NULL_HANDLE;
         VkShaderModuleCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        ci.codeSize = AAsset_getLength(asset);
-        ci.pCode = (const uint32_t*)AAsset_getBuffer(asset);
+        ci.codeSize = code.size();
+        ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
         VkShaderModule mod;
         vkCreateShaderModule(device_, &ci, nullptr, &mod);
-        AAsset_close(asset);
         return mod;
     };
 
@@ -417,6 +395,7 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
 
     hwb_cache_[hwb] = cache;
 }
+#endif  // __ANDROID__
 
 void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg) {
     if (!device_) return;
@@ -427,6 +406,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
     int64_t t_afterwait = now_ns();
 
+#if defined(__ANDROID__)
     AHardwareBuffer* hwb_to_bind = nullptr;
     std::function<void()> release_to_call;
     {
@@ -440,11 +420,11 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
             pending_hwb_ = nullptr;
         }
     }
-    
+
     if (release_to_call) {
         release_to_call();
     }
-    
+
     if (hwb_to_bind) {
         if (!ycbcr_conversion_) {
             setup_hwb_resources(hwb_to_bind);
@@ -455,6 +435,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         }
         current_hwb_ = hwb_to_bind;
     }
+#endif  // __ANDROID__
     int64_t t_afterbind = now_ns();
 
     uint32_t image_index;
@@ -486,6 +467,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     vkCmdBeginRenderPass(cmd_buffers_[image_index], &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
+#if defined(__ANDROID__)
     auto hwb_it = current_hwb_ ? hwb_cache_.find(current_hwb_) : hwb_cache_.end();
     if (pipeline_ && hwb_it != hwb_cache_.end() && hwb_it->second.desc_set != VK_NULL_HANDLE) {
         AHardwareBuffer_Desc desc;
@@ -520,6 +502,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
     }
+#endif  // __ANDROID__
 
     if (!overlay_curves.empty()) {
         overlay_.recordComposite(cmd_buffers_[image_index], overlay_rotation_deg);
@@ -595,12 +578,11 @@ void Renderer::create_instance() {
     app_info.pApplicationName = "vk_canvas";
     app_info.apiVersion       = VK_API_VERSION_1_1;
 
-    std::vector<const char*> extensions = {
-        "VK_KHR_surface",
-        "VK_KHR_android_surface",
-        "VK_KHR_external_memory_capabilities",
-        "VK_KHR_get_physical_device_properties2"
-    };
+    // Windowing extensions come from the platform's SurfaceProvider
+    // (VK_KHR_surface + VK_KHR_android_surface / VK_KHR_win32_surface / ...).
+    std::vector<const char*> extensions = surface_provider_.instance_extensions();
+    extensions.push_back("VK_KHR_external_memory_capabilities");
+    extensions.push_back("VK_KHR_get_physical_device_properties2");
 
     // VK_EXT_swapchain_colorspace exposes HDR colorspaces (BT2020/HLG/PQ) on the
     // surface. Only request it if the loader reports it, otherwise instance
@@ -627,15 +609,10 @@ void Renderer::create_instance() {
         throw std::runtime_error("vkCreateInstance failed");
 }
 
-void Renderer::create_surface(ANativeWindow* window) {
-    VkAndroidSurfaceCreateInfoKHR ci{};
-    ci.sType  = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-    ci.window = window;
-
-    auto fn = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(
-        vkGetInstanceProcAddr(instance_, "vkCreateAndroidSurfaceKHR"));
-    if (!fn || fn(instance_, &ci, nullptr, &surface_) != VK_SUCCESS)
-        throw std::runtime_error("vkCreateAndroidSurfaceKHR failed");
+void Renderer::create_surface() {
+    surface_ = surface_provider_.create(instance_);
+    if (surface_ == VK_NULL_HANDLE)
+        throw std::runtime_error("SurfaceProvider::create failed");
 }
 
 void Renderer::pick_physical_device() {
@@ -645,6 +622,27 @@ void Renderer::pick_physical_device() {
     std::vector<VkPhysicalDevice> devs(count);
     vkEnumeratePhysicalDevices(instance_, &count, devs.data());
     physical_dev_ = devs[0];
+
+    // Capability scaffolding: optional techniques gate on caps_, never on the
+    // platform, so a capable phone and a weak desktop GPU each get what they
+    // can actually do.
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical_dev_, &props);
+    caps_.api_version                       = props.apiVersion;
+    caps_.max_image_dim_2d                  = props.limits.maxImageDimension2D;
+    caps_.max_compute_workgroup_invocations = props.limits.maxComputeWorkGroupInvocations;
+    caps_.max_storage_buffer_range          = props.limits.maxStorageBufferRange;
+
+    uint32_t ext_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, nullptr);
+    std::vector<VkExtensionProperties> exts(ext_count);
+    vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, exts.data());
+    for (auto& e : exts) {
+        if (!std::strcmp(e.extensionName, "VK_KHR_sampler_ycbcr_conversion"))
+            caps_.has_sampler_ycbcr_conversion = true;
+        if (!std::strcmp(e.extensionName, "VK_ANDROID_external_memory_android_hardware_buffer"))
+            caps_.has_external_memory_ahb = true;
+    }
 }
 
 void Renderer::create_logical_device() {
@@ -655,15 +653,18 @@ void Renderer::create_logical_device() {
     qci.queueCount       = 1;
     qci.pQueuePriorities = &priority;
 
-    const char* dev_exts[] = {
-        "VK_KHR_swapchain",
+    std::vector<const char*> dev_exts = { "VK_KHR_swapchain" };
+#if defined(__ANDROID__)
+    // Camera AHardwareBuffer import chain (Android-only).
+    dev_exts.insert(dev_exts.end(), {
         "VK_KHR_sampler_ycbcr_conversion",
         "VK_KHR_external_memory",
         "VK_ANDROID_external_memory_android_hardware_buffer",
         "VK_EXT_queue_family_foreign",
         "VK_KHR_bind_memory2",
         "VK_KHR_maintenance1"
-    };
+    });
+#endif
 
     VkPhysicalDeviceFeatures features{};
     features.samplerAnisotropy = VK_TRUE;
@@ -672,25 +673,27 @@ void Renderer::create_logical_device() {
     ci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     ci.queueCreateInfoCount    = 1;
     ci.pQueueCreateInfos       = &qci;
-    ci.enabledExtensionCount   = 7;
-    ci.ppEnabledExtensionNames = dev_exts;
+    ci.enabledExtensionCount   = static_cast<uint32_t>(dev_exts.size());
+    ci.ppEnabledExtensionNames = dev_exts.data();
     ci.pEnabledFeatures        = &features;
 
     if (vkCreateDevice(physical_dev_, &ci, nullptr, &device_) != VK_SUCCESS)
         throw std::runtime_error("vkCreateDevice failed");
 
     vkGetDeviceQueue(device_, 0, 0, &queue_);
-    
-    vkGetAndroidHardwareBufferPropertiesANDROID_ = 
+
+#if defined(__ANDROID__)
+    vkGetAndroidHardwareBufferPropertiesANDROID_ =
         (PFN_vkGetAndroidHardwareBufferPropertiesANDROID)vkGetDeviceProcAddr(device_, "vkGetAndroidHardwareBufferPropertiesANDROID");
-    vkCreateSamplerYcbcrConversion_ = 
+    vkCreateSamplerYcbcrConversion_ =
         (PFN_vkCreateSamplerYcbcrConversion)vkGetDeviceProcAddr(device_, "vkCreateSamplerYcbcrConversion");
-    vkDestroySamplerYcbcrConversion_ = 
+    vkDestroySamplerYcbcrConversion_ =
         (PFN_vkDestroySamplerYcbcrConversion)vkGetDeviceProcAddr(device_, "vkDestroySamplerYcbcrConversion");
     if (!vkCreateSamplerYcbcrConversion_) {
         vkCreateSamplerYcbcrConversion_ = (PFN_vkCreateSamplerYcbcrConversion)vkGetDeviceProcAddr(device_, "vkCreateSamplerYcbcrConversionKHR");
         vkDestroySamplerYcbcrConversion_ = (PFN_vkDestroySamplerYcbcrConversion)vkGetDeviceProcAddr(device_, "vkDestroySamplerYcbcrConversionKHR");
     }
+#endif
 }
 
 void Renderer::create_swapchain() {
@@ -851,6 +854,7 @@ void Renderer::create_sync_objects() {
     vkCreateFence(device_, &fence_ci, nullptr, &in_flight_fence_);
 }
 
+#if defined(__ANDROID__)
 void Renderer::cleanup_hwb_resources() {
     // Null every handle right after destroying it: clear_camera_frames() is called
     // at the end of this function and ALSO touches desc_pool_ / hwb_cache_ (it
@@ -874,11 +878,14 @@ void Renderer::cleanup_hwb_resources() {
     if (ycbcr_conversion_ && vkDestroySamplerYcbcrConversion_) { vkDestroySamplerYcbcrConversion_(device_, ycbcr_conversion_, nullptr); ycbcr_conversion_ = VK_NULL_HANDLE; }
     clear_camera_frames();
 }
+#endif  // __ANDROID__
 
 void Renderer::cleanup() {
     if (device_) vkDeviceWaitIdle(device_);
     overlay_.cleanup();
+#if defined(__ANDROID__)
     cleanup_hwb_resources();
+#endif
 
     if (image_available_sem_) vkDestroySemaphore(device_, image_available_sem_, nullptr);
     if (render_finished_sem_) vkDestroySemaphore(device_, render_finished_sem_, nullptr);
