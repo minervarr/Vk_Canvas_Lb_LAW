@@ -18,6 +18,8 @@
 #include "image_layer.hh"
 #include "texture.hh"
 
+class MsdfFont;
+
 class Renderer {
 public:
     Renderer(SurfaceProvider& surface, AssetReader& assets);
@@ -26,12 +28,20 @@ public:
     // Composite, in order: the camera frame (if any); background textured
     // quads (album art — behind UI chrome); the UI overlay described by
     // overlay_curves (Canvas curve records), rotated by overlay_rotation_deg
-    // (0/90/180/270) to follow device orientation; then foreground textured
+    // (0/90/180/270) to follow device orientation; foreground textured
     // quads (icons/buttons — on top of UI chrome, e.g. a button's own
-    // background rect).
+    // background rect); then MSDF text quads (crisp glyph quads from the
+    // MSDF atlas, drawn last so text is always on top).
     void draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
               const std::vector<ImageDraw>& images = {},
-              const std::vector<ImageDraw>& foregroundImages = {});
+              const std::vector<ImageDraw>& foregroundImages = {},
+              const std::vector<float>& msdfQuads = {});
+
+    // Create MSDF pipeline, atlas texture and vertex buffer from an MsdfFont.
+    // Must be called once after the Renderer is constructed, before any draw()
+    // that passes non-empty msdfQuads.
+    void initMsdf(const MsdfFont& font);
+    bool msdfReady() const { return msdfPipeline_ != VK_NULL_HANDLE; }
 
     // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
     // Canvas::image() draws. See ImageLayer::create_texture for details.
@@ -42,6 +52,15 @@ public:
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
+
+    // Force an immediate swapchain rebuild at the surface's current extent.
+    // draw() otherwise only discovers a resize lazily, via VK_SUBOPTIMAL_KHR
+    // from vkAcquireNextImageKHR — fine for a window resized gradually via
+    // live WM_SIZE drags, but a caller that jumps a hidden window straight to
+    // a large size in one step (e.g. showing a fullscreen window) needs the
+    // swapchain to already match before the next draw(), or that first frame
+    // renders at the stale (smaller) extent and appears corrupted/skewed.
+    void notifyResized() { recreate_swapchain(); }
 
     // Frame pacing: update_camera_frame() (camera callback thread) sets a flag and
     // wakes the render loop, so the loop can present exactly once per camera frame
@@ -150,6 +169,33 @@ private:
     OverlayRasterizer overlay_;
     // Textured quads (album art, icons) composited as a background layer.
     ImageLayer image_layer_;
+
+    // ── MSDF text pipeline ──────────────────────────────────────────────────
+    static constexpr uint32_t kMaxMsdfVerts = 16384;
+
+    VkImage             msdfAtlasImage_    = VK_NULL_HANDLE;
+    VkDeviceMemory      msdfAtlasMemory_   = VK_NULL_HANDLE;
+    VkImageView         msdfAtlasView_     = VK_NULL_HANDLE;
+    VkSampler           msdfAtlasSampler_  = VK_NULL_HANDLE;
+    uint32_t            msdfAtlasW_        = 0;
+    uint32_t            msdfAtlasH_        = 0;
+    float               msdfPxRange_      = 4.0f;
+
+    VkBuffer            msdfVbo_           = VK_NULL_HANDLE;
+    VkDeviceMemory      msdfVboMemory_     = VK_NULL_HANDLE;
+    void*               msdfVboMapped_     = nullptr;
+    uint32_t            msdfVertCount_     = 0;
+
+    VkDescriptorSetLayout msdfSetLayout_   = VK_NULL_HANDLE;
+    VkDescriptorPool    msdfDescPool_      = VK_NULL_HANDLE;
+    VkDescriptorSet     msdfDescSet_       = VK_NULL_HANDLE;
+    VkPipelineLayout    msdfPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline          msdfPipeline_      = VK_NULL_HANDLE;
+
+    void createMsdfPipeline();
+    void uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h, float pxRange);
+    void recordMsdfDraw(VkCommandBuffer cmd);
+    void cleanupMsdf();
 
     void create_instance();
     void create_surface();

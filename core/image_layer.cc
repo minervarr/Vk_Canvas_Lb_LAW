@@ -1,5 +1,7 @@
 #include "image_layer.hh"
 #include "log.hh"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #define LOG_TAG "ImageLayer"
@@ -162,16 +164,26 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
 
     TextureRec rec{};
 
+    // Full mip chain: album art is decoded/uploaded at full source resolution
+    // (often 1000+ px) but drawn into small quads (grid tiles, transport
+    // thumbnail). Without mips, that's raw bilinear minification — every
+    // destination texel samples only its 4 nearest source texels instead of
+    // averaging the many it should, which shows up as aliased/"crispy"
+    // thumbnails. A linear-filtered mip chain (generated below via blits)
+    // fixes that at the sampler level, for every texture this layer creates.
+    uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2((double)std::max(w, h)))) + 1;
+
     VkImageCreateInfo imgInfo{};
     imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType     = VK_IMAGE_TYPE_2D;
     imgInfo.format        = VK_FORMAT_R8G8B8A8_UNORM;
     imgInfo.extent        = {w, h, 1};
-    imgInfo.mipLevels     = 1;
+    imgInfo.mipLevels     = mipLevels;
     imgInfo.arrayLayers   = 1;
     imgInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-    imgInfo.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                             VK_IMAGE_USAGE_SAMPLED_BIT;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateImage(device_, &imgInfo, nullptr, &rec.image);
@@ -199,12 +211,14 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &begin);
 
+    // All mip levels start UNDEFINED -> TRANSFER_DST (level 0 gets the copy
+    // below; the rest are blit destinations in the mip-chain loop).
     VkImageMemoryBarrier toDst{};
     toDst.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     toDst.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
     toDst.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toDst.image            = rec.image;
-    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     toDst.srcAccessMask    = 0;
     toDst.dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -219,16 +233,58 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     region.imageExtent       = {w, h, 1};
     vkCmdCopyBufferToImage(cmd, staging, rec.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    VkImageMemoryBarrier toRead{};
-    toRead.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    toRead.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.image            = rec.image;
-    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toRead.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
-    toRead.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+    // Blit level i-1 -> level i (linear filter = box-ish downsample), one
+    // level at a time. Each source level is transitioned to TRANSFER_SRC
+    // right before its blit, then to SHADER_READ_ONLY once no longer needed.
+    int32_t mipW = static_cast<int32_t>(w), mipH = static_cast<int32_t>(h);
+    for (uint32_t level = 1; level < mipLevels; level++) {
+        VkImageMemoryBarrier srcBarrier{};
+        srcBarrier.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        srcBarrier.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        srcBarrier.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        srcBarrier.image            = rec.image;
+        srcBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 1, 0, 1};
+        srcBarrier.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+        srcBarrier.dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &srcBarrier);
+
+        int32_t nextW = std::max(mipW / 2, 1), nextH = std::max(mipH / 2, 1);
+        VkImageBlit blit{};
+        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcOffsets[1] = {mipW, mipH, 1};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+        blit.dstOffsets[0] = {0, 0, 0};
+        blit.dstOffsets[1] = {nextW, nextH, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+        vkCmdBlitImage(cmd, rec.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       rec.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+
+        VkImageMemoryBarrier srcToRead{};
+        srcToRead.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        srcToRead.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        srcToRead.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        srcToRead.image            = rec.image;
+        srcToRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 1, 0, 1};
+        srcToRead.srcAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+        srcToRead.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &srcToRead);
+
+        mipW = nextW; mipH = nextH;
+    }
+
+    // The last level was only ever a blit destination (still TRANSFER_DST).
+    VkImageMemoryBarrier lastToRead{};
+    lastToRead.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    lastToRead.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    lastToRead.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    lastToRead.image            = rec.image;
+    lastToRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mipLevels - 1, 1, 0, 1};
+    lastToRead.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+    lastToRead.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         0, 0, nullptr, 0, nullptr, 1, &toRead);
+                         0, 0, nullptr, 0, nullptr, 1, &lastToRead);
 
     vkEndCommandBuffer(cmd);
     VkSubmitInfo submit{};
@@ -247,14 +303,16 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     viewInfo.image            = rec.image;
     viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format           = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     vkCreateImageView(device_, &viewInfo, nullptr, &rec.view);
 
     VkSamplerCreateInfo sampInfo{};
     sampInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampInfo.magFilter    = VK_FILTER_LINEAR;
     sampInfo.minFilter    = VK_FILTER_LINEAR;
-    sampInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampInfo.minLod       = 0.0f;
+    sampInfo.maxLod       = (float)mipLevels;
     sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
