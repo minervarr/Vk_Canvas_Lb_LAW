@@ -76,7 +76,7 @@ Rules of the structure:
 
 ### Submodule
 
-`first_party/vulkan_font_engine` — GPU font rendering library. Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. `core/msdf.cc/.hh` guard their APK-asset API behind `__ANDROID__`; desktop text loading through it is still a TODO (byte-buffer path), but the curve/coverage path the demo scene uses is fully cross-platform.
+`first_party/vulkan_font_engine` — GPU font rendering library, organized like this repo (platform-agnostic `core/` + `platform/android/` demo + root `shaders_src/` + `cmake/VfeShaders.cmake`). Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader, `CurveRasterizer` + `MsdfTextRenderer` GPU units) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. The engine owns the `AssetReader` seam definition (`core/asset_reader.hh`), which our `core/platform.hh` includes — asset loading through it is fully cross-platform (APK assets on Android, files on desktop).
 
 ## Project Configuration
 

@@ -9,6 +9,16 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+bool VulkanState::ApkReader::read(const char* path, std::vector<uint8_t>& out) {
+    AAsset* a = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
+    if (!a) return false;
+    size_t sz = static_cast<size_t>(AAsset_getLength(a));
+    out.resize(sz);
+    int64_t got = AAsset_read(a, out.data(), sz);
+    AAsset_close(a);
+    return got == static_cast<int64_t>(sz);
+}
+
 VkShaderModule VulkanState::loadShader(const char* path) {
     AAsset* a = AAssetManager_open(mgr_, path, AASSET_MODE_BUFFER);
     if (!a) { LOGE("Shader not found: %s", path); return VK_NULL_HANDLE; }
@@ -125,7 +135,9 @@ void VulkanState::init(ANativeWindow* window, AAssetManager* mgr) {
     cpci.queueFamilyIndex = gfxFamily_;
     vkCreateCommandPool(device_, &cpci, nullptr, &cmdPool_);
 
-    renderer_.init(device_, physDev_, mgr_, extent_.width, extent_.height);
+    reader_.mgr = mgr_;
+    rasterizer_.init(device_, physDev_, reader_, extent_.width, extent_.height);
+    text_.init(device_, physDev_, reader_, extent_.width, extent_.height);
 
     {
         VkCommandBufferAllocateInfo a{};
@@ -137,7 +149,7 @@ void VulkanState::init(ANativeWindow* window, AAssetManager* mgr) {
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cb, &bi);
-        renderer_.transitionOutputImageInitial(cb);
+        rasterizer_.transitionOutputImageInitial(cb);
         vkEndCommandBuffer(cb);
         VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1; si.pCommandBuffers = &cb;
@@ -201,7 +213,7 @@ void VulkanState::init(ANativeWindow* window, AAssetManager* mgr) {
         sa.pSetLayouts = &compSetLayout_;
         vkAllocateDescriptorSets(device_, &sa, &compSet_);
 
-        VkDescriptorImageInfo ii{renderer_.outputSampler, renderer_.outputImageView,
+        VkDescriptorImageInfo ii{rasterizer_.outputSampler(), rasterizer_.outputImageView(),
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr{};
         wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -276,7 +288,7 @@ void VulkanState::init(ANativeWindow* window, AAssetManager* mgr) {
 }
 
 void VulkanState::initMsdf(const MsdfFont& msdf, int weightIdx) {
-    renderer_.createMsdfResources(renderPass_, msdf, weightIdx);
+    text_.createResources(renderPass_, msdf, weightIdx);
     // Upload atlas to GPU in a one-shot command buffer
     VkCommandBufferAllocateInfo a{};
     a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -287,7 +299,7 @@ void VulkanState::initMsdf(const MsdfFont& msdf, int weightIdx) {
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cb, &bi);
-    renderer_.recordAtlasUpload(cb, weightIdx);
+    text_.recordAtlasUpload(cb, weightIdx);
     vkEndCommandBuffer(cb);
     VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1; si.pCommandBuffers = &cb;
@@ -308,7 +320,7 @@ void VulkanState::draw(const std::vector<float>* quads, const uint32_t* quadVert
     if (content_changed) {
         for (int w = 0; w < kFontWeightCount; w++) {
             if (quadVerts[w] > 0)
-                renderer_.uploadGlyphQuads(quads[w].data(), quadVerts[w], w);
+                text_.uploadGlyphQuads(quads[w].data(), quadVerts[w], w);
         }
     }
 
@@ -331,11 +343,11 @@ void VulkanState::draw(const std::vector<float>* quads, const uint32_t* quadVert
 
     // Draw each weight that has a ready atlas and non-zero verts.
     for (int w = 0; w < kFontWeightCount; w++) {
-        if (renderer_.msdfReady(w) && renderer_.msdfVerts(w) > 0) {
-            renderer_.drawMsdfRange(cmdBuf_[fi],
-                                    renderer_.msdfVertOffset(w), renderer_.msdfVerts(w),
-                                    scroll_x, scroll_y,
-                                    0, 0, extent_.width, extent_.height, w);
+        if (text_.ready(w) && text_.vertCount(w) > 0) {
+            text_.draw(cmdBuf_[fi],
+                       text_.vertOffset(w), text_.vertCount(w),
+                       scroll_x, scroll_y,
+                       0, 0, extent_.width, extent_.height, w);
         }
     }
 
@@ -378,7 +390,8 @@ void VulkanState::cleanup() {
     vkDestroyRenderPass(device_, renderPass_, nullptr);
     for (auto iv : swapViews_) vkDestroyImageView(device_, iv, nullptr);
     vkDestroySwapchainKHR(device_, swapchain_, nullptr);
-    renderer_.cleanup();
+    text_.cleanup();
+    rasterizer_.cleanup();
     vkDestroyDevice  (device_,   nullptr);
     vkDestroySurfaceKHR(instance_, surface_, nullptr);
     vkDestroyInstance(instance_, nullptr);

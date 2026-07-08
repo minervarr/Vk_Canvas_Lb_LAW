@@ -7,10 +7,12 @@
 #include <cstdint>
 
 // WIP — not yet ported to the platform seams, so not compiled (see core/CMakeLists.txt).
-// This still leans on the font engine's *demo* Renderer (renderer_.msdfReady etc.);
-// a real port would target the core renderer instead.
-#include "../first_party/vulkan_font_engine/platform/android/renderer.hh"
-#include "msdf.hh"   // from vk_font_core
+// This drives the font engine's GPU units directly (CurveRasterizer +
+// MsdfTextRenderer); a real port would take the host's AssetReader through the
+// seam instead of holding an AAssetManager.
+#include "curve_rasterizer.hh"   // from vk_font_core
+#include "msdf_renderer.hh"      // from vk_font_core
+#include "msdf.hh"               // from vk_font_core
 #include "font_weight.hh"
 
 class VulkanState {
@@ -30,7 +32,7 @@ public:
 
     uint32_t width()  const { return extent_.width;  }
     uint32_t height() const { return extent_.height; }
-    bool     msdfReady(int weightIdx = 0) const { return renderer_.msdfReady(weightIdx); }
+    bool     msdfReady(int weightIdx = 0) const { return text_.ready(weightIdx); }
 
 private:
     static constexpr uint32_t kFrames = 2;   // frames in flight
@@ -67,8 +69,16 @@ private:
     VkFence         fence_[kFrames]      = {};
     uint32_t        frameIdx_            = 0;
 
-    Renderer        renderer_;
-    VkImageLayout   outLayout_ = VK_IMAGE_LAYOUT_GENERAL;
+    // Minimal APK-backed AssetReader for this WIP class; a real port would
+    // receive the host's reader through the platform seam.
+    struct ApkReader : AssetReader {
+        AAssetManager* mgr = nullptr;
+        bool read(const char* path, std::vector<uint8_t>& out) override;
+    };
+    ApkReader        reader_;
+    CurveRasterizer  rasterizer_;
+    MsdfTextRenderer text_;
+    VkImageLayout    outLayout_ = VK_IMAGE_LAYOUT_GENERAL;
 
     VkShaderModule loadShader(const char* assetPath);
 };

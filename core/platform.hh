@@ -9,12 +9,12 @@
 #include <cstdint>
 #include <vector>
 
-// Reads a bundled asset (APK assets on Android, exe-relative dir on desktop)
-// by relative path, e.g. "shaders/tiling.spv". Returns false if missing.
-struct AssetReader {
-    virtual bool read(const char* path, std::vector<uint8_t>& out) = 0;
-    virtual ~AssetReader() = default;
-};
+// AssetReader — reads a bundled asset (APK assets on Android, exe-relative dir
+// on desktop) by relative path, e.g. "shaders/tiling.spv". The definition is
+// owned by the font engine submodule (resolved via vk_font_core's public
+// include dir) so both libraries share one interface and implementations pass
+// straight through.
+#include "asset_reader.hh"
 
 // Owns the native window handle; the renderer never sees it.
 // instance_extensions() is queried before vkCreateInstance; create() may be
