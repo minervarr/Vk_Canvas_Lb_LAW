@@ -28,12 +28,39 @@ float Canvas::textWidth(std::string_view str, float size) const {
 }
 
 void Canvas::clear(Color c) {
+    if (shapes_) { rect(0.0f, 0.0f, float(screenW_), float(screenH_), c, 0.0f); return; }
     float hw = float(screenW_) * 0.5f;
     float hh = float(screenH_) * 0.5f;
     emitFilledRect(out_, hw, hh, hw, hh, c.r, c.g, c.b, c.a);
 }
 
+void Canvas::emitShapeQuad_(float x0, float y0, float x1, float y1,
+                            float kind, const float d[6], Color c) {
+    // 1px AA margin so the smoothed edge is never cut by the quad itself.
+    x0 -= 1.0f; y0 -= 1.0f; x1 += 1.0f; y1 += 1.0f;
+    if (clipActive_) {
+        // Clamp the quad; the SDF is evaluated in absolute pixel coords, so
+        // this clips the shape pixel-exactly (better than the curve path's
+        // tile-granular clip).
+        x0 = std::max(x0, clipX0_); x1 = std::min(x1, clipX1_);
+        y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
+        if (x0 >= x1 || y0 >= y1) return;
+    }
+    auto vert = [&](float vx, float vy) {
+        float rec[14] = { vx, vy, c.r, c.g, c.b, c.a,
+                          kind, d[0], d[1], d[2], d[3], d[4], d[5], 0.0f };
+        shapes_->insert(shapes_->end(), rec, rec + 14);
+    };
+    vert(x0, y0); vert(x1, y0); vert(x1, y1);
+    vert(x0, y0); vert(x1, y1); vert(x0, y1);
+}
+
 void Canvas::rect(float x, float y, float w, float h, Color c, float radius) {
+    if (shapes_ && !rotActive_) {
+        float d[6] = { x + w * 0.5f, y + h * 0.5f, w * 0.5f, h * 0.5f, radius, 0.0f };
+        emitShapeQuad_(x, y, x + w, y + h, 0.0f, d, c);
+        return;
+    }
     size_t start = out_.size();
     if (rotActive_) {
         // Rounded-box SDF can't be rotated; emit a rotatable capsule instead.
@@ -77,6 +104,34 @@ void Canvas::imageFg(TextureHandle tex, float x, float y, float w, float h,
   imagesFg_->push_back(d);
 }
 
+void Canvas::triangle(float x0, float y0, float x1, float y1,
+                      float x2, float y2, Color c) {
+    if (shapes_ && !rotActive_) {
+        float d[6] = { x0, y0, x1, y1, x2, y2 };
+        emitShapeQuad_(std::min({x0, x1, x2}), std::min({y0, y1, y2}),
+                       std::max({x0, x1, x2}), std::max({y0, y1, y2}),
+                       2.0f, d, c);
+        return;
+    }
+    size_t start = out_.size();
+    auto edge = [&](float ax, float ay, float bx, float by) {
+        xform_(ax, ay);
+        xform_(bx, by);
+        float rec[kCurveFloats] = {0};
+        rec[0] = 6.0f;  // line segment, winding-fill pass (same as glyph edges)
+        rec[1] = ax; rec[2] = ay;
+        rec[3] = bx; rec[4] = by;
+        rec[9] = c.r; rec[10] = c.g; rec[11] = c.b; rec[12] = c.a;
+        rec[kBBoxMinX] = std::min(ax, bx); rec[kBBoxMinY] = std::min(ay, by);
+        rec[kBBoxMaxX] = std::max(ax, bx); rec[kBBoxMaxY] = std::max(ay, by);
+        out_.insert(out_.end(), rec, rec + kCurveFloats);
+    };
+    edge(x0, y0, x1, y1);
+    edge(x1, y1, x2, y2);
+    edge(x2, y2, x0, y0);
+    clipFrom_(start);
+}
+
 void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color c) {
     xform_(ax, ay);
     xform_(bx, by);
@@ -95,6 +150,14 @@ void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color
 }
 
 void Canvas::segment(float x0, float y0, float x1, float y1, float thickness, Color c) {
+    if (shapes_ && !rotActive_) {
+        float r = thickness * 0.5f;
+        float d[6] = { x0, y0, x1, y1, r, 0.0f };
+        emitShapeQuad_(std::min(x0, x1) - r, std::min(y0, y1) - r,
+                       std::max(x0, x1) + r, std::max(y0, y1) + r,
+                       1.0f, d, c);
+        return;
+    }
     size_t start = out_.size();
     emitCapsule_(x0, y0, x1, y1, thickness * 0.5f, c);
     clipFrom_(start);
@@ -113,6 +176,13 @@ void Canvas::polyline(const float* xy, int count, float thickness, Color c) {
         if (ax == bx && ay == by) continue;
         if (!std::isfinite(ax) || !std::isfinite(ay) ||
             !std::isfinite(bx) || !std::isfinite(by)) continue;
+        if (shapes_ && !rotActive_) {
+            float d[6] = { ax, ay, bx, by, r, 0.0f };
+            emitShapeQuad_(std::min(ax, bx) - r, std::min(ay, by) - r,
+                           std::max(ax, bx) + r, std::max(ay, by) + r,
+                           1.0f, d, c);
+            continue;
+        }
         emitCapsule_(ax, ay, bx, by, r, c);
     }
     clipFrom_(start);

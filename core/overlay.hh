@@ -27,10 +27,19 @@ public:
     // panels must fit or later-drawn UI vanishes in those tiles.
     static constexpr uint32_t MAX_CURVES_PER_TILE  = 96;
     static constexpr uint32_t TILE_STRIDE_U32      = MAX_CURVES_PER_TILE + 1;
-    static constexpr uint32_t MAX_WINDING_PER_TILE = 64;
+    // See shaders_src/coverage.slang's MAX_PER_WIND_TILE comment: raised from
+    // 64 after tools/coverage_test (vulkan_font_engine) proved silent
+    // registration drops past capacity can flip winding parity for a busy
+    // tile-row cell.
+    static constexpr uint32_t MAX_WINDING_PER_TILE = 256;
     static constexpr uint32_t WIND_STRIDE_U32      = MAX_WINDING_PER_TILE + 1;
 
-    // Attach to an existing device + render pass; create all GPU resources.
+    // Attach to an existing device + render pass. Pipelines and descriptor
+    // layouts are created here; the BIG resources (curve buffer, tile/row
+    // buffers, full-screen output image — ~17 MB at 1080p) are allocated
+    // lazily on the first uploadCurves() with a non-zero count, so hosts on
+    // the SDF shape path (Canvas::useShapes(), which never emits curve
+    // records) pay nothing for the compute rasterizer they don't use.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
               uint32_t width, uint32_t height);
@@ -120,4 +129,8 @@ private:
     std::vector<float> lastCurves_;
     bool curvesDirty_ = true;
     bool firstRun_    = true;
+
+    // Lazy big-resource allocation (see init()'s comment).
+    bool resourcesReady_ = false;
+    void ensureResources_();
 };

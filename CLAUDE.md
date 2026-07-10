@@ -29,7 +29,7 @@ cd platform/windows
 
 ## Shader Compilation
 
-Shaders are written in **Slang** in the repo-root `shaders_src/` and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe). Six shaders: `composite_vert`, `composite_frag`, `tiling`, `coverage`, `overlay_vert`, `overlay_frag`. CMake invokes slangc via `cmake/VceShaders.cmake`. To recompile manually:
+Shaders are written in **Slang** and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe), via two `vce_compile_slang()` calls (`cmake/VceShaders.cmake`) per platform CMakeLists: one pointing at `shaders_src/` for vk_canvas's own 4 shaders (`overlay_vert/frag`, `image_vert/frag`), one pointing at `first_party/vulkan_font_engine/shaders_src/` for the 4-6 shaders vk_canvas shares with the font engine (`composite_vert/frag`, `tiling`, `coverage`, plus `msdf_vert/frag` for consumers that need them — see that repo's own CLAUDE.md). These used to be hand-duplicated in both `shaders_src/` directories; that drifted silently once (a whitespace difference), so vk_canvas now sources them from the font engine's copy instead of maintaining a second one. To recompile manually:
 
 ```bash
 slangc.exe <shader>.slang -target spirv -o <output>.spv
@@ -45,7 +45,9 @@ core/                      # vk_canvas_core STATIC lib — no platform SDK inclu
   renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
   canvas_host.* vulkan_state.* compute_context.* text_editor.* text_buffer.*
   undo_redo.* pager.* plotview.* gesture.* archive.*      (WIP — moved, not compiled)
-shaders_src/               # shared Slang sources
+shaders_src/               # vk_canvas's OWN 4 shaders only (overlay/image); the
+                           #   ones shared with the font engine live in its own
+                           #   shaders_src/ — see "Shader Compilation" above
 platform/
   android/                 # self-contained Gradle project: gradlew, build.gradle,
                            #   settings.gradle, install/logcat/screenshot .bat,

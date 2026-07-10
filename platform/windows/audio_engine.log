@@ -1,0 +1,158 @@
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[INFO] stop() called: streaming=0 eventThreadUsers=0 activeTransfers=0
+[INFO] close() called, streaming=0 capStreaming=0 opened=1
+[INFO] USB audio device closed
+[INFO] close() called, streaming=0 capStreaming=0 opened=0
+[INFO] USB audio device closed
+[INFO] Opening USB device VID=22E1 PID=E203
+[INFO] USB device speed: High
+[INFO] USB device opened: VID=22E1 PID=E203
+[INFO] UAC version: 2 (bcdADC=0x0200) on interface 1
+[DEBUG] UAC2 Clock Source ID: 1
+[DEBUG] UAC2 Input Terminal 3 (type 0x0101) -> Clock 1
+[DEBUG] UAC2 Output Terminal 4 (type 0x0302) -> Clock 1
+[DEBUG] UAC2 Feature Unit 10 <- src 3 ctrls=0x00000003 vol=0 mute=1
+[DEBUG] UAC2 Clock 1: 8 sub-range(s)
+[DEBUG]   sub-range 0: min=44100 max=44100 res=0
+[DEBUG]   sub-range 1: min=48000 max=48000 res=0
+[DEBUG]   sub-range 2: min=88200 max=88200 res=0
+[DEBUG]   sub-range 3: min=96000 max=96000 res=0
+[DEBUG]   sub-range 4: min=176400 max=176400 res=0
+[DEBUG]   sub-range 5: min=192000 max=192000 res=0
+[DEBUG]   sub-range 6: min=352800 max=352800 res=0
+[DEBUG]   sub-range 7: min=384000 max=384000 res=0
+[INFO] No usable Feature Unit with FU_VOLUME found -- software gain only
+[INFO] Parsed 32 format(s), UAC2
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=44100 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=48000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=88200 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=96000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=176400 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=192000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=352800 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=1 ep=0x03 rate=384000 ch=2 bits=16 subslot=2 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x00c8 fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=44100 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=48000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=88200 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=96000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=176400 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=192000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=352800 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=2 ep=0x03 rate=384000 ch=2 bits=24 subslot=3 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x012c fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=3 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x00000001 dsd=0 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=44100 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=48000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=88200 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=96000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=176400 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=192000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=352800 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff
+[DEBUG]   iface=2 alt=4 ep=0x03 rate=384000 ch=2 bits=32 subslot=4 bmFormats=0x80000000 dsd=1 cap=0 clk=1 maxpkt=0x0190 fb=0xffffffff

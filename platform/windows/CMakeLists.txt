@@ -6,18 +6,27 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 add_subdirectory(${REPO_ROOT}/core ${CMAKE_BINARY_DIR}/core)
 
 # Compile shaders next to the executable: FileAssetReader reads <exe>/assets/.
+# composite/tiling/coverage are canonically owned by the font engine (same
+# bytes vk_canvas's own copies used to hand-duplicate — see its shaders_src
+# comment); overlay/image are genuinely vk_canvas's own.
 include(${REPO_ROOT}/cmake/VceShaders.cmake)
-vce_compile_slang(compile_shaders
+vce_compile_slang(compile_shared_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders
-    ${REPO_ROOT}/shaders_src
+    ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
     tiling
     coverage
+)
+vce_compile_slang(compile_shaders
+    ${CMAKE_BINARY_DIR}/assets/shaders
+    ${REPO_ROOT}/shaders_src
     overlay_vert
     overlay_frag
     image_vert
     image_frag
+    shape_vert
+    shape_frag
 )
 
 add_executable(vk_canvas
@@ -25,7 +34,7 @@ add_executable(vk_canvas
     win32_platform.cc
 )
 
-add_dependencies(vk_canvas compile_shaders)
+add_dependencies(vk_canvas compile_shared_shaders compile_shaders)
 
 # FileAssetReader reads <exe dir>/assets/, and the shaders above compile into
 # ${CMAKE_BINARY_DIR}/assets — so the exe must sit at the build root.

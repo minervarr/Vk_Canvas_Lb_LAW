@@ -49,12 +49,23 @@ void OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     height_         = height;
 
     createDescriptorLayoutAndPool();
+    createComputePipelines();
+    createCompositePipeline(renderPass);
+    // Buffers / output image / descriptor writes are deferred to
+    // ensureResources_() — see init()'s comment in overlay.hh.
+    LOGI("OverlayRasterizer ready (%ux%u, resources on demand)", width_, height_);
+}
+
+void OverlayRasterizer::ensureResources_() {
+    if (resourcesReady_) return;
     createBuffers();
     createOutputImage();
-    createComputePipelines();
     writeDescriptors();
-    createCompositePipeline(renderPass);
-    LOGI("OverlayRasterizer ready (%ux%u)", width_, height_);
+    updateCompositeImageDescriptor();
+    firstRun_    = true;
+    curvesDirty_ = true;
+    resourcesReady_ = true;
+    LOGI("OverlayRasterizer resources allocated (%ux%u)", width_, height_);
 }
 
 void OverlayRasterizer::createDescriptorLayoutAndPool() {
@@ -350,6 +361,8 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
 }
 
 void OverlayRasterizer::updateCompositeImageDescriptor() {
+    // Resources may not exist yet (lazy allocation) — nothing to point at.
+    if (outputImageView_ == VK_NULL_HANDLE || compSet_ == VK_NULL_HANDLE) return;
     VkDescriptorImageInfo ii{outputSampler_, outputImageView_, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet wr{};
     wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -363,6 +376,13 @@ void OverlayRasterizer::updateCompositeImageDescriptor() {
 void OverlayRasterizer::resize(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return;              // minimized; keep old resources
     if (width == width_ && height == height_) return;
+    if (!resourcesReady_) {
+        // Nothing allocated yet — just track the size for whenever
+        // ensureResources_() eventually runs.
+        width_ = width;
+        height_ = height;
+        return;
+    }
 
     if (outputSampler_)     vkDestroySampler(device_, outputSampler_, nullptr);
     if (outputImageView_)   vkDestroyImageView(device_, outputImageView_, nullptr);
@@ -394,6 +414,7 @@ void OverlayRasterizer::resize(uint32_t width, uint32_t height) {
 
 void OverlayRasterizer::uploadCurves(const float* curveData, uint32_t count) {
     if (count > MAX_CURVES) count = MAX_CURVES;
+    if (count > 0) ensureResources_();
     
     size_t newSize = static_cast<size_t>(count) * CURVE_FLOATS;
     bool changed = (newSize != lastCurves_.size());
@@ -421,7 +442,7 @@ void OverlayRasterizer::uploadCurves(const float* curveData, uint32_t count) {
 }
 
 void OverlayRasterizer::recordDispatch(VkCommandBuffer cmd) {
-    if (!ready()) return;
+    if (!ready() || !resourcesReady_) return;
     if (!curvesDirty_) return;
     curvesDirty_ = false;
 
@@ -485,14 +506,24 @@ void OverlayRasterizer::recordDispatch(VkCommandBuffer cmd) {
     if (tileCountX > 0 && tileCountY > 0)
         vkCmdDispatch(cmd, tileCountX, tileCountY, 1);
 
-    // We omit the compute->fragment barrier! The GPU will execute the camera's fragment shader 
-    // concurrently with the UI's compute shader. This eliminates the "micro stop" lag spike 
-    // on the camera feed when the UI changes (e.g. on rotation or timer tick), at the cost 
-    // of a potential one-frame visual tear on the UI itself (which is acceptable).
+    // Compute writes to outputImage_ must complete before the composite pass's
+    // fragment shader reads it in this same command buffer, or the composite
+    // can sample a partially-written frame (visible as a one-frame flash/tear
+    // whenever the scene changes).
+    VkImageMemoryBarrier toFragRead{};
+    toFragRead.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toFragRead.oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toFragRead.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toFragRead.image            = outputImage_;
+    toFragRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toFragRead.srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    toFragRead.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toFragRead);
 }
 
 void OverlayRasterizer::recordComposite(VkCommandBuffer cmd, int rotation_deg) {
-    if (!ready()) return;
+    if (!ready() || !resourcesReady_) return;
     VkViewport vp{0.0f, 0.0f, (float)width_, (float)height_, 0.0f, 1.0f};
     VkRect2D   sc{{0, 0}, {width_, height_}};
     vkCmdSetViewport(cmd, 0, 1, &vp);

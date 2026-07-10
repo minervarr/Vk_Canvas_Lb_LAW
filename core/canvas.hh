@@ -65,6 +65,17 @@ public:
   // default) to make image() a no-op, e.g. for hosts that never draw art.
   void useImages(std::vector<ImageDraw>* out) { images_ = out; }
 
+  // Route primitives (rect/segment/polyline/triangle) into `out` as SDF
+  // shape quads for Renderer's shape pipeline (14 floats/vert, 6 verts per
+  // shape: pos.xy rgba data0.xyzw data1.xyzw — see shape_frag.slang for the
+  // kind/parameter packing) instead of compute-rasterized curve records.
+  // Analytically identical output (same SDFs, same 1px-edge antialiasing)
+  // but each shape touches only its own pixels and the tiling/coverage
+  // compute passes never run. Rotation still falls back to the curve path
+  // (shape params are screen-axis-aligned). Pass nullptr to restore the
+  // curve path. Pass the collected quads to Renderer::draw()'s shapeVerts.
+  void useShapes(std::vector<float>* out) { shapes_ = out; }
+
   // Same, for imageFg() — foreground images (icons, buttons) that must
   // render ON TOP of vector/text UI, the opposite of image()'s background
   // layer (album art, sitting BEHIND UI chrome). Renderer::draw() composites
@@ -79,6 +90,14 @@ public:
 
   // Filled axis-aligned rectangle with optional rounded corners.
   void rect(float x, float y, float w, float h, Color c, float radius = 0.0f);
+
+  // Filled triangle, emitted as a closed contour of line records in the
+  // winding-fill pass (exactly how glyph outlines fill) — a first-class
+  // vector primitive so hosts can draw play/skip-style icons natively
+  // instead of rasterizing SVGs to textures. Vertex order doesn't matter.
+  // Honors the active clip and rotation.
+  void triangle(float x0, float y0, float x1, float y1,
+                float x2, float y2, Color c);
 
   // Draw a textured quad (album art, icons) at screen rect (x,y,w,h) sampling
   // the UV sub-rect [u0,v0]-[u1,v1] (default: whole texture). Requires
@@ -164,6 +183,7 @@ private:
   const Font* font_;
   const MsdfFont* msdf_ = nullptr;
   std::vector<float>* quads_ = nullptr;
+  std::vector<float>* shapes_ = nullptr;
   std::vector<ImageDraw>* images_ = nullptr;
   std::vector<ImageDraw>* imagesFg_ = nullptr;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
@@ -189,6 +209,12 @@ private:
   // applying the active rotation and computing its bounding box. Shared by
   // segment()/polyline().
   void  emitCapsule_(float ax, float ay, float bx, float by, float radius, Color c);
+
+  // Emit one shape quad (6 verts) into shapes_: bounding quad [x0,y0]-[x1,y1]
+  // (inflated by 1px AA margin and clamped to the active clip by the caller),
+  // shape kind + up to 6 geometry params in d (see useShapes()).
+  void  emitShapeQuad_(float x0, float y0, float x1, float y1,
+                       float kind, const float d[6], Color c);
 
   // Clip records appended at/after startIdx against the active clip rect.
   void clipFrom_(size_t startIdx);

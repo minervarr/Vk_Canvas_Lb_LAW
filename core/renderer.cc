@@ -15,8 +15,10 @@ static inline int64_t now_ns() {
 #define LOGI(...) VCE_LOGI(LOG_TAG, __VA_ARGS__)
 #define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
 
-Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets)
-    : surface_provider_(surface), assets_(assets) {
+Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
+                   uint32_t desiredSwapchainImages)
+    : surface_provider_(surface), assets_(assets),
+      desired_swapchain_images_(desiredSwapchainImages) {
     VkExtent2D ext = surface_provider_.extent();
     width_  = ext.width;
     height_ = ext.height;
@@ -31,6 +33,7 @@ Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets)
     create_sync_objects();
     overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_);
     image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_);
+    initShapes();
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
 }
@@ -402,31 +405,57 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
 void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
                     const std::vector<ImageDraw>& images,
                     const std::vector<ImageDraw>& foregroundImages,
-                    const std::vector<float>& msdfQuads) {
+                    const std::vector<float>& msdfQuads,
+                    const std::vector<float>& shapeVerts) {
     if (!device_) return;
     int64_t draw_t0 = now_ns();
 
-    // Wait for the previous frame's GPU work to finish BEFORE touching
-    // curveBufferMapped_/msdfVboMapped_ below. Both are single-buffered
-    // (no per-frame-in-flight copies), and the previous frame's compute
-    // dispatch (overlay_.recordDispatch) / MSDF draw read those same
-    // mapped buffers — memcpy'ing new data in first raced the read,
-    // producing a visibly corrupted frame whenever the curve list changed
-    // (e.g. every hover-highlight transition).
-    vkWaitForFences(device_, 1, &in_flight_fence_, VK_TRUE, UINT64_MAX);
+    const uint32_t frame = frame_index_;
+
+    // Two frames in flight: wait only for THIS frame slot's previous use, so
+    // CPU scene-building for frame N+1 overlaps the GPU executing frame N.
+    // The dynamic buffers the CPU writes below (MSDF VBO, shape VBO) are
+    // per-frame copies, so no write can race the other frame's read.
+    //
+    // Exception: the overlay compute path (curve buffer, tile/row buffers,
+    // output image) is single-buffered — when this frame uses it, ALSO wait
+    // out the other frame slot, restoring the old fully-serialized behavior
+    // for exactly the frames that need it.
+    vkWaitForFences(device_, 1, &in_flight_fences_[frame], VK_TRUE, UINT64_MAX);
+    if (!overlay_curves.empty())
+        vkWaitForFences(device_, 1, &in_flight_fences_[1 - frame], VK_TRUE, UINT64_MAX);
     int64_t t_afterwait = now_ns();
+
+    // Retired textures may only be freed once EVERY submitted command buffer
+    // that could bind them has finished — with two frames in flight that
+    // means both frame fences, not just ours. Check the other one without
+    // blocking; if it's still running, staging still gets reaped and the
+    // retirees simply wait for a later pass.
+    bool queueDrained =
+        vkGetFenceStatus(device_, in_flight_fences_[1 - frame]) == VK_SUCCESS;
+    image_layer_.collectGarbage(queueDrained);
 
     overlay_.uploadCurves(overlay_curves.data(),
                           static_cast<uint32_t>(overlay_curves.size() / OverlayRasterizer::CURVE_FLOATS));
 
-    // Upload MSDF text quads for this frame.
+    // Upload MSDF text quads into this frame slot's VBO.
     {
         uint32_t verts = static_cast<uint32_t>(msdfQuads.size() / 8);
         if (verts > kMaxMsdfVerts) verts = kMaxMsdfVerts;
-        if (msdfReady() && msdfVboMapped_ && verts > 0)
-            std::memcpy(msdfVboMapped_, msdfQuads.data(),
+        if (msdfReady() && msdfVboMapped_[frame] && verts > 0)
+            std::memcpy(msdfVboMapped_[frame], msdfQuads.data(),
                         static_cast<size_t>(verts) * 8 * sizeof(float));
         msdfVertCount_ = verts;
+    }
+
+    // Upload SDF shape quads into this frame slot's VBO.
+    {
+        uint32_t verts = static_cast<uint32_t>(shapeVerts.size() / kShapeFloatsPerVert);
+        if (verts > kMaxShapeVerts) verts = kMaxShapeVerts;
+        if (shapePipeline_ != VK_NULL_HANDLE && shapeVboMapped_[frame] && verts > 0)
+            std::memcpy(shapeVboMapped_[frame], shapeVerts.data(),
+                        static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+        shapeVertCount_ = verts;
     }
 
     int64_t t_afterupload = now_ns();
@@ -464,14 +493,37 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     int64_t t_afterbind = now_ns();
 
     uint32_t image_index;
-    VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, image_available_sem_, VK_NULL_HANDLE, &image_index);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
+                                            image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        // The swapchain died mid-transition (monitor move, mode change).
+        // Recreate and retry the acquire IN THIS CALL instead of returning:
+        // dropping the frame presented one whole interval of stale,
+        // wrong-extent content — the "blinking horizontal black bars" seen
+        // while crossing between monitors. (The failed acquire left the
+        // semaphore unsignaled, so reusing it for the retry is valid.)
         recreate_swapchain();
-        return;  // skip this frame; the next draw() call uses the new swapchain
+        result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
+                                       image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) return;
     }
+    // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
+    // render and present it, and let the present side's SUBOPTIMAL trigger
+    // the recreate afterward. The old code bailed here, which both dropped
+    // the frame AND left the acquire semaphore signaled (invalid to reuse
+    // on the next acquire).
     int64_t t_afteracquire = now_ns();
 
-    vkResetFences(device_, 1, &in_flight_fence_);
+    // The acquired image's command buffer may belong to the OTHER in-flight
+    // frame — wait out whichever fence last submitted it before re-recording.
+    if (image_index < image_fences_.size() &&
+        image_fences_[image_index] != VK_NULL_HANDLE &&
+        image_fences_[image_index] != in_flight_fences_[frame])
+        vkWaitForFences(device_, 1, &image_fences_[image_index], VK_TRUE, UINT64_MAX);
+    if (image_index < image_fences_.size())
+        image_fences_[image_index] = in_flight_fences_[frame];
+
+    vkResetFences(device_, 1, &in_flight_fences_[frame]);
     vkResetCommandBuffer(cmd_buffers_[image_index], 0);
 
     VkCommandBufferBeginInfo begin_info{};
@@ -536,6 +588,12 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         image_layer_.recordComposite(cmd_buffers_[image_index], images, width_, height_);
     }
 
+    // SDF shape quads — the vector UI layer's fast path; same layer slot as
+    // the overlay composite below (a host uses one or the other per frame).
+    if (shapeVertCount_ > 0) {
+        recordShapeDraw(cmd_buffers_[image_index], frame);
+    }
+
     if (!overlay_curves.empty()) {
         overlay_.recordComposite(cmd_buffers_[image_index], overlay_rotation_deg);
     }
@@ -545,7 +603,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     }
 
     if (msdfVertCount_ > 0) {
-        recordMsdfDraw(cmd_buffers_[image_index]);
+        recordMsdfDraw(cmd_buffers_[image_index], frame);
     }
 
     vkCmdEndRenderPass(cmd_buffers_[image_index]);
@@ -553,7 +611,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkSemaphore wait_sems[] = {image_available_sem_};
+    VkSemaphore wait_sems[] = {image_available_sems_[frame]};
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submit_info.waitSemaphoreCount = 1;
     submit_info.pWaitSemaphores = wait_sems;
@@ -561,11 +619,12 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &cmd_buffers_[image_index];
 
-    VkSemaphore signal_sems[] = {render_finished_sem_};
+    VkSemaphore signal_sems[] = {render_finished_sems_[frame]};
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = signal_sems;
 
-    vkQueueSubmit(queue_, 1, &submit_info, in_flight_fence_);
+    vkQueueSubmit(queue_, 1, &submit_info, in_flight_fences_[frame]);
+    frame_index_ = 1 - frame;
 
     VkPresentInfoKHR present_info{};
     present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -776,10 +835,13 @@ void Renderer::create_swapchain() {
 
     // Honor the surface's max image count (0 == no limit) and give the compositor
     // headroom: MAILBOX needs >=3, and a 4th image lets us keep rendering while one
-    // is on screen, one queued, and one held by the compositor mid-hitch.
+    // is on screen, one queued, and one held by the compositor mid-hitch (Android).
+    // The count is caller-configurable (constructor): each extra image is a full
+    // window-sized allocation, so desktop callers request 3.
     VkSurfaceCapabilitiesKHR caps{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_dev_, surface_, &caps);
-    uint32_t desired_images = 4;
+    uint32_t desired_images = desired_swapchain_images_;
+    if (desired_images < 2) desired_images = 2;
     if (desired_images < caps.minImageCount) desired_images = caps.minImageCount;
     if (caps.maxImageCount > 0 && desired_images > caps.maxImageCount) desired_images = caps.maxImageCount;
     LOGI("Swapchain present mode=%d, images=%u", present_mode, desired_images);
@@ -809,6 +871,13 @@ void Renderer::create_swapchain() {
 
     if (vkCreateSwapchainKHR(device_, &ci, nullptr, &swapchain_) != VK_SUCCESS)
         throw std::runtime_error("vkCreateSwapchainKHR failed");
+
+    uint32_t img_count = 0;
+    vkGetSwapchainImagesKHR(device_, swapchain_, &img_count, nullptr);
+    // Per-image "which frame-fence last used this image" tracking for the
+    // frames-in-flight scheme; reset on every (re)create since all prior
+    // work was drained first.
+    image_fences_.assign(img_count, VK_NULL_HANDLE);
 }
 
 void Renderer::create_render_pass() {
@@ -907,9 +976,11 @@ void Renderer::create_sync_objects() {
     fence_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    vkCreateSemaphore(device_, &sem_ci, nullptr, &image_available_sem_);
-    vkCreateSemaphore(device_, &sem_ci, nullptr, &render_finished_sem_);
-    vkCreateFence(device_, &fence_ci, nullptr, &in_flight_fence_);
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        vkCreateSemaphore(device_, &sem_ci, nullptr, &image_available_sems_[f]);
+        vkCreateSemaphore(device_, &sem_ci, nullptr, &render_finished_sems_[f]);
+        vkCreateFence(device_, &fence_ci, nullptr, &in_flight_fences_[f]);
+    }
 }
 
 #if defined(__ANDROID__)
@@ -985,28 +1056,45 @@ void Renderer::recreate_swapchain() {
 
 void Renderer::initMsdf(const MsdfFont& font) {
     if (!device_ || !render_pass_) return;
-    if (msdfPipeline_ != VK_NULL_HANDLE) return;  // already initialised
+    // Callers may release the font's CPU atlas pixels after upload
+    // (MsdfFont::releaseAtlasPixels()); an upload needs them resident.
+    if (font.atlas().empty()) {
+        LOGE("initMsdf: atlas pixels not resident (call ensureAtlasLoaded first)");
+        return;
+    }
+    if (msdfPipeline_ != VK_NULL_HANDLE) {
+        // Re-entrant call: the atlas grew (a fallback font baked new glyphs
+        // — see MsdfFont::bakeCodepoints()) and needs to be re-uploaded at
+        // its new size. Wait for any in-flight frame still sampling the old
+        // atlas/descriptor before tearing it down, then rebuild fresh below.
+        vkDeviceWaitIdle(device_);
+        cleanupMsdf();
+    }
 
     uploadMsdfAtlas(font.atlas().data(), font.atlasW(), font.atlasH(), font.distanceRange());
+    msdfIsMtsdf_ = font.isMtsdf() ? 1.0f : 0.0f;  // gates the shader's true-SDF blend
     createMsdfPipeline();
 
-    // Vertex buffer (host-visible, persistently mapped)
+    // Vertex buffers (host-visible, persistently mapped) — one per frame in
+    // flight so the CPU's upload for frame N+1 can't race frame N's read.
     const VkDeviceSize vbBytes = static_cast<VkDeviceSize>(kMaxMsdfVerts) * 8 * sizeof(float);
-    VkBufferCreateInfo vb{};
-    vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    vb.size  = vbBytes;
-    vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vkCreateBuffer(device_, &vb, nullptr, &msdfVbo_);
-    VkMemoryRequirements vr{};
-    vkGetBufferMemoryRequirements(device_, msdfVbo_, &vr);
-    VkMemoryAllocateInfo va{};
-    va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    va.allocationSize = vr.size;
-    va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    vkAllocateMemory(device_, &va, nullptr, &msdfVboMemory_);
-    vkBindBufferMemory(device_, msdfVbo_, msdfVboMemory_, 0);
-    vkMapMemory(device_, msdfVboMemory_, 0, vbBytes, 0, &msdfVboMapped_);
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        VkBufferCreateInfo vb{};
+        vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        vb.size  = vbBytes;
+        vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        vkCreateBuffer(device_, &vb, nullptr, &msdfVbo_[f]);
+        VkMemoryRequirements vr{};
+        vkGetBufferMemoryRequirements(device_, msdfVbo_[f], &vr);
+        VkMemoryAllocateInfo va{};
+        va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        va.allocationSize = vr.size;
+        va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(device_, &va, nullptr, &msdfVboMemory_[f]);
+        vkBindBufferMemory(device_, msdfVbo_[f], msdfVboMemory_[f], 0);
+        vkMapMemory(device_, msdfVboMemory_[f], 0, vbBytes, 0, &msdfVboMapped_[f]);
+    }
 
     LOGI("MSDF pipeline ready (atlas %ux%u, pxRange %.1f)", msdfAtlasW_, msdfAtlasH_, msdfPxRange_);
 }
@@ -1285,7 +1373,7 @@ void Renderer::createMsdfPipeline() {
     vkDestroyShaderModule(device_, fs, nullptr);
 }
 
-void Renderer::recordMsdfDraw(VkCommandBuffer cmd) {
+void Renderer::recordMsdfDraw(VkCommandBuffer cmd, uint32_t frame) {
     if (!msdfReady() || msdfVertCount_ == 0) return;
 
     VkViewport vp{0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f};
@@ -1295,7 +1383,7 @@ void Renderer::recordMsdfDraw(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, msdfPipeline_);
     float push[8] = {static_cast<float>(width_), static_cast<float>(height_),
-                     msdfPxRange_, 0.0f,
+                     msdfPxRange_, msdfIsMtsdf_,
                      static_cast<float>(msdfAtlasW_), static_cast<float>(msdfAtlasH_),
                      0.0f, 0.0f};
     vkCmdPushConstants(cmd, msdfPipelineLayout_,
@@ -1304,22 +1392,201 @@ void Renderer::recordMsdfDraw(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, msdfPipelineLayout_,
                             0, 1, &msdfDescSet_, 0, nullptr);
     VkDeviceSize off = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &msdfVbo_, &off);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &msdfVbo_[frame], &off);
     vkCmdDraw(cmd, msdfVertCount_, 1, 0, 0);
 }
 
 void Renderer::cleanupMsdf() {
-    if (msdfVboMapped_)  { vkUnmapMemory(device_, msdfVboMemory_); msdfVboMapped_ = nullptr; }
-    if (msdfVbo_)        vkDestroyBuffer(device_, msdfVbo_, nullptr);
-    if (msdfVboMemory_)  vkFreeMemory(device_, msdfVboMemory_, nullptr);
-    if (msdfPipeline_)   vkDestroyPipeline(device_, msdfPipeline_, nullptr);
-    if (msdfPipelineLayout_) vkDestroyPipelineLayout(device_, msdfPipelineLayout_, nullptr);
-    if (msdfDescPool_)   vkDestroyDescriptorPool(device_, msdfDescPool_, nullptr);
-    if (msdfSetLayout_)  vkDestroyDescriptorSetLayout(device_, msdfSetLayout_, nullptr);
-    if (msdfAtlasSampler_) vkDestroySampler(device_, msdfAtlasSampler_, nullptr);
-    if (msdfAtlasView_)  vkDestroyImageView(device_, msdfAtlasView_, nullptr);
-    if (msdfAtlasImage_) vkDestroyImage(device_, msdfAtlasImage_, nullptr);
-    if (msdfAtlasMemory_) vkFreeMemory(device_, msdfAtlasMemory_, nullptr);
+    // Every handle is nulled out after destruction (not just guarded on
+    // entry) so this is safe to call twice in a row and so initMsdf() can
+    // reliably tell "torn down" from "still live" to rebuild the atlas at a
+    // larger size (see initMsdf()'s reinit branch) instead of silently
+    // no-op'ing on a second call.
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        if (msdfVboMapped_[f]) { vkUnmapMemory(device_, msdfVboMemory_[f]); msdfVboMapped_[f] = nullptr; }
+        if (msdfVbo_[f])       { vkDestroyBuffer(device_, msdfVbo_[f], nullptr); msdfVbo_[f] = VK_NULL_HANDLE; }
+        if (msdfVboMemory_[f]) { vkFreeMemory(device_, msdfVboMemory_[f], nullptr); msdfVboMemory_[f] = VK_NULL_HANDLE; }
+    }
+    if (msdfPipeline_)   { vkDestroyPipeline(device_, msdfPipeline_, nullptr); msdfPipeline_ = VK_NULL_HANDLE; }
+    if (msdfPipelineLayout_) { vkDestroyPipelineLayout(device_, msdfPipelineLayout_, nullptr); msdfPipelineLayout_ = VK_NULL_HANDLE; }
+    if (msdfDescPool_)   { vkDestroyDescriptorPool(device_, msdfDescPool_, nullptr); msdfDescPool_ = VK_NULL_HANDLE; }
+    if (msdfSetLayout_)  { vkDestroyDescriptorSetLayout(device_, msdfSetLayout_, nullptr); msdfSetLayout_ = VK_NULL_HANDLE; }
+    if (msdfAtlasSampler_) { vkDestroySampler(device_, msdfAtlasSampler_, nullptr); msdfAtlasSampler_ = VK_NULL_HANDLE; }
+    if (msdfAtlasView_)  { vkDestroyImageView(device_, msdfAtlasView_, nullptr); msdfAtlasView_ = VK_NULL_HANDLE; }
+    if (msdfAtlasImage_) { vkDestroyImage(device_, msdfAtlasImage_, nullptr); msdfAtlasImage_ = VK_NULL_HANDLE; }
+    if (msdfAtlasMemory_) { vkFreeMemory(device_, msdfAtlasMemory_, nullptr); msdfAtlasMemory_ = VK_NULL_HANDLE; }
+}
+
+// ── SDF shape pipeline ───────────────────────────────────────────────────────
+
+void Renderer::initShapes() {
+    if (!device_ || !render_pass_) return;
+
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcr.size = sizeof(float) * 2;  // screenW, screenH
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pcr;
+    vkCreatePipelineLayout(device_, &pl, nullptr, &shapePipelineLayout_);
+
+    auto loadShader = [this](const char* path) -> VkShaderModule {
+        std::vector<uint8_t> code;
+        if (!assets_.read(path, code)) return VK_NULL_HANDLE;
+        VkShaderModuleCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = code.size();
+        ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
+        VkShaderModule mod;
+        vkCreateShaderModule(device_, &ci, nullptr, &mod);
+        return mod;
+    };
+    VkShaderModule vs = loadShader("shaders/shape_vert.spv");
+    VkShaderModule fs = loadShader("shaders/shape_frag.spv");
+    if (!vs || !fs) {
+        // Missing shaders (older asset dir): hosts that never call
+        // Canvas::useShapes() are unaffected; ones that do simply draw no
+        // shapes. Loudly logged so it can't pass silently.
+        LOGE("shape shaders missing — SDF shape pipeline disabled");
+        if (vs) vkDestroyShaderModule(device_, vs, nullptr);
+        if (fs) vkDestroyShaderModule(device_, fs, nullptr);
+        return;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                 VK_SHADER_STAGE_VERTEX_BIT,   vs, "main", nullptr};
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                 VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
+
+    VkVertexInputBindingDescription bind{0, kShapeFloatsPerVert * sizeof(float),
+                                          VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[4]{
+        {0, 0, VK_FORMAT_R32G32_SFLOAT,        0},                  // pos
+        {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT,  2 * sizeof(float)},  // color
+        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT,  6 * sizeof(float)},  // data0
+        {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 10 * sizeof(float)},  // data1
+    };
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &bind;
+    vi.vertexAttributeDescriptionCount = 4;
+    vi.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Same straight-alpha blend as the MSDF text pipeline.
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    ds.dynamicStateCount = 2;
+    ds.pDynamicStates = dyn;
+
+    VkGraphicsPipelineCreateInfo gp{};
+    gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gp.stageCount = 2;
+    gp.pStages = stages;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &ds;
+    gp.layout = shapePipelineLayout_;
+    gp.renderPass = render_pass_;
+    gp.subpass = 0;
+    if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &shapePipeline_) != VK_SUCCESS) {
+        LOGE("Failed to create shape pipeline");
+        shapePipeline_ = VK_NULL_HANDLE;
+    }
+    vkDestroyShaderModule(device_, vs, nullptr);
+    vkDestroyShaderModule(device_, fs, nullptr);
+    if (!shapePipeline_) return;
+
+    // Per-frame vertex buffers (host-visible, persistently mapped).
+    const VkDeviceSize vbBytes =
+        static_cast<VkDeviceSize>(kMaxShapeVerts) * kShapeFloatsPerVert * sizeof(float);
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        VkBufferCreateInfo vb{};
+        vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        vb.size  = vbBytes;
+        vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        vkCreateBuffer(device_, &vb, nullptr, &shapeVbo_[f]);
+        VkMemoryRequirements vr{};
+        vkGetBufferMemoryRequirements(device_, shapeVbo_[f], &vr);
+        VkMemoryAllocateInfo va{};
+        va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        va.allocationSize = vr.size;
+        va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[f]);
+        vkBindBufferMemory(device_, shapeVbo_[f], shapeVboMemory_[f], 0);
+        vkMapMemory(device_, shapeVboMemory_[f], 0, vbBytes, 0, &shapeVboMapped_[f]);
+    }
+    LOGI("SDF shape pipeline ready");
+}
+
+void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame) {
+    if (shapePipeline_ == VK_NULL_HANDLE || shapeVertCount_ == 0) return;
+
+    VkViewport vp{0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f};
+    VkRect2D   sc{{0, 0}, {width_, height_}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shapePipeline_);
+    float push[2] = {static_cast<float>(width_), static_cast<float>(height_)};
+    vkCmdPushConstants(cmd, shapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       0, sizeof(push), push);
+    VkDeviceSize off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &shapeVbo_[frame], &off);
+    vkCmdDraw(cmd, shapeVertCount_, 1, 0, 0);
+}
+
+void Renderer::cleanupShapes() {
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        if (shapeVboMapped_[f]) { vkUnmapMemory(device_, shapeVboMemory_[f]); shapeVboMapped_[f] = nullptr; }
+        if (shapeVbo_[f])       { vkDestroyBuffer(device_, shapeVbo_[f], nullptr); shapeVbo_[f] = VK_NULL_HANDLE; }
+        if (shapeVboMemory_[f]) { vkFreeMemory(device_, shapeVboMemory_[f], nullptr); shapeVboMemory_[f] = VK_NULL_HANDLE; }
+    }
+    if (shapePipeline_)       { vkDestroyPipeline(device_, shapePipeline_, nullptr); shapePipeline_ = VK_NULL_HANDLE; }
+    if (shapePipelineLayout_) { vkDestroyPipelineLayout(device_, shapePipelineLayout_, nullptr); shapePipelineLayout_ = VK_NULL_HANDLE; }
 }
 
 void Renderer::cleanup() {
@@ -1327,13 +1594,16 @@ void Renderer::cleanup() {
     overlay_.cleanup();
     image_layer_.cleanup();
     cleanupMsdf();
+    cleanupShapes();
 #if defined(__ANDROID__)
     cleanup_hwb_resources();
 #endif
 
-    if (image_available_sem_) vkDestroySemaphore(device_, image_available_sem_, nullptr);
-    if (render_finished_sem_) vkDestroySemaphore(device_, render_finished_sem_, nullptr);
-    if (in_flight_fence_)     vkDestroyFence(device_, in_flight_fence_, nullptr);
+    for (uint32_t f = 0; f < kFramesInFlight; f++) {
+        if (image_available_sems_[f]) vkDestroySemaphore(device_, image_available_sems_[f], nullptr);
+        if (render_finished_sems_[f]) vkDestroySemaphore(device_, render_finished_sems_[f], nullptr);
+        if (in_flight_fences_[f])     vkDestroyFence(device_, in_flight_fences_[f], nullptr);
+    }
     if (cmd_pool_)            vkDestroyCommandPool(device_, cmd_pool_, nullptr);
     destroy_swapchain_resources();
     if (render_pass_) vkDestroyRenderPass(device_, render_pass_, nullptr);

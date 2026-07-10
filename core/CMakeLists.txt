@@ -8,6 +8,12 @@
 set(FONT_ENGINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../first_party/vulkan_font_engine)
 add_subdirectory(${FONT_ENGINE_DIR}/core ${CMAKE_BINARY_DIR}/vk_font_core)
 
+# img_decode_kit is independent of vk_canvas (no Vulkan/vk_canvas include
+# anywhere in it) — same relationship as the font engine above. art_texture.cc
+# is the thin Vulkan-aware wrapper that turns its decoded bytes into a texture.
+set(IMG_DECODE_KIT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../first_party/img_decode_kit)
+add_subdirectory(${IMG_DECODE_KIT_DIR}/core ${CMAKE_BINARY_DIR}/img_decode_kit)
+
 add_library(vk_canvas_core STATIC
     renderer.cc
     overlay.cc
@@ -15,6 +21,8 @@ add_library(vk_canvas_core STATIC
     canvas.cc
     textarea.cc
     widgets.cc
+    art_texture.cc
+    text_util.cc
 )
 # WIP — moved here but not yet ported to the platform seams, deliberately not
 # compiled: canvas_host vulkan_state compute_context text_editor text_buffer
@@ -35,6 +43,9 @@ endif()
 # vk_font_core PUBLIC-exposes font.hh/glyphs.hh/msdf.hh + the freetype/msdfgen
 # link chain, so linking it is all core needs for text rendering.
 target_link_libraries(vk_canvas_core PUBLIC vk_font_core)
+
+# img_decode_kit PUBLIC-exposes img_decode.hh + the turbojpeg link chain.
+target_link_libraries(vk_canvas_core PUBLIC img_decode_kit)
 
 if(ANDROID)
     # NDK provides libvulkan directly; log.hh routes to logcat and the camera

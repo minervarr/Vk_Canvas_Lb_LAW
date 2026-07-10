@@ -133,7 +133,8 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     LOGI("ImageLayer ready");
 }
 
-TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32_t h) {
+TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                          bool mips) {
     if (!rgba || w == 0 || h == 0) return kInvalidTexture;
     VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * 4;
 
@@ -164,14 +165,17 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
 
     TextureRec rec{};
 
-    // Full mip chain: album art is decoded/uploaded at full source resolution
-    // (often 1000+ px) but drawn into small quads (grid tiles, transport
-    // thumbnail). Without mips, that's raw bilinear minification — every
-    // destination texel samples only its 4 nearest source texels instead of
-    // averaging the many it should, which shows up as aliased/"crispy"
-    // thumbnails. A linear-filtered mip chain (generated below via blits)
-    // fixes that at the sampler level, for every texture this layer creates.
-    uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2((double)std::max(w, h)))) + 1;
+    // Full mip chain (mips=true): for textures uploaded larger than they're
+    // drawn (fullscreen-quality art shown as a thumbnail), raw bilinear
+    // minification samples only 4 source texels per destination texel —
+    // aliased/"crispy" thumbnails; a linear-filtered mip chain (generated
+    // below via blits) fixes that at the sampler level. mips=false is for
+    // callers whose decode size == draw size (e.g. grid tiles decoded to the
+    // tile size): level 0 is the only level ever sampled, so the chain's
+    // +33% VRAM and per-upload blit pass would buy nothing.
+    uint32_t mipLevels = mips
+        ? static_cast<uint32_t>(std::floor(std::log2((double)std::max(w, h)))) + 1
+        : 1;
 
     VkImageCreateInfo imgInfo{};
     imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -196,6 +200,54 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     imgAlloc.memoryTypeIndex = findMemoryType(imgReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vkAllocateMemory(device_, &imgAlloc, nullptr, &rec.memory);
     vkBindImageMemory(device_, rec.image, rec.memory, 0);
+
+    // View/sampler/descriptor set BEFORE submitting any GPU work: the only
+    // fallible step (descriptor pool exhaustion) then happens while nothing
+    // is in flight, so the failure path can destroy everything immediately.
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image            = rec.image;
+    viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format           = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
+    vkCreateImageView(device_, &viewInfo, nullptr, &rec.view);
+
+    VkSamplerCreateInfo sampInfo{};
+    sampInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampInfo.magFilter    = VK_FILTER_LINEAR;
+    sampInfo.minFilter    = VK_FILTER_LINEAR;
+    sampInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampInfo.minLod       = 0.0f;
+    sampInfo.maxLod       = (float)mipLevels;
+    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    vkCreateSampler(device_, &sampInfo, nullptr, &rec.sampler);
+
+    VkDescriptorSetAllocateInfo dsAlloc{};
+    dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorPool     = descPool_;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &descLayout_;
+    if (vkAllocateDescriptorSets(device_, &dsAlloc, &rec.descSet) != VK_SUCCESS) {
+        LOGE("create_texture: descriptor pool exhausted (max %u textures live)", kMaxTextures);
+        vkDestroySampler(device_, rec.sampler, nullptr);
+        vkDestroyImageView(device_, rec.view, nullptr);
+        vkDestroyImage(device_, rec.image, nullptr);
+        vkFreeMemory(device_, rec.memory, nullptr);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMem, nullptr);
+        return kInvalidTexture;
+    }
+
+    VkDescriptorImageInfo ii{rec.sampler, rec.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr{};
+    wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet          = rec.descSet;
+    wr.descriptorCount = 1;
+    wr.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo      = &ii;
+    vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
 
     // One-shot upload: UNDEFINED -> TRANSFER_DST -> copy -> SHADER_READ_ONLY.
     VkCommandBufferAllocateInfo cbAlloc{};
@@ -287,59 +339,31 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
                          0, 0, nullptr, 0, nullptr, 1, &lastToRead);
 
     vkEndCommandBuffer(cmd);
+
+    // Fenced submit, no queue idle: same-queue submission order already
+    // guarantees this upload completes before any later frame's command
+    // buffer samples the texture, so nothing needs to block here. The
+    // command buffer + staging memory retire via collectGarbage() once the
+    // fence signals. (The old vkQueueWaitIdle here stalled the whole GPU
+    // once per grid tile while scrolling.)
+    PendingUpload pu{};
+    pu.cmd        = cmd;
+    pu.staging    = staging;
+    pu.stagingMem = stagingMem;
+    VkFenceCreateInfo fci{};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(device_, &fci, nullptr, &pu.fence);
+
     VkSubmitInfo submit{};
     submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers    = &cmd;
-    vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue_);
-    vkFreeCommandBuffers(device_, cmdPool_, 1, &cmd);
+    vkQueueSubmit(queue_, 1, &submit, pu.fence);
+    pendingUploads_.push_back(pu);
 
-    vkDestroyBuffer(device_, staging, nullptr);
-    vkFreeMemory(device_, stagingMem, nullptr);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image            = rec.image;
-    viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format           = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
-    vkCreateImageView(device_, &viewInfo, nullptr, &rec.view);
-
-    VkSamplerCreateInfo sampInfo{};
-    sampInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampInfo.magFilter    = VK_FILTER_LINEAR;
-    sampInfo.minFilter    = VK_FILTER_LINEAR;
-    sampInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampInfo.minLod       = 0.0f;
-    sampInfo.maxLod       = (float)mipLevels;
-    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(device_, &sampInfo, nullptr, &rec.sampler);
-
-    VkDescriptorSetAllocateInfo dsAlloc{};
-    dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsAlloc.descriptorPool     = descPool_;
-    dsAlloc.descriptorSetCount = 1;
-    dsAlloc.pSetLayouts        = &descLayout_;
-    if (vkAllocateDescriptorSets(device_, &dsAlloc, &rec.descSet) != VK_SUCCESS) {
-        LOGE("create_texture: descriptor pool exhausted (max %u textures live)", kMaxTextures);
-        vkDestroySampler(device_, rec.sampler, nullptr);
-        vkDestroyImageView(device_, rec.view, nullptr);
-        vkDestroyImage(device_, rec.image, nullptr);
-        vkFreeMemory(device_, rec.memory, nullptr);
-        return kInvalidTexture;
-    }
-
-    VkDescriptorImageInfo ii{rec.sampler, rec.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet wr{};
-    wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr.dstSet          = rec.descSet;
-    wr.descriptorCount = 1;
-    wr.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wr.pImageInfo      = &ii;
-    vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
+    // Opportunistically reap any earlier uploads whose fences have signaled
+    // (queueDrained=false: retired textures wait for the frame fence).
+    collectGarbage(false);
 
     TextureHandle handle = nextHandle_++;
     textures_[handle] = rec;
@@ -349,13 +373,47 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
 void ImageLayer::destroy_texture(TextureHandle handle) {
     auto it = textures_.find(handle);
     if (it == textures_.end()) return;
-    TextureRec& rec = it->second;
+    // Only unlink: recordComposite() can no longer bind it, but a previous
+    // frame's command buffer may still be executing with its descriptor set
+    // bound — actual destruction is deferred to collectGarbage(true), which
+    // Renderer::draw() calls right after proving the previous frame finished
+    // (its frame-fence wait). Replaces a per-destroy vkQueueWaitIdle.
+    pendingDestroy_.push_back(it->second);
+    textures_.erase(it);
+}
+
+void ImageLayer::freeRec(const TextureRec& rec) {
     if (rec.descSet) vkFreeDescriptorSets(device_, descPool_, 1, &rec.descSet);
     if (rec.sampler) vkDestroySampler(device_, rec.sampler, nullptr);
     if (rec.view)    vkDestroyImageView(device_, rec.view, nullptr);
     if (rec.image)   vkDestroyImage(device_, rec.image, nullptr);
     if (rec.memory)  vkFreeMemory(device_, rec.memory, nullptr);
-    textures_.erase(it);
+}
+
+void ImageLayer::collectGarbage(bool queueDrained) {
+    if (device_ == VK_NULL_HANDLE) return;
+
+    // Upload staging: safe to free as soon as its own fence signals.
+    for (size_t i = 0; i < pendingUploads_.size(); ) {
+        PendingUpload& pu = pendingUploads_[i];
+        if (vkGetFenceStatus(device_, pu.fence) == VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, cmdPool_, 1, &pu.cmd);
+            vkDestroyBuffer(device_, pu.staging, nullptr);
+            vkFreeMemory(device_, pu.stagingMem, nullptr);
+            vkDestroyFence(device_, pu.fence, nullptr);
+            pendingUploads_[i] = pendingUploads_.back();
+            pendingUploads_.pop_back();
+        } else {
+            i++;
+        }
+    }
+
+    // Retired textures: only when the caller has proven every previously
+    // submitted command buffer (which may still bind them) has finished.
+    if (queueDrained) {
+        for (const TextureRec& rec : pendingDestroy_) freeRec(rec);
+        pendingDestroy_.clear();
+    }
 }
 
 void ImageLayer::recordComposite(VkCommandBuffer cmd, const std::vector<ImageDraw>& draws,
@@ -392,13 +450,19 @@ void ImageLayer::recordComposite(VkCommandBuffer cmd, const std::vector<ImageDra
 
 void ImageLayer::cleanup() {
     if (device_ == VK_NULL_HANDLE) return;
-    for (auto& [handle, rec] : textures_) {
-        if (rec.descSet) vkFreeDescriptorSets(device_, descPool_, 1, &rec.descSet);
-        if (rec.sampler) vkDestroySampler(device_, rec.sampler, nullptr);
-        if (rec.view)    vkDestroyImageView(device_, rec.view, nullptr);
-        if (rec.image)   vkDestroyImage(device_, rec.image, nullptr);
-        if (rec.memory)  vkFreeMemory(device_, rec.memory, nullptr);
+    // Caller (Renderer::cleanup) has already vkDeviceWaitIdle'd, so every
+    // pending upload fence is signaled and no command buffer can still
+    // reference a retired texture — drain both lists unconditionally.
+    for (PendingUpload& pu : pendingUploads_) {
+        vkFreeCommandBuffers(device_, cmdPool_, 1, &pu.cmd);
+        vkDestroyBuffer(device_, pu.staging, nullptr);
+        vkFreeMemory(device_, pu.stagingMem, nullptr);
+        vkDestroyFence(device_, pu.fence, nullptr);
     }
+    pendingUploads_.clear();
+    for (const TextureRec& rec : pendingDestroy_) freeRec(rec);
+    pendingDestroy_.clear();
+    for (auto& [handle, rec] : textures_) freeRec(rec);
     textures_.clear();
 
     if (pipeline_)       vkDestroyPipeline(device_, pipeline_, nullptr);

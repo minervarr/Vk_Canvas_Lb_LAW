@@ -7,18 +7,27 @@ add_subdirectory(${REPO_ROOT}/core ${CMAKE_BINARY_DIR}/core)
 
 # Slang shader compilation (shared sources at repo root; compiled .spv land in
 # the Gradle module's assets/ so AGP packages them into the APK).
+# composite/tiling/coverage are canonically owned by the font engine (same
+# bytes vk_canvas's own copies used to hand-duplicate — see its shaders_src
+# comment); overlay/image are genuinely vk_canvas's own.
 include(${REPO_ROOT}/cmake/VceShaders.cmake)
-vce_compile_slang(compile_shaders
+vce_compile_slang(compile_shared_shaders
     ${CMAKE_CURRENT_SOURCE_DIR}/app/src/main/assets/shaders
-    ${REPO_ROOT}/shaders_src
+    ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
     tiling
     coverage
+)
+vce_compile_slang(compile_shaders
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/src/main/assets/shaders
+    ${REPO_ROOT}/shaders_src
     overlay_vert
     overlay_frag
     image_vert
     image_frag
+    shape_vert
+    shape_frag
 )
 
 set(NATIVE_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
@@ -31,7 +40,7 @@ add_library(vk_canvas SHARED
 )
 # WIP Android glue, not yet wired: input_handler orientation fullscreen jni_util
 
-add_dependencies(vk_canvas compile_shaders)
+add_dependencies(vk_canvas compile_shared_shaders compile_shaders)
 
 target_include_directories(vk_canvas PRIVATE
     ${NATIVE_APP_GLUE}
