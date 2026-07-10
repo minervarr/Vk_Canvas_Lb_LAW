@@ -29,7 +29,11 @@ cd platform/windows
 
 ## Shader Compilation
 
-Shaders are written in **Slang** and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe), via two `vce_compile_slang()` calls (`cmake/VceShaders.cmake`) per platform CMakeLists: one pointing at `shaders_src/` for vk_canvas's own 4 shaders (`overlay_vert/frag`, `image_vert/frag`), one pointing at `first_party/vulkan_font_engine/shaders_src/` for the 4-6 shaders vk_canvas shares with the font engine (`composite_vert/frag`, `tiling`, `coverage`, plus `msdf_vert/frag` for consumers that need them — see that repo's own CLAUDE.md). These used to be hand-duplicated in both `shaders_src/` directories; that drifted silently once (a whitespace difference), so vk_canvas now sources them from the font engine's copy instead of maintaining a second one. To recompile manually:
+Shaders are written in **Slang** and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe), via two `vce_compile_slang()` calls (`cmake/VceShaders.cmake`) per platform CMakeLists: one pointing at `shaders_src/` for vk_canvas's own 6 shaders (`overlay_vert/frag`, `image_vert/frag`, `shape_vert/frag` — see "SDF Shape Pipeline" below), one pointing at `first_party/vulkan_font_engine/shaders_src/` for the shaders vk_canvas shares with the font engine (`composite_vert/frag`, `tiling`, `coverage`, plus `msdf_vert/frag` for consumers that need them — see that repo's own CLAUDE.md). These used to be hand-duplicated in both `shaders_src/` directories; that drifted silently once (a whitespace difference), so vk_canvas now sources them from the font engine's copy instead of maintaining a second one.
+
+**Note:** `platform/windows/CMakeLists.txt`'s own standalone demo build does not currently compile `msdf_vert/frag` (only `composite/tiling/coverage` from the shared set) — its demo doesn't call `Renderer::initMsdf`. A consumer app that wants MSDF text (like `matrix_player_windows`, which lists `msdf_vert`/`msdf_frag` in its own top-level `CMakeLists.txt`) must add those two names to its own `vce_compile_slang()` call.
+
+To recompile a shader manually:
 
 ```bash
 slangc.exe <shader>.slang -target spirv -o <output>.spv
@@ -43,9 +47,11 @@ One platform-agnostic engine core plus thin per-platform backends:
 core/                      # vk_canvas_core STATIC lib — no platform SDK includes
   platform.hh              # the seam: AssetReader / SurfaceProvider / FrameWaker + DeviceCaps
   renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
+  art_texture.*            # decode-a-file-into-a-texture helper (uses img_decode_kit)
+  text_util.*              # truncate/wrap/center helpers on top of Canvas (see below)
   canvas_host.* vulkan_state.* compute_context.* text_editor.* text_buffer.*
   undo_redo.* pager.* plotview.* gesture.* archive.*      (WIP — moved, not compiled)
-shaders_src/               # vk_canvas's OWN 4 shaders only (overlay/image); the
+shaders_src/               # vk_canvas's OWN 6 shaders (overlay/image/shape); the
                            #   ones shared with the font engine live in its own
                            #   shaders_src/ — see "Shader Compilation" above
 platform/
@@ -55,7 +61,14 @@ platform/
   windows/                 # self-contained Win32 backend (raw windows.h, no GLFW):
                            #   Build.bat + build_msvc.ps1 + standalone CMakeLists
   linux/                   # planned Wayland backend (README only)
-first_party/vulkan_font_engine/   # submodule: core/ (vk_font_core lib) + third_party/ (FreeType, msdfgen) + platform/android/ demo
+first_party/
+  vulkan_font_engine/      # submodule: core/ (vk_font_core lib) + third_party/ (FreeType, msdfgen) + platform/android/ demo
+  img_decode_kit/          # submodule-like dep (own core/CMakeLists.txt, no vk_canvas
+                           #   include anywhere in it): JPEG (turbojpeg if the consumer
+                           #   provides a `turbojpeg-static` target, else stb_image) +
+                           #   any other stb_image format, decoded/box-downsampled to
+                           #   the caller's target size. art_texture.cc is the thin
+                           #   Vulkan-aware wrapper that turns its output into a texture.
 ```
 
 Rules of the structure:
@@ -71,10 +84,24 @@ Rules of the structure:
 | `platform/android/main.cc` | Android NDK `android_main()` entry |
 | `platform/android/app.hh/cc` | ALooper event loop, window lifecycle, seam wiring, test scene |
 | `platform/android/android_platform.*` | Android impls of the platform.hh seams |
-| `core/renderer.hh/cc` | Vulkan instance/device/swapchain; draws curve buffer each frame |
-| `core/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame |
-| `core/canvas.hh/cc` | Immediate-mode scene builder emitting 20-float curve records |
-| `font.hh/cc`, `glyphs.hh/cc`, `msdf.*` | (from submodule) FreeType wrapper / fallback glyphs / MSDF atlas |
+| `core/renderer.hh/cc` | Vulkan instance/device/swapchain; two frames in flight (see below); draws curve buffer, SDF shape quads, and MSDF text quads each frame |
+| `core/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame. Its screen-size GPU resources (curve/tile/row buffers, output image — the expensive part) are allocated **lazily on first non-empty `uploadCurves()`** — a host that only uses `Canvas::useShapes()` (see below) never allocates them at all |
+| `core/canvas.hh/cc` | Immediate-mode scene builder. Two output modes per primitive: default emits 20-float curve records (compute-rasterized); `useShapes()` reroutes rect/segment/polyline/triangle into SDF shape quads instead (see "SDF Shape Pipeline") |
+| `core/art_texture.hh/cc` | `createTextureFromImageFile()`: read a file via `AssetReader` → decode+scale via img_decode_kit → upload as a `Renderer` texture, one call. `mips` parameter (default true) — pass false when the texture is drawn at ≥ its decode size (never minified): skips the mip chain, ~33% less VRAM, no per-upload blit pass |
+| `core/text_util.hh/cc` | `truncateToWidth`/`splitTwoLines`/`wrapText` (measure-based, UTF-8-safe, work with any `FontStyle`), `textCenteredStyled` (correct MSDF-measured centering — `Canvas::textCentered` measures the *curve* font and mis-centers MSDF-rendered text), `stripHtmlToPlain` (flatten simple HTML sidecar files to readable paragraphs) |
+| `font.hh/cc`, `glyphs.hh/cc`, `msdf.*` | (from submodule) FreeType wrapper / fallback glyphs / MSDF-or-MTSDF atlas — see the font engine's own CLAUDE.md |
+
+### SDF Shape Pipeline (the "MSDF for primitives" fast path)
+
+`Canvas::useShapes(&out)` reroutes `rect()`/`segment()`/`polyline()`/`triangle()` into per-shape quads (14 floats/vert — `Renderer::kShapeFloatsPerVert`) whose fragment shader (`shaders_src/shape_frag.slang`) evaluates the shape's **exact analytic SDF** (rounded-box / capsule / triangle — `shape_frag.slang`'s `kind` field selects which) and converts distance to coverage, normalized by `fwidth(d)` so the antialiasing band is exactly one *screen* pixel under any scale/DPI/transform. This is deliberately NOT an atlas: a rounded rect is a ~10-instruction closed-form distance function, cheaper than a texture fetch, and exact at every corner radius/size combination (an atlas can't represent that continuous parameter space without either a cell explosion or blurry stretching). Reserve MSDF/atlasing for what genuinely benefits from baking: text (finite glyph set, complex outlines) and fixed complex artwork (logos/ornaments — bake into the MSDF atlas as a keyless "glyph", or use a plain image texture via `art_texture.hh`).
+
+When to add a new shape *kind* vs. reach for an atlas instead: if it's a **formula with parameters** (another primitive family), add a `kind` to `shape_frag.slang` (a few lines, no VRAM cost, benefits every consumer at every size). If it's a **fixed picture** with no parameters, it doesn't belong in this pipeline at all — bake it or texture it.
+
+`Canvas::useShapes(nullptr)` (the default) falls back to the original compute-rasterized curve path — needed for rotated UI (shape params are screen-axis-aligned only; rotation isn't supported on this path) and for anything that must go through the winding-fill compute rasterizer.
+
+### Frames in flight
+
+`Renderer` runs two frames in flight (`kFramesInFlight = 2`): separate fences/semaphores and per-frame copies of every CPU-written dynamic buffer (MSDF text VBO, shape VBO), so the CPU can build frame N+1 while the GPU executes frame N. **Exception:** the overlay's compute-rasterizer path (curve buffer, tile/row buffers, output image) is single-buffered — `draw()` detects a non-empty `overlay_curves` argument and serializes that frame against the other slot automatically, so curve-path hosts (Android's demo, any rotated UI) get the old fully-serial behavior for free with no extra code. A host that only ever uses the SDF shape path (empty curve buffer every frame) gets full double-buffered overlap.
 
 ### Submodule
 
