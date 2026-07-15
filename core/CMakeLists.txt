@@ -23,6 +23,9 @@ add_library(vk_canvas_core STATIC
     widgets.cc
     art_texture.cc
     text_util.cc
+    layout.cc
+    animated_float.cc
+    frame_input.cc
 )
 # WIP — moved here but not yet ported to the platform seams, deliberately not
 # compiled: canvas_host vulkan_state compute_context text_editor text_buffer

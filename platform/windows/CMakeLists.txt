@@ -50,3 +50,14 @@ target_link_libraries(vk_canvas
     vk_canvas_core
     user32
 )
+
+# Pure-logic unit tests (core/tests/*.cc): plain assert()-based exes, no
+# window/GPU needed — build here, then run each .exe from the build folder.
+# They link vk_canvas_core only for its include dirs + the tested objects.
+foreach(test_name layout_test animated_float_test frame_input_test)
+    add_executable(${test_name} ${REPO_ROOT}/core/tests/${test_name}.cc)
+    target_link_libraries(${test_name} vk_canvas_core)
+    if(MSVC)
+        target_compile_options(${test_name} PRIVATE /utf-8)
+    endif()
+endforeach()

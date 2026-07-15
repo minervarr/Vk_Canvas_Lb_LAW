@@ -25,7 +25,7 @@ cd platform/windows
 - CMake 3.22.1+
 - FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
-- No tests to run; this is a demo app with no test framework
+- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/` — `layout_test`, `animated_float_test`, `frame_input_test`. Built by the Windows build (`Build.bat`), then run each from `platform/windows/build/<name>.exe`. Rendering has no automated tests (verified visually). Test sources `#undef NDEBUG` so asserts survive the Release build.
 
 ## Shader Compilation
 
@@ -88,6 +88,9 @@ Rules of the structure:
 | `core/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame. Its screen-size GPU resources (curve/tile/row buffers, output image — the expensive part) are allocated **lazily on first non-empty `uploadCurves()`** — a host that only uses `Canvas::useShapes()` (see below) never allocates them at all |
 | `core/canvas.hh/cc` | Immediate-mode scene builder. Two output modes per primitive: default emits 20-float curve records (compute-rasterized); `useShapes()` reroutes rect/segment/polyline/triangle into SDF shape quads instead (see "SDF Shape Pipeline") |
 | `core/art_texture.hh/cc` | `createTextureFromImageFile()`: read a file via `AssetReader` → decode+scale via img_decode_kit → upload as a `Renderer` texture, one call. `mips` parameter (default true) — pass false when the texture is drawn at ≥ its decode size (never minified): skips the mip chain, ~33% less VRAM, no per-upload blit pass |
+| `core/layout.hh/cc` | Resolution-robust layout math (pure, no Vulkan): `UiScale` (proportional scale — floored, uncapped, plus `cappedFactor` for vertically stacking layouts), `clampScroll`, `dockTop/Bottom/Left/Right` (carve strips off a container Rect in place), `centerIn`, `RowCursor`/`ColumnCursor` (gap-chaining). Compute layout from the surface size every frame with these instead of hardcoding pixels. Geometry sibling of `responsive_text.hh` (which stays the text-size formula) |
+| `core/animated_float.hh/cc` | `AnimatedFloat` + `easeLinear`/`easeInOutCubic`: per-frame interpolation primitive (call `update(dt)` each frame, read `value()`). Clamps at the target on overshoot; `set()` restarts from the current value. The renderer deliberately has no animation concept — callers own these |
+| `core/frame_input.hh/cc` | `FrameInput`: per-frame edge-detected input state implementing `input.hh`'s `InputSink` (`pointerWentDown`/`pointerWentUp` true only on the transition frame, `wheelDelta` accumulated per frame, `keysWentDown` keycode queue). Call `beginFrame()` once per frame *before* pumping platform events. Saves every consumer hand-rolling event→immediate-mode accumulation |
 | `core/text_util.hh/cc` | `truncateToWidth`/`splitTwoLines`/`wrapText` (measure-based, UTF-8-safe, work with any `FontStyle`), `textCenteredStyled` (correct MSDF-measured centering — `Canvas::textCentered` measures the *curve* font and mis-centers MSDF-rendered text), `stripHtmlToPlain` (flatten simple HTML sidecar files to readable paragraphs) |
 | `font.hh/cc`, `glyphs.hh/cc`, `msdf.*` | (from submodule) FreeType wrapper / fallback glyphs / MSDF-or-MTSDF atlas — see the font engine's own CLAUDE.md |
 
