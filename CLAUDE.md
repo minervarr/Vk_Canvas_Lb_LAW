@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## What this is
+
+`vulkan_canvas_engine` (vk_canvas) — a reusable, cross-platform Vulkan canvas/UI engine library: 2D primitives (compute-rasterized curves + analytic-SDF shape quads), MSDF/MTSDF text via the `vulkan_font_engine` submodule, image textures, immediate-mode widgets, and layout/animation/input helpers. Android + Windows backends today; Linux/Wayland planned. Licensed AGPLv3 (see `LICENSE`). Consumed by other apps (e.g. `matrix_player_windows`) — the `platform/` demos here exist to exercise the engine, but `core/` is the product. API-shaping decisions should favor consumers, not the demos.
+
 ## Build Commands
 
 ```bash
@@ -109,6 +113,37 @@ When to add a new shape *kind* vs. reach for an atlas instead: if it's a **formu
 ### Submodule
 
 `first_party/vulkan_font_engine` — GPU font rendering library, organized like this repo (platform-agnostic `core/` + `platform/android/` demo + root `shaders_src/` + `cmake/VfeShaders.cmake`). Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader, `CurveRasterizer` + `MsdfTextRenderer` GPU units) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. The engine owns the `AssetReader` seam definition (`core/asset_reader.hh`), which our `core/platform.hh` includes — asset loading through it is fully cross-platform (APK assets on Android, files on desktop).
+
+### Per-frame consumer pattern
+
+How the pure-logic helpers compose in a host's render loop (the demos and consumer apps all follow this shape):
+
+```
+frameInput.beginFrame();          // clear last frame's edges FIRST
+pumpPlatformEvents();             // backend feeds InputSink -> FrameInput
+anim.update(dtSeconds);           // advance AnimatedFloats
+Rect screen{0, 0, w, h};          // recompute layout from the CURRENT size
+Rect nav = dockTop(screen, uiScale.scale(64, h));   // no hardcoded pixels
+// hit-test with frameInput.pointerWentDown/pointerX/Y against widget geoms,
+// then draw via Canvas + widgets:: using the same rects
+```
+
+Layout is recomputed every frame from the surface size (cheap, pure math) — never cached against a stale resolution.
+
+## Color policy (why there is no "grayscale mode")
+
+Everything draws with a full `Color {r,g,b,a}` (`canvas.hh`); a grayscale look is app policy — pass equal-channel Colors. Deliberately NOT an engine mode: writing R==G==B saves nothing (the swapchain is 4-channel BGRA/RGBA regardless, so fill-rate/bandwidth are identical), and narrowing the API to a single gray channel would break color-capable consumers for zero performance gain. This was evaluated concretely against the `windows_ui_demo` repo's "grayscale-by-construction" pipeline before being rejected here.
+
+## Committing and pushing
+
+Use the wrapper at the repo root — never plain `git commit`/`git push`:
+
+```bat
+git_wrapper.exe save "Short summary"     :: stage-all + commit + push in one step
+git_wrapper.exe commit "Short summary"   :: commit only (review, then `git_wrapper push`)
+```
+
+It forces author/committer to `nava <nava@noreply.com>`, strips `Co-Authored-By:`/"Generated with" lines from the message, and pushes submodules before the parent (pinned/detached third-party submodules are skipped). See `USAGE_gitWrapper.md`.
 
 ## Project Configuration
 
