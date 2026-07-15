@@ -27,9 +27,21 @@ struct KeyEvent {
   bool down = false;       // true on key-down (incl. auto-repeat), false on key-up
 };
 
+// Translated text entry (Win32 WM_CHAR today; Android IME commits would map
+// here). Distinct from KeyEvent: keyCode is the physical/virtual key, this is
+// the character the platform's layout/IME produced. Control characters
+// (backspace, enter, ...) arrive as their ASCII control codes — consumers that
+// only want printable text must filter (see FrameInput).
+struct CharEvent {
+  uint32_t codepoint = 0;
+};
+
 struct InputSink {
   virtual void onPointer(const PointerEvent&) = 0;
   virtual void onWheel(const WheelEvent&) = 0;
   virtual void onKey(const KeyEvent&) = 0;
+  // Default no-op (not pure) so existing sinks that predate text entry keep
+  // compiling unchanged.
+  virtual void onChar(const CharEvent&) {}
   virtual ~InputSink() = default;
 };

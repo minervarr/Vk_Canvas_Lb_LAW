@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <vector>
 
 #include "input.hh"
@@ -19,7 +20,13 @@
 //   keysWentDown          keycodes whose key-down arrived this frame, in
 //                         arrival order — auto-repeat delivers one edge per
 //                         repeated key-down (see input.hh), duplicates kept
+//   typedChars            printable ASCII characters typed this frame, in
+//                         arrival order (several CharEvents can arrive
+//                         between two frames: fast typing/paste). Control
+//                         chars and non-ASCII are dropped here — handle
+//                         those via keysWentDown / your own InputSink
 //
+
 // Edges track the primary button/finger only (button 0) — matching the
 // touch-first widgets; other buttons still move the pointer position.
 struct FrameInput : InputSink {
@@ -30,6 +37,7 @@ struct FrameInput : InputSink {
   bool pointerWentUp = false;
   float wheelDelta = 0.0f;
   std::vector<int> keysWentDown;
+  std::string typedChars;
 
   // True if `keyCode`'s key-down arrived this frame.
   bool keyWentDown(int keyCode) const;
@@ -41,4 +49,5 @@ struct FrameInput : InputSink {
   void onPointer(const PointerEvent&) override;
   void onWheel(const WheelEvent&) override;
   void onKey(const KeyEvent&) override;
+  void onChar(const CharEvent&) override;
 };

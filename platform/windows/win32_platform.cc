@@ -109,6 +109,12 @@ bool win32_translate_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, InputSink&
         case WM_KEYUP:
             sink.onKey({(int)wp, msg == WM_KEYDOWN});
             return true;
+        case WM_CHAR:
+            // wp is a UTF-16 code unit; surrogate pairs (non-BMP input) arrive
+            // as two WM_CHARs and are forwarded as-is — BMP-only consumers
+            // (ASCII filters like FrameInput's) are unaffected.
+            sink.onChar({(uint32_t)wp});
+            return true;
         default:
             return false;
     }

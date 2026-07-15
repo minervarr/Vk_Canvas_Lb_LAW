@@ -80,6 +80,19 @@ int main() {
   in.onKey(KeyEvent{65, true});
   assert(in.keyWentDown(65));
 
+  // Typed characters: several CharEvents between two frames accumulate in
+  // arrival order (fast typing/paste), control chars and non-ASCII are
+  // dropped, and the queue clears each beginFrame().
+  in.beginFrame();
+  in.onChar(CharEvent{'x'});
+  in.onChar(CharEvent{'y'});
+  in.onChar(CharEvent{0x08});    // backspace control char: dropped
+  in.onChar(CharEvent{0x4E16});  // non-ASCII codepoint: dropped
+  in.onChar(CharEvent{'z'});
+  assert(in.typedChars == "xyz");
+  in.beginFrame();
+  assert(in.typedChars.empty());
+
   printf("frame_input_test: OK\n");
   return 0;
 }
