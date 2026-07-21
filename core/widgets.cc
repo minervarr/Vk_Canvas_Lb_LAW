@@ -1,5 +1,8 @@
 #include "widgets.hh"
 
+#include "msdf.hh"       // FontStyle
+#include "text_util.hh"  // fitTextSize / truncateToWidth / splitTwoLines
+
 #include <algorithm>
 
 namespace widgets {
@@ -139,16 +142,37 @@ void drawSegmented(Canvas& c, const Rect& row,
 }
 
 // ── Dropdown field ────────────────────────────────────────────────────────────
+float applyTextFit(Canvas& c, std::string& s, float maxW, float size,
+                   const TextFit& fit) {
+  float drawSize = size;
+  if (fit.shrink)
+    drawSize = fitTextSize(c, s, maxW, size, size * fit.minScale,
+                           FontStyle::Roman);
+  if (fit.ellipsis)
+    s = truncateToWidth(c, s, maxW, drawSize, FontStyle::Roman);
+  return drawSize;
+}
+
 void drawDropdownField(Canvas& c, const Rect& row,
                        std::string_view label, std::string_view value,
-                       bool hovered) {
+                       bool hovered, const TextFit& fit) {
   float s = rowTextSize(row);
-  c.text(label, row.x, vcenter(row, s), s, col::text);
   float fieldW = row.w * 0.52f;
   Rect f = {row.x + row.w - fieldW, row.y, fieldW, row.h};
+
+  std::string labelS(label);
+  float labelSize = applyTextFit(c, labelS, f.x - row.x - labelPad(row), s, fit);
+  c.text(labelS, row.x, vcenter(row, labelSize), labelSize, col::text);
+
   constexpr Color hoverFill = {0.28f, 0.28f, 0.35f, 1.0f};  // track, lifted
   c.rect(f.x, f.y, f.w, f.h, hovered ? hoverFill : col::track, f.h * 0.22f);
-  c.text(value, f.x + f.h * 0.4f, vcenter(f, s), s, col::text);
+
+  // The value's zone ends where the chevron's begins, so with a fitting
+  // policy the two can never touch.
+  float chevronZone = f.h * 1.0f;
+  std::string valueS(value);
+  float valueSize = applyTextFit(c, valueS, f.w - f.h * 0.4f - chevronZone, s, fit);
+  c.text(valueS, f.x + f.h * 0.4f, vcenter(f, valueSize), valueSize, col::text);
   // Disclosure chevron: a real triangle (analytic vector primitive — one
   // 3-line contour in the winding pass), not a glyph.
   float cx = f.x + f.w - f.h * 0.5f;
@@ -166,7 +190,7 @@ float listContentHeight(int n, float rowH) { return n * rowH; }
 std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const std::vector<std::string>& items,
                                     int selected, float scrollPx, float rowH,
-                                    int hoverIndex) {
+                                    int hoverIndex, const TextFit& fit) {
   std::vector<ListRow> visible;
   c.rect(area.x, area.y, area.w, area.h, col::panel2, c.pad());
   c.setClip(area.x, area.y, area.w, area.h);
@@ -181,11 +205,51 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
     else if (i == hoverIndex)
       c.rect(r.x + c.pad() * 0.3f, r.y + rowH * 0.08f,
              r.w - c.pad() * 0.6f, rowH * 0.84f, col::track, rowH * 0.18f);
-    c.text(items[(size_t)i], r.x + c.pad(), r.y + (rowH - s) * 0.5f, s, col::text);
+    std::string item = items[(size_t)i];
+    float itemSize = applyTextFit(c, item, r.w - c.pad() * 2.0f, s, fit);
+    c.text(item, r.x + c.pad(), r.y + (rowH - itemSize) * 0.5f, itemSize, col::text);
     visible.push_back({r, i});
   }
   c.clearClip();
   return visible;
+}
+
+void drawFitButton(Canvas& c, const Rect& r, std::string_view label,
+                   Color bg, Color fg, float radius,
+                   const TextFit& fit, bool allowTwoLines) {
+  c.rect(r.x, r.y, r.w, r.h, bg, radius);
+
+  float s = r.h * 0.34f;                 // Canvas::button's label proportion
+  float maxW = r.w - r.h * 0.35f;        // side padding
+  std::string text(label);
+
+  bool fitsOneLine = c.textWidth(text, s) <= maxW;
+  float twoLineH = s * 2.35f;            // two lines + gap
+  if (!fitsOneLine && allowTwoLines && r.h >= twoLineH * 1.15f) {
+    // Prefer keeping the size and using the vertical slack: shrink a little
+    // (to ~85%) only if that alone makes one line fit, else go two lines.
+    float slightly = fitTextSize(c, text, maxW, s, s * 0.85f, FontStyle::Roman);
+    if (c.textWidthStyled(text, slightly, FontStyle::Roman) <= maxW) {
+      float w = c.textWidth(text, slightly);
+      c.text(text, r.x + (r.w - w) * 0.5f, vcenter(r, slightly), slightly, fg);
+      return;
+    }
+    std::string l1, l2;
+    splitTwoLines(c, text, maxW, s, FontStyle::Roman, l1, l2);
+    if (!l2.empty()) {
+      float gap = s * 0.25f;
+      float top = r.y + (r.h - (s * 2.0f + gap)) * 0.5f;
+      float w1 = c.textWidth(l1, s), w2 = c.textWidth(l2, s);
+      c.text(l1, r.x + (r.w - w1) * 0.5f, top, s, fg);
+      c.text(l2, r.x + (r.w - w2) * 0.5f, top + s + gap, s, fg);
+      return;
+    }
+    text = l1;   // splitTwoLines already fitted/truncated it to one line
+  }
+
+  float drawSize = applyTextFit(c, text, maxW, s, fit);
+  float w = c.textWidth(text, drawSize);
+  c.text(text, r.x + (r.w - w) * 0.5f, vcenter(r, drawSize), drawSize, fg);
 }
 
 // ── Group header ──────────────────────────────────────────────────────────────

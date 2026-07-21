@@ -19,6 +19,14 @@
 std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
                             float size, FontStyle style);
 
+// Largest text size <= `size` at which `s` fits in maxW, never below
+// minSize. At minSize the text may STILL overflow — this is a measurement
+// tool, not a clamp; pair it with truncateToWidth when overflow must be
+// impossible, or use the result as-is when overflow is acceptable. Pure
+// (draws nothing).
+float fitTextSize(Canvas& c, const std::string& s, float maxW,
+                  float size, float minSize, FontStyle style);
+
 // Split `s` into up to two lines within maxW: line 1 breaks at the last
 // word boundary that fits (falling back to a hard character break for
 // unbroken strings), line 2 gets the rest ellipsis-truncated.

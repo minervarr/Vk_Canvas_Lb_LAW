@@ -31,6 +31,16 @@ std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
     return lo == 0 ? ellipsis : s.substr(0, lo) + ellipsis;
 }
 
+float fitTextSize(Canvas& c, const std::string& s, float maxW,
+                  float size, float minSize, FontStyle style) {
+    if (maxW <= 0.0f || s.empty()) return size;
+    float w = c.textWidthStyled(s, size, style);
+    if (w <= maxW) return size;
+    // Text width is linear in size, so the exact fit is a single division.
+    float fitted = size * (maxW / w);
+    return std::max(fitted, minSize);
+}
+
 void splitTwoLines(Canvas& c, const std::string& s, float maxW,
                    float size, FontStyle style,
                    std::string& l1, std::string& l2) {
