@@ -49,17 +49,22 @@ inline void drawSegmented(Canvas& c, const Rect& row,
 }
 
 // ── Dropdown field (closed state) — opening shows a ScrollList overlay ───────
+// `hovered` tints the field fill for pointer feedback (desktop hosts pass
+// row.contains(pointer); touch hosts leave the default).
 void drawDropdownField(Canvas& c, const Rect& row,
-                       std::string_view label, std::string_view value);
+                       std::string_view label, std::string_view value,
+                       bool hovered = false);
 
 // ── Scrollable list (language picker, dropdown popup, generic rows) ──────────
 // Caller owns scrollPx. Draws an opaque panel + visible rows clipped to `area`;
 // returns the visible rows (rect + item index) for hit-testing. `selected` is
-// highlighted.
+// highlighted; `hoverIndex` (item index, -1 = none) gets a subtle pointer
+// highlight behind its text.
 struct ListRow { Rect rect; int index; };
 std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const std::vector<std::string>& items,
-                                    int selected, float scrollPx, float rowH);
+                                    int selected, float scrollPx, float rowH,
+                                    int hoverIndex = -1);
 float listContentHeight(int n, float rowH);
 
 // ── Group header label (section divider in a settings form) ─────────────────

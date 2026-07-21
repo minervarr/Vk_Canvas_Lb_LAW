@@ -140,14 +140,24 @@ void drawSegmented(Canvas& c, const Rect& row,
 
 // ── Dropdown field ────────────────────────────────────────────────────────────
 void drawDropdownField(Canvas& c, const Rect& row,
-                       std::string_view label, std::string_view value) {
+                       std::string_view label, std::string_view value,
+                       bool hovered) {
   float s = rowTextSize(row);
   c.text(label, row.x, vcenter(row, s), s, col::text);
   float fieldW = row.w * 0.52f;
   Rect f = {row.x + row.w - fieldW, row.y, fieldW, row.h};
-  c.rect(f.x, f.y, f.w, f.h, col::track, f.h * 0.22f);
+  constexpr Color hoverFill = {0.28f, 0.28f, 0.35f, 1.0f};  // track, lifted
+  c.rect(f.x, f.y, f.w, f.h, hovered ? hoverFill : col::track, f.h * 0.22f);
   c.text(value, f.x + f.h * 0.4f, vcenter(f, s), s, col::text);
-  c.textRight("v", f.x + f.w - f.h * 0.4f, vcenter(f, s), s, col::dim);
+  // Disclosure chevron: a real triangle (analytic vector primitive — one
+  // 3-line contour in the winding pass), not a glyph.
+  float cx = f.x + f.w - f.h * 0.5f;
+  float cy = f.y + f.h * 0.5f;
+  float aw = f.h * 0.13f;   // half-width
+  float ah = f.h * 0.16f;   // total height
+  c.triangle(cx - aw, cy - ah * 0.5f,
+             cx + aw, cy - ah * 0.5f,
+             cx,      cy + ah * 0.5f, col::dim);
 }
 
 // ── ScrollList ────────────────────────────────────────────────────────────────
@@ -155,7 +165,8 @@ float listContentHeight(int n, float rowH) { return n * rowH; }
 
 std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const std::vector<std::string>& items,
-                                    int selected, float scrollPx, float rowH) {
+                                    int selected, float scrollPx, float rowH,
+                                    int hoverIndex) {
   std::vector<ListRow> visible;
   c.rect(area.x, area.y, area.w, area.h, col::panel2, c.pad());
   c.setClip(area.x, area.y, area.w, area.h);
@@ -167,6 +178,9 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
     if (i == selected)
       c.rect(r.x + c.pad() * 0.3f, r.y + rowH * 0.08f,
              r.w - c.pad() * 0.6f, rowH * 0.84f, col::accent, rowH * 0.18f);
+    else if (i == hoverIndex)
+      c.rect(r.x + c.pad() * 0.3f, r.y + rowH * 0.08f,
+             r.w - c.pad() * 0.6f, rowH * 0.84f, col::track, rowH * 0.18f);
     c.text(items[(size_t)i], r.x + c.pad(), r.y + (rowH - s) * 0.5f, s, col::text);
     visible.push_back({r, i});
   }
