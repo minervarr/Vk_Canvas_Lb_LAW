@@ -4,10 +4,12 @@
 // native events into these POD structs and calls into an InputSink. Never
 // include platform SDK headers here (see platform.hh's own rule).
 //
-// Key codes are raw platform virtual-key values passed through unmodified —
-// today that means Win32 VK_* constants. A future Linux/Wayland backend would
-// map X11/Wayland keysyms into the same int space; unifying that mapping is
-// deliberately out of scope until a second platform actually needs it.
+// Key codes live in the Win32 VK_* numeric space, now named in keys.hh: the
+// Win32 backend passes native codes through unmodified, the Wayland backend
+// (platform/linux/wayland_display.cc) maps xkb keysyms into the same values.
+// Consumers compare against key::* from keys.hh, never platform constants.
+
+#include <cstdint>
 
 enum class PointerAction { Down, Up, Move, Enter, Leave };
 
