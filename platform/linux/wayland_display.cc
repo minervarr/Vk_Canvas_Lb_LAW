@@ -11,6 +11,7 @@
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -122,10 +123,11 @@ struct WaylandListeners {
         static_cast<WaylandDisplay*>(data)->pointer_motion(
             wl_fixed_to_double(x), wl_fixed_to_double(y));
     }
-    static void pointer_button(void* data, wl_pointer*, uint32_t, uint32_t,
+    static void pointer_button(void* data, wl_pointer*, uint32_t serial, uint32_t,
                                uint32_t button, uint32_t state) {
-        static_cast<WaylandDisplay*>(data)->pointer_button(
-            button, state == WL_POINTER_BUTTON_STATE_PRESSED);
+        auto* d = static_cast<WaylandDisplay*>(data);
+        d->last_serial_ = serial;   // freshest serial for a click-driven copy
+        d->pointer_button(button, state == WL_POINTER_BUTTON_STATE_PRESSED);
     }
     static void pointer_axis(void* data, wl_pointer*, uint32_t,
                              uint32_t axis, wl_fixed_t value) {
@@ -146,17 +148,20 @@ struct WaylandListeners {
         else
             close(fd);
     }
-    static void keyboard_enter(void* data, wl_keyboard*, uint32_t,
+    static void keyboard_enter(void* data, wl_keyboard*, uint32_t serial,
                                wl_surface* s, wl_array*) {
-        static_cast<WaylandDisplay*>(data)->keyboard_enter(s);
+        auto* d = static_cast<WaylandDisplay*>(data);
+        d->last_serial_ = serial;
+        d->keyboard_enter(s);
     }
     static void keyboard_leave(void* data, wl_keyboard*, uint32_t, wl_surface* s) {
         static_cast<WaylandDisplay*>(data)->keyboard_leave(s);
     }
-    static void keyboard_key(void* data, wl_keyboard*, uint32_t, uint32_t,
+    static void keyboard_key(void* data, wl_keyboard*, uint32_t serial, uint32_t,
                              uint32_t key, uint32_t state) {
-        static_cast<WaylandDisplay*>(data)->keyboard_key(
-            key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+        auto* d = static_cast<WaylandDisplay*>(data);
+        d->last_serial_ = serial;
+        d->keyboard_key(key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
     }
     static void keyboard_modifiers(void* data, wl_keyboard*, uint32_t,
                                    uint32_t depressed, uint32_t latched,
@@ -216,6 +221,32 @@ struct WaylandListeners {
     static void registry_global_remove(void* data, wl_registry* reg, uint32_t name) {
         WaylandDisplay::on_global_remove(data, reg, name);
     }
+
+    // wl_data_source (clipboard selection we own)
+    static void data_source_target(void*, wl_data_source*, const char*) {}
+    static void data_source_send(void* data, wl_data_source*,
+                                 const char* /*mime*/, int32_t fd) {
+        // Another client is pasting: stream the selection text to its fd.
+        // SIGPIPE is ignored (see set_clipboard_text), so a reader that
+        // closes early surfaces as a write error, not a signal.
+        const std::string& s = static_cast<WaylandDisplay*>(data)->selection_text_;
+        size_t off = 0;
+        while (off < s.size()) {
+            ssize_t n = write(fd, s.data() + off, s.size() - off);
+            if (n <= 0) break;
+            off += static_cast<size_t>(n);
+        }
+        close(fd);
+    }
+    static void data_source_cancelled(void* data, wl_data_source* src) {
+        // Selection replaced by another client (or by us): drop our source.
+        auto* d = static_cast<WaylandDisplay*>(data);
+        if (d->selection_source_ == src) d->selection_source_ = nullptr;
+        wl_data_source_destroy(src);
+    }
+    static void data_source_dnd_drop_performed(void*, wl_data_source*) {}
+    static void data_source_dnd_finished(void*, wl_data_source*) {}
+    static void data_source_action(void*, wl_data_source*, uint32_t) {}
 };
 
 namespace {
@@ -259,6 +290,15 @@ const xdg_wm_base_listener kWmBaseListener = {
     WaylandListeners::wm_base_ping,
 };
 
+const wl_data_source_listener kDataSourceListener = {
+    WaylandListeners::data_source_target,
+    WaylandListeners::data_source_send,
+    WaylandListeners::data_source_cancelled,
+    WaylandListeners::data_source_dnd_drop_performed,
+    WaylandListeners::data_source_dnd_finished,
+    WaylandListeners::data_source_action,
+};
+
 const wl_registry_listener kRegistryListener = {
     WaylandListeners::registry_global,
     WaylandListeners::registry_global_remove,
@@ -288,6 +328,9 @@ void WaylandDisplay::on_global(void* data, wl_registry* reg, uint32_t name,
         xdg_wm_base_add_listener(d->wm_base_, &kWmBaseListener, d);
     } else if (std::strcmp(iface, wl_seat_interface.name) == 0) {
         if (!d->seat_) d->bind_seat(name, version);
+    } else if (std::strcmp(iface, wl_data_device_manager_interface.name) == 0) {
+        d->data_device_manager_ = bind<wl_data_device_manager>(
+            reg, name, &wl_data_device_manager_interface, min_u32(version, 3));
     } else if (std::strcmp(iface, wl_shm_interface.name) == 0) {
         g_cursor.shm = bind<wl_shm>(reg, name, &wl_shm_interface, 1);
     } else if (std::strcmp(iface, wl_output_interface.name) == 0) {
@@ -379,6 +422,9 @@ WaylandDisplay::~WaylandDisplay()
     if (g_cursor.surface) { wl_surface_destroy(g_cursor.surface); g_cursor.surface = nullptr; }
     if (g_cursor.theme)   { wl_cursor_theme_destroy(g_cursor.theme); g_cursor.theme = nullptr; }
     g_cursor = CursorState{};
+    if (selection_source_)     wl_data_source_destroy(selection_source_);
+    if (data_device_)          wl_data_device_destroy(data_device_);
+    if (data_device_manager_)  wl_data_device_manager_destroy(data_device_manager_);
     if (pointer_)  wl_pointer_destroy(pointer_);
     if (keyboard_) wl_keyboard_destroy(keyboard_);
     if (seat_)     wl_seat_destroy(seat_);
@@ -519,6 +565,34 @@ void WaylandDisplay::keyboard_modifiers(uint32_t depressed, uint32_t latched,
     if (xkb_state_)
         xkb_state_update_mask(xkb_state_, depressed, latched, locked,
                               0, 0, group);
+}
+
+void WaylandDisplay::set_clipboard_text(const std::string& utf8)
+{
+    if (!data_device_manager_ || !seat_) return;   // compositor lacks the protocol
+
+    // A paste request streams the text to a pipe; a reader that closes early
+    // would otherwise SIGPIPE us. Ignore it once (benign for a GUI app).
+    static bool sigpipe_ignored = false;
+    if (!sigpipe_ignored) { std::signal(SIGPIPE, SIG_IGN); sigpipe_ignored = true; }
+
+    if (!data_device_)
+        data_device_ = wl_data_device_manager_get_data_device(
+            data_device_manager_, seat_);
+
+    // Replace any source we already own.
+    if (selection_source_) {
+        wl_data_source_destroy(selection_source_);
+        selection_source_ = nullptr;
+    }
+
+    selection_text_   = utf8;
+    selection_source_ = wl_data_device_manager_create_data_source(data_device_manager_);
+    wl_data_source_add_listener(selection_source_, &kDataSourceListener, this);
+    wl_data_source_offer(selection_source_, "text/plain;charset=utf-8");
+    wl_data_source_offer(selection_source_, "text/plain");
+    wl_data_device_set_selection(data_device_, selection_source_, last_serial_);
+    if (display_) wl_display_flush(display_);
 }
 
 void WaylandDisplay::keyboard_repeat_info(int32_t rate, int32_t delay)

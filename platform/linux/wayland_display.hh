@@ -54,6 +54,13 @@ public:
     // Route input events from `surface` to `sink` (null unregisters).
     void set_sink(wl_surface* surface, InputSink* sink);
 
+    // Put UTF-8 text on the system clipboard (the selection). Needs the
+    // compositor to expose wl_data_device_manager and a recent input serial
+    // (captured from key/pointer events); a no-op if either is missing. The
+    // owning data source stays alive to answer paste requests until replaced
+    // or cancelled, serviced by dispatch().
+    void set_clipboard_text(const std::string& utf8);
+
     FrameWaker& waker() { return waker_; }
 
     // Pump: sleep up to timeout_ms for display events / waker / key repeat,
@@ -101,6 +108,15 @@ private:
     wl_seat*     seat_     = nullptr;
     wl_pointer*  pointer_  = nullptr;
     wl_keyboard* keyboard_ = nullptr;
+
+    // Clipboard (selection) via the core data-device protocol. The source
+    // outlives set_clipboard_text() to answer paste requests; last_serial_ is
+    // the most recent input-event serial (required by set_selection).
+    wl_data_device_manager* data_device_manager_ = nullptr;
+    wl_data_device*         data_device_         = nullptr;
+    wl_data_source*         selection_source_    = nullptr;
+    std::string             selection_text_;
+    uint32_t                last_serial_ = 0;
 
     std::vector<WaylandOutput> outputs_;
 
