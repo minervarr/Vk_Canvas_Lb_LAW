@@ -16,6 +16,7 @@ add_subdirectory(${IMG_DECODE_KIT_DIR}/core ${CMAKE_BINARY_DIR}/img_decode_kit)
 
 add_library(vk_canvas_core STATIC
     renderer.cc
+    headless.cc
     overlay.cc
     image_layer.cc
     canvas.cc

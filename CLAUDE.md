@@ -134,6 +134,18 @@ Layout is recomputed every frame from the surface size (cheap, pure math) — ne
 
 Everything draws with a full `Color {r,g,b,a}` (`canvas.hh`); a grayscale look is app policy — pass equal-channel Colors. Deliberately NOT an engine mode: writing R==G==B saves nothing (the swapchain is 4-channel BGRA/RGBA regardless, so fill-rate/bandwidth are identical), and narrowing the API to a single gray channel would break color-capable consumers for zero performance gain. This was evaluated concretely against the `windows_ui_demo` repo's "grayscale-by-construction" pipeline before being rejected here.
 
+## UI capture (headless PNG snapshots — dev tooling)
+
+`core/headless.hh` + `core/capture/` render UI states off-screen and write lossless PNGs — no window, no compositor. It's built on three pieces:
+
+- **`HeadlessSurfaceProvider`** (`core/headless.hh`) — a `SurfaceProvider` backed by `VK_EXT_headless_surface`. The whole `Renderer` path (swapchain, render pass, pipelines, `draw()`) runs unchanged; the swapchain just presents to nothing. Check `headless_surface_supported()` first (the extension is per-ICD; Mesa lavapipe has it).
+- **`Renderer::readbackLastFrame(rgba_out, w, h)`** — copies the last `draw()`n image to host memory as tightly-packed RGBA8 (the target is `VK_FORMAT_R8G8B8A8_UNORM`, so bytes are PNG-ready, no swizzle). Swapchain images carry `TRANSFER_SRC` usage for this; harmless to the windowed path. Not a hot path (waits for device idle).
+- **`vkc::capture_main(argc, argv, scenarios, cfg)`** (`core/capture/capture.hh`, built as `vk_canvas_capture`) — the generic runner. An app supplies `Scenario{path, render}` entries (`render` draws one state into a Renderer) and a `CaptureConfig{init}` (one-time setup, e.g. `initMsdf`); the runner renders each and writes `<out>/<path>.png`, creating the directory tree. Flags: `--out DIR`, `--frame WxH` (default = primary monitor mode, queried via a windowless `WaylandDisplay`), `--scale N` (1..8 supersample), `--only SUBSTR`, `--list`.
+
+Nomenclature is the app's: `NN-label` segments, `/` for parent/child (`"20-recording/10-warn"` → `20-recording/10-warn.png`). Captures are deterministic — build synthetic states, don't depend on live devices.
+
+**Debug-only**: gate the consumer's capture target on `CMAKE_BUILD_TYPE STREQUAL "Debug"` (precedent: scanersito's `two_window_spike`). `vk_canvas_capture` vendors `stb_image_write.h` (public domain). `--depth 16` and a no-swapchain offscreen mode (for on-device Android capture) are noted future work — the `Scenario`/`capture_main` contract is stable across both.
+
 ## Committing and pushing
 
 Use the wrapper at the repo root — never plain `git commit`/`git push`:

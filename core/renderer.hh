@@ -67,6 +67,15 @@ public:
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
 
+    // Copy the most recently draw()n swapchain image back to host memory as
+    // tightly-packed RGBA8 (width*height*4 bytes, straight from the
+    // VK_FORMAT_R8G8B8A8_UNORM target — no swizzle, PNG-ready). Intended for
+    // headless capture (a HeadlessSurfaceProvider); works on any swapchain
+    // since images now carry TRANSFER_SRC usage. Waits for the device to be
+    // idle. Returns false if nothing has been drawn yet. NOT on a hot path.
+    bool readbackLastFrame(std::vector<uint8_t>& rgba_out,
+                           uint32_t& out_w, uint32_t& out_h);
+
     // Number of images in the current swapchain. Callers that gate rendering
     // on a dirty flag should keep rendering for this many frames (+1) after a
     // change, so every image in the swapchain's rotation receives it — else
@@ -154,6 +163,9 @@ private:
     // Which frame-fence last submitted to each swapchain image — guards
     // re-recording cmd_buffers_[image] while that image's prior frame runs.
     std::vector<VkFence> image_fences_;
+    // The swapchain image index that draw() last rendered into, for
+    // readbackLastFrame(). UINT32_MAX until the first draw().
+    uint32_t    last_drawn_image_index_ = UINT32_MAX;
 
 #if defined(__ANDROID__)
     // AHardwareBuffer camera import (Android-only external images).
