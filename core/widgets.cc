@@ -43,6 +43,46 @@ void drawToggle(Canvas& c, const Rect& row, bool on, std::string_view label) {
   c.rect(kx, ky, knob, knob, col::thumb, knob * 0.5f);
 }
 
+// ── Radio row ─────────────────────────────────────────────────────────────────
+Rect drawRadioRow(Canvas& c, const Rect& row, bool selected, bool hovered,
+                  std::string_view label, const TextFit& fit, const RadioStyle& style) {
+  float dotD = row.h * 0.40f;
+  float pad  = row.h * 0.34f;   // anchor margin: left of the dot, right of the label
+  float gap  = row.h * 0.32f;   // dot → label spacing
+  Rect dot{row.x + pad, row.y + (row.h - dotD) * 0.5f, dotD, dotD};
+
+  float labelX = dot.x + dot.w + gap;
+  std::string text(label);
+  float s = rowTextSize(row);
+  float drawSize = applyTextFit(c, text, row.x + row.w - labelX - pad, s, fit);
+  float textW = c.textWidth(text, drawSize);
+
+  // Content-fitted hit/highlight rect: full row height (comfortable target),
+  // but only as wide as the dot + label + anchor padding.
+  Rect hit{row.x, row.y, (labelX + textW + pad) - row.x, row.h};
+  {
+    float vinset = row.h * 0.14f;                 // inset so the pill isn't edge-to-edge
+    float ph = hit.h - vinset * 2.0f;
+    float rad = std::min(style.radius, ph * 0.5f);
+    if (selected && style.selBg.a > 0.0f)
+      c.rect(hit.x, hit.y + vinset, hit.w, ph, style.selBg, rad);
+    else if (hovered)
+      c.rect(hit.x, hit.y + vinset, hit.w, ph, style.hoverBg, rad);
+    // Left accent bar marks the selected row (nav-style indicator).
+    if (selected && style.selBar.a > 0.0f) {
+      float bw = 3.0f, bins = rad * 0.5f;
+      c.rect(hit.x, hit.y + vinset + bins, bw, ph - bins * 2.0f, style.selBar, bw * 0.5f);
+    }
+  }
+
+  // A rounded square with radius == half-size approximates a dot — Canvas has
+  // no circle primitive (same technique as Pager::drawDots).
+  c.rect(dot.x, dot.y, dot.w, dot.h, selected ? style.dotOn : style.dotOff, dot.w * 0.5f);
+  c.text(text, labelX, vcenter(row, drawSize), drawSize,
+         selected ? style.textOn : style.textOff);
+  return hit;
+}
+
 // ── Stepper ──────────────────────────────────────────────────────────────────
 StepperGeom stepperGeom(const Rect& row) {
   float bs = row.h * 0.92f;
@@ -190,24 +230,43 @@ float listContentHeight(int n, float rowH) { return n * rowH; }
 std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const std::vector<std::string>& items,
                                     int selected, float scrollPx, float rowH,
-                                    int hoverIndex, const TextFit& fit) {
+                                    int hoverIndex, const TextFit& fit,
+                                    const ScrollListStyle& style) {
   std::vector<ListRow> visible;
-  c.rect(area.x, area.y, area.w, area.h, col::panel2, c.pad());
+  c.rect(area.x, area.y, area.w, area.h, style.background, c.pad());
   c.setClip(area.x, area.y, area.w, area.h);
   float s = rowH * 0.42f;
   for (int i = 0; i < (int)items.size(); i++) {
     float ry = area.y + i * rowH - scrollPx;
     if (ry + rowH < area.y || ry > area.y + area.h) continue;  // off-screen
     Rect r = {area.x, ry, area.w, rowH};
-    if (i == selected)
-      c.rect(r.x + c.pad() * 0.3f, r.y + rowH * 0.08f,
-             r.w - c.pad() * 0.6f, rowH * 0.84f, col::accent, rowH * 0.18f);
-    else if (i == hoverIndex)
-      c.rect(r.x + c.pad() * 0.3f, r.y + rowH * 0.08f,
-             r.w - c.pad() * 0.6f, rowH * 0.84f, col::track, rowH * 0.18f);
+    bool sel = (i == selected);
+    Color textColor = style.rowText;
+    if (style.selection == ListSelectionStyle::Pill) {
+      float px = r.x + c.pad() * 0.3f, pw = r.w - c.pad() * 0.6f;
+      float py = r.y + rowH * 0.08f, ph = rowH * 0.84f;
+      float rad = std::min(style.radius, ph * 0.5f);
+      if (sel)
+        c.rect(px, py, pw, ph, style.pillColor, rad);
+      else if (i == hoverIndex)
+        c.rect(px, py, pw, ph, style.hoverBg, rad);
+      // Left accent bar marks the selected row (nav-style indicator).
+      if (sel && style.selectedBar.a > 0.0f) {
+        float bw = 3.0f, bins = rad * 0.5f;
+        c.rect(px, py + bins, bw, ph - bins * 2.0f, style.selectedBar, bw * 0.5f);
+      }
+      if (sel) textColor = style.pillText;
+    } else {  // BottomBorder — flat hover fill + underline on every row
+      if (i == hoverIndex)
+        c.rect(r.x, r.y, r.w, r.h, style.hoverBg);
+      float borderThick = sel ? 2.0f : 1.0f;
+      c.rect(r.x, r.y + r.h - borderThick, r.w, borderThick,
+             sel ? style.borderSelected : style.borderUnselected);
+      if (sel) textColor = style.borderSelected;
+    }
     std::string item = items[(size_t)i];
     float itemSize = applyTextFit(c, item, r.w - c.pad() * 2.0f, s, fit);
-    c.text(item, r.x + c.pad(), r.y + (rowH - itemSize) * 0.5f, itemSize, col::text);
+    c.text(item, r.x + c.pad(), r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
     visible.push_back({r, i});
   }
   c.clearClip();
