@@ -130,6 +130,7 @@ struct ScrollListStyle {
   Color borderUnselected = col::dim;     // BottomBorder: every row's thin separator
   Color selectedBar      = {0, 0, 0, 0}; // Pill: thin left accent bar on the selected row
   float radius           = 8.0f;         // Pill: selection/hover fill corner radius
+  bool  fitWidth         = false;        // Pill: hug each row's text instead of full width
 };
 inline constexpr ScrollListStyle kScrollListDefault{};
 

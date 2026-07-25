@@ -57,22 +57,18 @@ Rect drawRadioRow(Canvas& c, const Rect& row, bool selected, bool hovered,
   float drawSize = applyTextFit(c, text, row.x + row.w - labelX - pad, s, fit);
   float textW = c.textWidth(text, drawSize);
 
-  // Content-fitted hit/highlight rect: full row height (comfortable target),
-  // but only as wide as the dot + label + anchor padding.
+  // Content-fitted hit/highlight rect: full row height (matches the row/button
+  // height exactly — no vertical inset), only as wide as the dot + label + pad.
   Rect hit{row.x, row.y, (labelX + textW + pad) - row.x, row.h};
   {
-    float vinset = row.h * 0.14f;                 // inset so the pill isn't edge-to-edge
-    float ph = hit.h - vinset * 2.0f;
-    float rad = std::min(style.radius, ph * 0.5f);
+    float rad = std::min(style.radius, hit.h * 0.5f);
     if (selected && style.selBg.a > 0.0f)
-      c.rect(hit.x, hit.y + vinset, hit.w, ph, style.selBg, rad);
+      c.rect(hit.x, hit.y, hit.w, hit.h, style.selBg, rad);
     else if (hovered)
-      c.rect(hit.x, hit.y + vinset, hit.w, ph, style.hoverBg, rad);
+      c.rect(hit.x, hit.y, hit.w, hit.h, style.hoverBg, rad);
     // Left accent bar marks the selected row (nav-style indicator).
-    if (selected && style.selBar.a > 0.0f) {
-      float bw = 3.0f, bins = rad * 0.5f;
-      c.rect(hit.x, hit.y + vinset + bins, bw, ph - bins * 2.0f, style.selBar, bw * 0.5f);
-    }
+    if (selected && style.selBar.a > 0.0f)
+      c.rect(hit.x, hit.y, 3.0f, hit.h, style.selBar, rad);
   }
 
   // A rounded square with radius == half-size approximates a dot — Canvas has
@@ -242,19 +238,31 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
     Rect r = {area.x, ry, area.w, rowH};
     bool sel = (i == selected);
     Color textColor = style.rowText;
+
+    // Measure the row's text first — the Pill fill can hug it (fitWidth).
+    float textX = r.x + c.pad();
+    std::string item = items[(size_t)i];
+    float itemSize = applyTextFit(c, item, r.w - c.pad() * 2.0f, s, fit);
+    float textW = c.textWidth(item, itemSize);
+
     if (style.selection == ListSelectionStyle::Pill) {
-      float px = r.x + c.pad() * 0.3f, pw = r.w - c.pad() * 0.6f;
-      float py = r.y + rowH * 0.08f, ph = rowH * 0.84f;
-      float rad = std::min(style.radius, ph * 0.5f);
-      if (sel)
-        c.rect(px, py, pw, ph, style.pillColor, rad);
-      else if (i == hoverIndex)
-        c.rect(px, py, pw, ph, style.hoverBg, rad);
-      // Left accent bar marks the selected row (nav-style indicator).
-      if (sel && style.selectedBar.a > 0.0f) {
-        float bw = 3.0f, bins = rad * 0.5f;
-        c.rect(px, py + bins, bw, ph - bins * 2.0f, style.selectedBar, bw * 0.5f);
+      // Full row height (matches the action-button height exactly).
+      float px, pw;
+      if (style.fitWidth) {                       // hug the text
+        px = textX - c.pad() * 0.5f;
+        pw = textW + c.pad();
+      } else {                                    // full-width row
+        px = r.x + c.pad() * 0.3f;
+        pw = r.w - c.pad() * 0.6f;
       }
+      float rad = std::min(style.radius, rowH * 0.5f);
+      if (sel)
+        c.rect(px, r.y, pw, rowH, style.pillColor, rad);
+      else if (i == hoverIndex)
+        c.rect(px, r.y, pw, rowH, style.hoverBg, rad);
+      // Left accent bar marks the selected row (nav-style indicator).
+      if (sel && style.selectedBar.a > 0.0f)
+        c.rect(px, r.y, 3.0f, rowH, style.selectedBar, rad);
       if (sel) textColor = style.pillText;
     } else {  // BottomBorder — flat hover fill + underline on every row
       if (i == hoverIndex)
@@ -264,9 +272,7 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
              sel ? style.borderSelected : style.borderUnselected);
       if (sel) textColor = style.borderSelected;
     }
-    std::string item = items[(size_t)i];
-    float itemSize = applyTextFit(c, item, r.w - c.pad() * 2.0f, s, fit);
-    c.text(item, r.x + c.pad(), r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
+    c.text(item, textX, r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
     visible.push_back({r, i});
   }
   c.clearClip();
