@@ -286,6 +286,7 @@ void drawFitButton(Canvas& c, const Rect& r, std::string_view label,
 float listContentHeight(int n, float rowH);
 
 // ── Group header label (section divider in a settings form) ─────────────────
-void drawGroupHeader(Canvas& c, const Rect& row, std::string_view title);
+void drawGroupHeader(Canvas& c, const Rect& row, std::string_view title,
+                     Color color = col::accent);
 
 }  // namespace widgets
