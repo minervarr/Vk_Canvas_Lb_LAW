@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <initializer_list>
 #include <string>
 #include <string_view>
@@ -188,6 +189,59 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     int hoverIndex = -1,
                                     const TextFit& fit = kTextFree,
                                     const ScrollListStyle& style = kScrollListDefault);
+
+// ── Sortable table (multi-column list with a clickable/sortable header) ─────
+// A generalization of drawScrollList to several named columns with a sort
+// indicator. Stateless like every widget here: sortColumn/sortAscending are
+// caller-owned — this widget only draws and reports geometry, it never
+// re-sorts data itself. Header column hit-testing follows the same
+// "compute geometry separately, draw reads it back" split as
+// segmentRectAt()/segmentRects(): call tableHeaderColumnRects() to get the
+// rects to hit-test a click against, same as you would for drawSegmented().
+struct TableColumn {
+  std::string label;
+  float weight = 1.0f;   // relative width (2.0f = twice as wide as 1.0f)
+};
+
+struct TableStyle {
+  Color headerBg    = col::panel2;
+  Color headerText  = col::text;
+  Color headerHover = col::track;
+  Color sortGlyph   = col::accent;
+  Color rowBg       = col::panel2;
+  Color rowText     = col::text;
+  Color hoverBg     = col::track;
+  Color gridLine    = col::dim;
+  float radius      = 8.0f;
+};
+inline constexpr TableStyle kTableDefault{};
+
+struct TableRow { Rect rect; int index; };
+
+// Cell text for (row, col); caller owns the underlying data (e.g. indexes
+// into its own results vector) — this keeps the widget generic across any
+// tabular data, not just one app's result rows.
+using TableCellFn = std::function<std::string(int row, int col)>;
+
+// Header row geometry, at rowH tall, docked to the top of `area`.
+Rect tableHeaderRow(const Rect& area, float rowH);
+Rect tableHeaderColumnRect(const Rect& headerRow, const std::vector<TableColumn>& columns, int col);
+std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vector<TableColumn>& columns);
+
+// Draws the header (with a sort-direction glyph on the active column) and a
+// vertically scrolling body below it, windowed the same way as
+// drawScrollList (caller owns scrollPx/rowH). Returns the visible body rows
+// for hit-testing (rect + row index), same convention as drawScrollList's
+// ListRow. `hoverRow`/`hoverHeaderCol` are draw-time-only visual feedback
+// (-1 = none); actual click handling is the caller's job against the
+// returned/precomputed rects.
+std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
+                                        const std::vector<TableColumn>& columns,
+                                        const TableCellFn& cellText, int rowCount,
+                                        int sortColumn, bool sortAscending,
+                                        float scrollPx, float rowH,
+                                        int hoverRow = -1, int hoverHeaderCol = -1,
+                                        const TableStyle& style = kTableDefault);
 
 // ── Fit-aware button ─────────────────────────────────────────────────────────
 // Canvas::button with an overflow strategy: fits the label per `fit`, and —
