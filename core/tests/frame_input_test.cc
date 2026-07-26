@@ -93,6 +93,17 @@ int main() {
   in.beginFrame();
   assert(in.typedChars.empty());
 
+  // typedCodepoints: the full-Unicode superset of typedChars — accented/CJK
+  // codepoints are kept (only control codes below 0x20 are dropped).
+  in.beginFrame();
+  in.onChar(CharEvent{'x'});
+  in.onChar(CharEvent{0x08});    // backspace control char: dropped
+  in.onChar(CharEvent{0xED});    // í (U+00ED): kept
+  in.onChar(CharEvent{0x4E16});  // CJK codepoint: kept
+  assert(in.typedCodepoints == U"xí世");
+  in.beginFrame();
+  assert(in.typedCodepoints.empty());
+
   printf("frame_input_test: OK\n");
   return 0;
 }

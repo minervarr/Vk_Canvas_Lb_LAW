@@ -12,6 +12,7 @@ void FrameInput::beginFrame() {
   wheelDelta = 0.0f;
   keysWentDown.clear();
   typedChars.clear();
+  typedCodepoints.clear();
 }
 
 void FrameInput::onPointer(const PointerEvent& e) {
@@ -48,5 +49,8 @@ void FrameInput::onKey(const KeyEvent& e) {
 void FrameInput::onChar(const CharEvent& e) {
   if (e.codepoint >= 0x20 && e.codepoint <= 0x7E) {
     typedChars += (char)e.codepoint;
+  }
+  if (e.codepoint >= 0x20 && e.codepoint != 0x7F) {
+    typedCodepoints += (char32_t)e.codepoint;
   }
 }

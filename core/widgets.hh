@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <functional>
 #include <initializer_list>
 #include <string>
@@ -6,6 +7,7 @@
 #include <vector>
 
 #include "canvas.hh"
+#include "frame_input.hh"
 
 // Reusable immediate-mode, touch-first widgets for the canvas engine. Each
 // widget separates PURE GEOMETRY (sub-rects derived from a row Rect, so drawing
@@ -189,6 +191,36 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     int hoverIndex = -1,
                                     const TextFit& fit = kTextFree,
                                     const ScrollListStyle& style = kScrollListDefault);
+
+// ── Text field (single-line editable UTF-8 text input) ──────────────────────
+// Minimal single-line editor: insertion/deletion/cursor movement all operate
+// on whole Unicode codepoints, never splitting a multi-byte UTF-8 sequence —
+// the entire point being that a search/settings text box must accept
+// accented/CJK/etc. text correctly (see FrameInput::typedCodepoints).
+// Stateless like every widget here except for the state the caller must
+// persist across frames: TextFieldState is just data, own it wherever you
+// own the rest of your screen's UI state.
+struct TextFieldState {
+  std::string text;
+  size_t cursorByte = 0;   // byte offset into `text`, always on a codepoint boundary
+};
+
+struct TextFieldStyle {
+  Color bg          = col::track;
+  Color text        = col::text;
+  Color placeholder = col::dim;
+  Color cursor      = col::accent;
+};
+inline constexpr TextFieldStyle kTextFieldDefault{};
+
+// Applies this frame's typed codepoints plus Backspace/Delete/Left/Right/
+// Home/End from `input` to `state`. Call only when the field has focus.
+// Returns true if `state` changed.
+bool textFieldHandleInput(TextFieldState& state, const FrameInput& input);
+
+void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
+                   bool focused, std::string_view placeholder = {},
+                   const TextFieldStyle& style = kTextFieldDefault);
 
 // ── Sortable table (multi-column list with a clickable/sortable header) ─────
 // A generalization of drawScrollList to several named columns with a sort

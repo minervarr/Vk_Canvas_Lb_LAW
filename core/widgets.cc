@@ -1,11 +1,112 @@
 #include "widgets.hh"
 
+#include "keys.hh"
 #include "msdf.hh"       // FontStyle
 #include "text_util.hh"  // fitTextSize / truncateToWidth / splitTwoLines
 
 #include <algorithm>
 
 namespace widgets {
+
+// ── UTF-8 helpers for TextFieldState (byte-boundary-safe editing) ──────────
+namespace {
+size_t Utf8SeqLen(unsigned char b) {
+  if ((b & 0x80) == 0x00) return 1;
+  if ((b & 0xE0) == 0xC0) return 2;
+  if ((b & 0xF0) == 0xE0) return 3;
+  if ((b & 0xF8) == 0xF0) return 4;
+  return 1;  // invalid lead byte — treat as one byte so we always make progress
+}
+size_t Utf8PrevBoundary(const std::string& s, size_t pos) {
+  if (pos == 0) return 0;
+  size_t i = pos - 1;
+  while (i > 0 && (((unsigned char)s[i]) & 0xC0) == 0x80) --i;
+  return i;
+}
+size_t Utf8NextBoundary(const std::string& s, size_t pos) {
+  if (pos >= s.size()) return s.size();
+  return pos + Utf8SeqLen((unsigned char)s[pos]);
+}
+std::string Utf8Encode(char32_t cp) {
+  std::string out;
+  if (cp < 0x80) {
+    out += (char)cp;
+  } else if (cp < 0x800) {
+    out += (char)(0xC0 | (cp >> 6));
+    out += (char)(0x80 | (cp & 0x3F));
+  } else if (cp < 0x10000) {
+    out += (char)(0xE0 | (cp >> 12));
+    out += (char)(0x80 | ((cp >> 6) & 0x3F));
+    out += (char)(0x80 | (cp & 0x3F));
+  } else {
+    out += (char)(0xF0 | (cp >> 18));
+    out += (char)(0x80 | ((cp >> 12) & 0x3F));
+    out += (char)(0x80 | ((cp >> 6) & 0x3F));
+    out += (char)(0x80 | (cp & 0x3F));
+  }
+  return out;
+}
+}  // namespace
+
+bool textFieldHandleInput(TextFieldState& state, const FrameInput& input) {
+  bool changed = false;
+  for (char32_t cp : input.typedCodepoints) {
+    std::string enc = Utf8Encode(cp);
+    state.text.insert(state.cursorByte, enc);
+    state.cursorByte += enc.size();
+    changed = true;
+  }
+  if (input.keyWentDown(key::Backspace) && state.cursorByte > 0) {
+    size_t prev = Utf8PrevBoundary(state.text, state.cursorByte);
+    state.text.erase(prev, state.cursorByte - prev);
+    state.cursorByte = prev;
+    changed = true;
+  }
+  if (input.keyWentDown(key::Delete) && state.cursorByte < state.text.size()) {
+    size_t next = Utf8NextBoundary(state.text, state.cursorByte);
+    state.text.erase(state.cursorByte, next - state.cursorByte);
+    changed = true;
+  }
+  if (input.keyWentDown(key::Left) && state.cursorByte > 0) {
+    state.cursorByte = Utf8PrevBoundary(state.text, state.cursorByte);
+    changed = true;
+  }
+  if (input.keyWentDown(key::Right) && state.cursorByte < state.text.size()) {
+    state.cursorByte = Utf8NextBoundary(state.text, state.cursorByte);
+    changed = true;
+  }
+  if (input.keyWentDown(key::Home) && state.cursorByte != 0) {
+    state.cursorByte = 0;
+    changed = true;
+  }
+  if (input.keyWentDown(key::End) && state.cursorByte != state.text.size()) {
+    state.cursorByte = state.text.size();
+    changed = true;
+  }
+  return changed;
+}
+
+void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
+                   bool focused, std::string_view placeholder,
+                   const TextFieldStyle& style) {
+  c.rect(row.x, row.y, row.w, row.h, style.bg, row.h * 0.22f);
+  float s = row.h * 0.40f;
+  float pad = row.h * 0.28f;
+  float textY = row.y + (row.h - s) * 0.5f;
+
+  if (state.text.empty()) {
+    if (!placeholder.empty())
+      c.text(placeholder, row.x + pad, textY, s, style.placeholder);
+  } else {
+    c.text(state.text, row.x + pad, textY, s, style.text);
+  }
+
+  if (focused) {
+    float cursorX = row.x + pad + c.textWidth(
+        std::string_view(state.text).substr(0, state.cursorByte), s);
+    c.rect(cursorX, row.y + row.h * 0.2f, row.h * 0.06f, row.h * 0.6f, style.cursor);
+  }
+}
 
 namespace {
 // Vertically-centred text top for size `s` within a row of height `h`.

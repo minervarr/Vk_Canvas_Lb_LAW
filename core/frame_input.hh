@@ -25,6 +25,11 @@
 //                         between two frames: fast typing/paste). Control
 //                         chars and non-ASCII are dropped here — handle
 //                         those via keysWentDown / your own InputSink
+//   typedCodepoints       every printable Unicode codepoint typed this frame
+//                         (control codes below 0x20 excluded), in arrival
+//                         order — the accented/CJK/etc. superset of
+//                         typedChars, for widgets that need full text entry
+//                         rather than ASCII-only shortcuts
 //
 
 // Edges track the primary button/finger only (button 0) — matching the
@@ -38,6 +43,7 @@ struct FrameInput : InputSink {
   float wheelDelta = 0.0f;
   std::vector<int> keysWentDown;
   std::string typedChars;
+  std::u32string typedCodepoints;
 
   // True if `keyCode`'s key-down arrived this frame.
   bool keyWentDown(int keyCode) const;
