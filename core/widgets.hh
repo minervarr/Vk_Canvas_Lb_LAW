@@ -35,8 +35,16 @@ float applyTextFit(Canvas& c, std::string& s, float maxW, float size,
 
 // ── Toggle:  label .......................... ( ●) ───────────────────────────
 // The whole row toggles; `switchRect` is only for an optional tighter hit-test.
+struct ToggleStyle {
+  Color onColor   = col::accent;
+  Color offColor  = col::track;
+  Color knobColor = col::thumb;
+};
+inline constexpr ToggleStyle kToggleDefault{};
+
 Rect toggleSwitchRect(const Rect& row);
-void drawToggle(Canvas& c, const Rect& row, bool on, std::string_view label);
+void drawToggle(Canvas& c, const Rect& row, bool on, std::string_view label,
+                const ToggleStyle& style = kToggleDefault);
 
 // ── Radio row:  ( •) label ───────────────────────────────────────────────────
 // One row of an exclusive-choice group (dot precedes the label, matching
@@ -65,36 +73,74 @@ Rect drawRadioRow(Canvas& c, const Rect& row, bool selected, bool hovered,
                   const RadioStyle& style = kRadioDefault);
 
 // ── Stepper:  label ............... [ − ]  value  [ + ] ──────────────────────
+struct StepperStyle {
+  Color buttonBg   = col::btnIdle;
+  Color buttonText = col::text;
+  Color valueBg    = col::track;
+  Color valueText  = col::text;
+};
+inline constexpr StepperStyle kStepperDefault{};
+
 struct StepperGeom { Rect minus, value, plus; };
 StepperGeom stepperGeom(const Rect& row);
 void drawStepper(Canvas& c, const Rect& row, std::string_view label,
-                 std::string_view valueText);
+                 std::string_view valueText,
+                 const StepperStyle& style = kStepperDefault);
 
 // ── Slider:  label ......... [══●────]  value ────────────────────────────────
+struct SliderStyle {
+  Color track     = col::track;
+  Color fill      = col::accent;
+  Color thumb     = col::thumb;
+  Color valueText = col::dim;
+};
+inline constexpr SliderStyle kSliderDefault{};
+
 struct SliderGeom { Rect bar; Rect thumb; };
 SliderGeom sliderGeom(const Rect& row, float t01);
 // Pointer x → t in [0,1] across the bar (clamped).
 float sliderValueAt(const Rect& row, float px);
 void drawSlider(Canvas& c, const Rect& row, float t01,
-                std::string_view label, std::string_view valueText);
+                std::string_view label, std::string_view valueText,
+                const SliderStyle& style = kSliderDefault);
 
 // ── Segmented control (N exclusive options; also used as tabs) ───────────────
+struct SegmentedStyle {
+  Color selectedBg     = col::accent;
+  Color unselectedBg   = col::btnIdle;
+  Color selectedText   = col::text;
+  Color unselectedText = col::dim;
+};
+inline constexpr SegmentedStyle kSegmentedDefault{};
+
 // Allocation-free: the i-th segment rect by formula (use this for hit-testing).
 Rect segmentRectAt(const Rect& row, int count, int i);
 std::vector<Rect> segmentRects(const Rect& row, int count);  // convenience
 // Core: contiguous options. The vector/initializer_list overloads forward here.
 void drawSegmented(Canvas& c, const Rect& row,
-                   const std::string_view* options, int count, int selected);
+                   const std::string_view* options, int count, int selected,
+                   const SegmentedStyle& style = kSegmentedDefault);
 inline void drawSegmented(Canvas& c, const Rect& row,
-                          const std::vector<std::string_view>& options, int selected) {
-  drawSegmented(c, row, options.data(), (int)options.size(), selected);
+                          const std::vector<std::string_view>& options, int selected,
+                          const SegmentedStyle& style = kSegmentedDefault) {
+  drawSegmented(c, row, options.data(), (int)options.size(), selected, style);
 }
 inline void drawSegmented(Canvas& c, const Rect& row,
-                          std::initializer_list<std::string_view> options, int selected) {
-  drawSegmented(c, row, options.begin(), (int)options.size(), selected);
+                          std::initializer_list<std::string_view> options, int selected,
+                          const SegmentedStyle& style = kSegmentedDefault) {
+  drawSegmented(c, row, options.begin(), (int)options.size(), selected, style);
 }
 
 // ── Dropdown field (closed state) — opening shows a ScrollList overlay ───────
+struct DropdownStyle {
+  Color labelText    = col::text;
+  Color fieldBg      = col::track;
+  Color fieldHoverBg = {0.28f, 0.28f, 0.35f, 1.0f};  // track, lifted
+  Color valueText    = col::text;
+  Color chevron      = col::dim;
+};
+inline constexpr DropdownStyle kDropdownDefault{};
+
 // `hovered` tints the field fill for pointer feedback (desktop hosts pass
 // row.contains(pointer); touch hosts leave the default). With a TextFit,
 // label and value are fitted to their zones and the value's zone excludes
@@ -102,7 +148,8 @@ inline void drawSegmented(Canvas& c, const Rect& row,
 void drawDropdownField(Canvas& c, const Rect& row,
                        std::string_view label, std::string_view value,
                        bool hovered = false,
-                       const TextFit& fit = kTextFree);
+                       const TextFit& fit = kTextFree,
+                       const DropdownStyle& style = kDropdownDefault);
 
 // ── Scrollable list (language picker, dropdown popup, generic rows) ──────────
 // Caller owns scrollPx. Draws a backing panel + visible rows clipped to `area`;

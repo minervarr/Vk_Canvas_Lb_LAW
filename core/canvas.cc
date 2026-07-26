@@ -55,6 +55,46 @@ void Canvas::emitShapeQuad_(float x0, float y0, float x1, float y1,
     vert(x0, y0); vert(x1, y1); vert(x0, y1);
 }
 
+void Canvas::emitShapeQuadGrad_(float x0, float y0, float x1, float y1,
+                                float kind, const float d[6],
+                                Color topLeft, Color topRight,
+                                Color bottomLeft, Color bottomRight) {
+    x0 -= 1.0f; y0 -= 1.0f; x1 += 1.0f; y1 += 1.0f;
+    if (clipActive_) {
+        x0 = std::max(x0, clipX0_); x1 = std::min(x1, clipX1_);
+        y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
+        if (x0 >= x1 || y0 >= y1) return;
+    }
+    auto vert = [&](float vx, float vy, Color c) {
+        float rec[14] = { vx, vy, c.r, c.g, c.b, c.a,
+                          kind, d[0], d[1], d[2], d[3], d[4], d[5], 0.0f };
+        shapes_->insert(shapes_->end(), rec, rec + 14);
+    };
+    vert(x0, y0, topLeft);    vert(x1, y0, topRight);    vert(x1, y1, bottomRight);
+    vert(x0, y0, topLeft);    vert(x1, y1, bottomRight); vert(x0, y1, bottomLeft);
+}
+
+void Canvas::rectGradient(float x, float y, float w, float h,
+                          Color topLeft, Color topRight,
+                          Color bottomLeft, Color bottomRight, float radius) {
+    if (shapes_ && !rotActive_) {
+        float d[6] = { x + w * 0.5f, y + h * 0.5f, w * 0.5f, h * 0.5f, radius, 0.0f };
+        emitShapeQuadGrad_(x, y, x + w, y + h, 0.0f, d,
+                           topLeft, topRight, bottomLeft, bottomRight);
+        return;
+    }
+    // No per-vertex color on the curve/winding path — fall back to flat.
+    rect(x, y, w, h, topLeft, radius);
+}
+
+void Canvas::rectGradient(float x, float y, float w, float h,
+                          Color from, Color to, GradientDir dir, float radius) {
+    if (dir == GradientDir::Horizontal)
+        rectGradient(x, y, w, h, from, to, from, to, radius);
+    else
+        rectGradient(x, y, w, h, from, from, to, to, radius);
+}
+
 void Canvas::rect(float x, float y, float w, float h, Color c, float radius) {
     if (shapes_ && !rotActive_) {
         float d[6] = { x + w * 0.5f, y + h * 0.5f, w * 0.5f, h * 0.5f, radius, 0.0f };

@@ -31,16 +31,17 @@ Rect toggleSwitchRect(const Rect& row) {
   return {row.x + row.w - w, row.y + (row.h - h) * 0.5f, w, h};
 }
 
-void drawToggle(Canvas& c, const Rect& row, bool on, std::string_view label) {
+void drawToggle(Canvas& c, const Rect& row, bool on, std::string_view label,
+                const ToggleStyle& style) {
   Rect sw = toggleSwitchRect(row);
   drawLabelFit(c, label, row, sw.x);
 
-  c.rect(sw.x, sw.y, sw.w, sw.h, on ? col::accent : col::track, sw.h * 0.5f);
+  c.rect(sw.x, sw.y, sw.w, sw.h, on ? style.onColor : style.offColor, sw.h * 0.5f);
   float knob = sw.h * 0.82f;
   float ky = sw.y + (sw.h - knob) * 0.5f;
   float kx = on ? (sw.x + sw.w - knob - (sw.h - knob) * 0.5f)
                 : (sw.x + (sw.h - knob) * 0.5f);
-  c.rect(kx, ky, knob, knob, col::thumb, knob * 0.5f);
+  c.rect(kx, ky, knob, knob, style.knobColor, knob * 0.5f);
 }
 
 // ── Radio row ─────────────────────────────────────────────────────────────────
@@ -95,14 +96,14 @@ StepperGeom stepperGeom(const Rect& row) {
 }
 
 void drawStepper(Canvas& c, const Rect& row, std::string_view label,
-                 std::string_view valueText) {
+                 std::string_view valueText, const StepperStyle& style) {
   float s = rowTextSize(row);
   StepperGeom g = stepperGeom(row);
   drawLabelFit(c, label, row, g.minus.x);
-  c.button(g.minus.x, g.minus.y, g.minus.w, g.minus.h, "-", col::btnIdle, col::text, g.minus.h * 0.3f);
-  c.button(g.plus.x,  g.plus.y,  g.plus.w,  g.plus.h,  "+", col::btnIdle, col::text, g.plus.h * 0.3f);
-  c.rect(g.value.x, g.value.y, g.value.w, g.value.h, col::track, g.value.h * 0.2f);
-  c.textCentered(valueText, g.value.x + g.value.w * 0.5f, vcenter(g.value, s), s, col::text);
+  c.button(g.minus.x, g.minus.y, g.minus.w, g.minus.h, "-", style.buttonBg, style.buttonText, g.minus.h * 0.3f);
+  c.button(g.plus.x,  g.plus.y,  g.plus.w,  g.plus.h,  "+", style.buttonBg, style.buttonText, g.plus.h * 0.3f);
+  c.rect(g.value.x, g.value.y, g.value.w, g.value.h, style.valueBg, g.value.h * 0.2f);
+  c.textCentered(valueText, g.value.x + g.value.w * 0.5f, vcenter(g.value, s), s, style.valueText);
 }
 
 // ── Slider ───────────────────────────────────────────────────────────────────
@@ -135,19 +136,20 @@ float sliderValueAt(const Rect& row, float px) {
 }
 
 void drawSlider(Canvas& c, const Rect& row, float t01,
-                std::string_view label, std::string_view valueText) {
+                std::string_view label, std::string_view valueText,
+                const SliderStyle& style) {
   float s = rowTextSize(row);
   SliderGeom g = sliderGeom(row, t01);
   drawLabelFit(c, label, row, g.bar.x);
-  c.rect(g.bar.x, g.bar.y, g.bar.w, g.bar.h, col::track, g.bar.h * 0.5f);
+  c.rect(g.bar.x, g.bar.y, g.bar.w, g.bar.h, style.track, g.bar.h * 0.5f);
   // Filled portion up to the thumb.
   float fillW = g.thumb.x + g.thumb.w * 0.5f - g.bar.x;
   if (fillW > 0.0f) {
     // Drawn as a fast MSDF quad so drag doesn't trigger expensive curve compute
-    c.quadMsdfRect(g.bar.x, g.bar.y + g.bar.h * 0.1f, fillW, g.bar.h * 0.8f, col::accent);
+    c.quadMsdfRect(g.bar.x, g.bar.y + g.bar.h * 0.1f, fillW, g.bar.h * 0.8f, style.fill);
   }
-  c.quadMsdfRect(g.thumb.x, g.thumb.y, g.thumb.w, g.thumb.h, col::thumb);
-  c.textRight(valueText, row.x + row.w, vcenter(row, s), s, col::dim);
+  c.quadMsdfRect(g.thumb.x, g.thumb.y, g.thumb.w, g.thumb.h, style.thumb);
+  c.textRight(valueText, row.x + row.w, vcenter(row, s), s, style.valueText);
 }
 
 // ── Segmented ─────────────────────────────────────────────────────────────────
@@ -166,14 +168,15 @@ std::vector<Rect> segmentRects(const Rect& row, int count) {
 }
 
 void drawSegmented(Canvas& c, const Rect& row,
-                   const std::string_view* options, int count, int selected) {
+                   const std::string_view* options, int count, int selected,
+                   const SegmentedStyle& style) {
   float s = row.h * 0.36f;
   for (int i = 0; i < count; i++) {
     bool sel = i == selected;
     Rect r = segmentRectAt(row, count, i);
-    c.rect(r.x, r.y, r.w, r.h, sel ? col::accent : col::btnIdle, r.h * 0.28f);
+    c.rect(r.x, r.y, r.w, r.h, sel ? style.selectedBg : style.unselectedBg, r.h * 0.28f);
     c.textCentered(options[i], r.x + r.w * 0.5f, vcenter(r, s), s,
-                   sel ? col::text : col::dim);
+                   sel ? style.selectedText : style.unselectedText);
   }
 }
 
@@ -191,24 +194,24 @@ float applyTextFit(Canvas& c, std::string& s, float maxW, float size,
 
 void drawDropdownField(Canvas& c, const Rect& row,
                        std::string_view label, std::string_view value,
-                       bool hovered, const TextFit& fit) {
+                       bool hovered, const TextFit& fit,
+                       const DropdownStyle& style) {
   float s = rowTextSize(row);
   float fieldW = row.w * 0.52f;
   Rect f = {row.x + row.w - fieldW, row.y, fieldW, row.h};
 
   std::string labelS(label);
   float labelSize = applyTextFit(c, labelS, f.x - row.x - labelPad(row), s, fit);
-  c.text(labelS, row.x, vcenter(row, labelSize), labelSize, col::text);
+  c.text(labelS, row.x, vcenter(row, labelSize), labelSize, style.labelText);
 
-  constexpr Color hoverFill = {0.28f, 0.28f, 0.35f, 1.0f};  // track, lifted
-  c.rect(f.x, f.y, f.w, f.h, hovered ? hoverFill : col::track, f.h * 0.22f);
+  c.rect(f.x, f.y, f.w, f.h, hovered ? style.fieldHoverBg : style.fieldBg, f.h * 0.22f);
 
   // The value's zone ends where the chevron's begins, so with a fitting
   // policy the two can never touch.
   float chevronZone = f.h * 1.0f;
   std::string valueS(value);
   float valueSize = applyTextFit(c, valueS, f.w - f.h * 0.4f - chevronZone, s, fit);
-  c.text(valueS, f.x + f.h * 0.4f, vcenter(f, valueSize), valueSize, col::text);
+  c.text(valueS, f.x + f.h * 0.4f, vcenter(f, valueSize), valueSize, style.valueText);
   // Disclosure chevron: a real triangle (analytic vector primitive — one
   // 3-line contour in the winding pass), not a glyph.
   float cx = f.x + f.w - f.h * 0.5f;
@@ -217,7 +220,7 @@ void drawDropdownField(Canvas& c, const Rect& row,
   float ah = f.h * 0.16f;   // total height
   c.triangle(cx - aw, cy - ah * 0.5f,
              cx + aw, cy - ah * 0.5f,
-             cx,      cy + ah * 0.5f, col::dim);
+             cx,      cy + ah * 0.5f, style.chevron);
 }
 
 // ── ScrollList ────────────────────────────────────────────────────────────────

@@ -91,6 +91,24 @@ public:
   // Filled axis-aligned rectangle with optional rounded corners.
   void rect(float x, float y, float w, float h, Color c, float radius = 0.0f);
 
+  // Same, with an independent color per corner — the rasterizer linearly
+  // interpolates COLOR0 across the quad (shape_vert.slang forwards it
+  // unmodified; shape_frag.slang's SDF coverage math is entirely separate
+  // from color), so this is exact bilinear-ish shading with no shader
+  // change. Requires useShapes() (the SDF fast path); on the curve/winding
+  // path (useShapes(nullptr), or an active rotation) each curve record
+  // still carries only one flat color, so this falls back to `topLeft`.
+  void rectGradient(float x, float y, float w, float h,
+                    Color topLeft, Color topRight,
+                    Color bottomLeft, Color bottomRight,
+                    float radius = 0.0f);
+
+  // Convenience: a simple two-color gradient along one axis.
+  enum class GradientDir { Horizontal, Vertical };
+  void rectGradient(float x, float y, float w, float h,
+                    Color from, Color to, GradientDir dir,
+                    float radius = 0.0f);
+
   // Filled triangle, emitted as a closed contour of line records in the
   // winding-fill pass (exactly how glyph outlines fill) — a first-class
   // vector primitive so hosts can draw play/skip-style icons natively
@@ -215,6 +233,12 @@ private:
   // shape kind + up to 6 geometry params in d (see useShapes()).
   void  emitShapeQuad_(float x0, float y0, float x1, float y1,
                        float kind, const float d[6], Color c);
+
+  // Same, with one color per corner (see rectGradient()).
+  void  emitShapeQuadGrad_(float x0, float y0, float x1, float y1,
+                           float kind, const float d[6],
+                           Color topLeft, Color topRight,
+                           Color bottomLeft, Color bottomRight);
 
   // Clip records appended at/after startIdx against the active clip rect.
   void clipFrom_(size_t startIdx);
