@@ -118,6 +118,13 @@ void WaylandWindow::unset_fullscreen()
     display_.roundtrip();
 }
 
+void WaylandWindow::hide()
+{
+    if (!surface_) return;
+    wl_surface_attach(surface_, nullptr, 0, 0);
+    wl_surface_commit(surface_);
+}
+
 void WaylandWindow::apply_scale(int32_t scale)
 {
     if (scale == scale_ || scale < 1) return;

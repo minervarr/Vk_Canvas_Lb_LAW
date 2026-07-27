@@ -38,6 +38,14 @@ public:
     void set_fullscreen(wl_output* output);   // null = compositor chooses
     void unset_fullscreen();
 
+    // Unmaps the toplevel (NULL-buffer attach+commit — the standard xdg-shell
+    // "hide without destroying" idiom; committing a NULL buffer unmaps the
+    // surface, and that NULL state persists across later commits that don't
+    // attach() again). No "show" counterpart needed — the next real frame the
+    // caller presents (via the Renderer's normal swapchain present) attaches
+    // a buffer again and re-maps it.
+    void hide();
+
     bool closed() const { return closed_; }
     // True once after the size changed since the last call — the host calls
     // Renderer::notifyResized() on it (see renderer.hh's comment: needed when
