@@ -30,6 +30,12 @@ struct TextFit {
 inline constexpr TextFit kTextFree{};                       // overflow allowed
 inline constexpr TextFit kTextFit{true, 0.75f, true};       // the shortcut
 
+// Reproduces drawSortableTable's original cell-text behavior exactly (shrink
+// down to 60% before overflowing, never ellipsis) — the default for its new
+// `cellFit` parameter so existing callers see no change unless they opt in
+// to a different TextFit (e.g. ellipsis truncation instead of shrinking).
+inline constexpr TextFit kTableLegacyFit{true, 0.6f, false};
+
 // Applies a TextFit to a single line: returns the size to draw at and
 // rewrites `s` (ellipsis) when the policy calls for it. Public so custom
 // draw code can use the same escalation as the stock widgets.
@@ -245,6 +251,11 @@ struct TableStyle {
   Color hoverBg     = col::track;
   Color gridLine    = col::dim;
   float radius      = 8.0f;
+  // Off by default (reproduces the original look): column separators stop
+  // at the header and rows have no separator at all. Set true for a denser,
+  // more literally grid-like table — separators run the full header+body
+  // height and every row gets a bottom separator line.
+  bool  fullGrid    = false;
 };
 inline constexpr TableStyle kTableDefault{};
 
@@ -255,10 +266,16 @@ struct TableRow { Rect rect; int index; };
 // tabular data, not just one app's result rows.
 using TableCellFn = std::function<std::string(int row, int col)>;
 
-// Header row geometry, at rowH tall, docked to the top of `area`.
+// Header row geometry, at rowH tall, docked to the top of `area`. `widths`,
+// when non-null and sized to `columns`, gives each column's pixel width
+// directly instead of splitting `columns[i].weight` proportionally — for a
+// caller that lets its user drag columns to an explicit size. Null (the
+// default) preserves the original weight-based behavior.
 Rect tableHeaderRow(const Rect& area, float rowH);
-Rect tableHeaderColumnRect(const Rect& headerRow, const std::vector<TableColumn>& columns, int col);
-std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vector<TableColumn>& columns);
+Rect tableHeaderColumnRect(const Rect& headerRow, const std::vector<TableColumn>& columns, int col,
+                          const std::vector<float>* widths = nullptr);
+std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vector<TableColumn>& columns,
+                                        const std::vector<float>* widths = nullptr);
 
 // Draws the header (with a sort-direction glyph on the active column) and a
 // vertically scrolling body below it, windowed the same way as
@@ -266,14 +283,19 @@ std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vecto
 // for hit-testing (rect + row index), same convention as drawScrollList's
 // ListRow. `hoverRow`/`hoverHeaderCol` are draw-time-only visual feedback
 // (-1 = none); actual click handling is the caller's job against the
-// returned/precomputed rects.
+// returned/precomputed rects. `cellFit` controls cell-text overflow (default
+// reproduces the original shrink-only behavior, see kTableLegacyFit);
+// `columnWidthsPx` overrides weight-based column sizing the same way as
+// tableHeaderColumnRects' `widths` above.
 std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
                                         const std::vector<TableColumn>& columns,
                                         const TableCellFn& cellText, int rowCount,
                                         int sortColumn, bool sortAscending,
                                         float scrollPx, float rowH,
                                         int hoverRow = -1, int hoverHeaderCol = -1,
-                                        const TableStyle& style = kTableDefault);
+                                        const TableStyle& style = kTableDefault,
+                                        const TextFit& cellFit = kTableLegacyFit,
+                                        const std::vector<float>* columnWidthsPx = nullptr);
 
 // ── Fit-aware button ─────────────────────────────────────────────────────────
 // Canvas::button with an overflow strategy: fits the label per `fit`, and —

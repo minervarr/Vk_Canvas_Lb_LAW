@@ -93,19 +93,29 @@ void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
   float s = row.h * 0.40f;
   float pad = row.h * 0.28f;
   float textY = row.y + (row.h - s) * 0.5f;
+  float maxW = row.w - pad * 2.0f;
 
+  // Always clip to the field — unclipped text (a long token/path) used to
+  // spill out past the rounded box into whatever sat next to it.
+  c.setClip(row.x, row.y, row.w, row.h);
   if (state.text.empty()) {
     if (!placeholder.empty())
       c.text(placeholder, row.x + pad, textY, s, style.placeholder);
   } else {
-    c.text(state.text, row.x + pad, textY, s, style.text);
+    float textX = row.x + pad;
+    float prefixW = c.textWidth(std::string_view(state.text).substr(0, state.cursorByte), s);
+    if (focused && prefixW > maxW) {
+      // Scroll left so the cursor stays in view, like a real text input —
+      // otherwise typing past the edge just clips out of sight blind.
+      textX -= (prefixW - maxW);
+    }
+    c.text(state.text, textX, textY, s, style.text);
+    if (focused) {
+      float cursorX = textX + prefixW;
+      c.rect(cursorX, row.y + row.h * 0.2f, row.h * 0.06f, row.h * 0.6f, style.cursor);
+    }
   }
-
-  if (focused) {
-    float cursorX = row.x + pad + c.textWidth(
-        std::string_view(state.text).substr(0, state.cursorByte), s);
-    c.rect(cursorX, row.y + row.h * 0.2f, row.h * 0.06f, row.h * 0.6f, style.cursor);
-  }
+  c.clearClip();
 }
 
 namespace {
@@ -385,9 +395,18 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
 
 // ── Sortable table ────────────────────────────────────────────────────────────
 namespace {
-std::vector<Rect> columnRects(const Rect& row, const std::vector<TableColumn>& columns) {
+std::vector<Rect> columnRects(const Rect& row, const std::vector<TableColumn>& columns,
+                              const std::vector<float>* widths = nullptr) {
   std::vector<Rect> out;
   out.reserve(columns.size());
+  if (widths && widths->size() == columns.size()) {
+    float x = row.x;
+    for (float w : *widths) {
+      out.push_back({x, row.y, w, row.h});
+      x += w;
+    }
+    return out;
+  }
   float totalWeight = 0.0f;
   for (auto& col : columns) totalWeight += col.weight;
   if (totalWeight <= 0.0f) totalWeight = 1.0f;
@@ -403,14 +422,16 @@ std::vector<Rect> columnRects(const Rect& row, const std::vector<TableColumn>& c
 
 Rect tableHeaderRow(const Rect& area, float rowH) { return {area.x, area.y, area.w, rowH}; }
 
-Rect tableHeaderColumnRect(const Rect& headerRow, const std::vector<TableColumn>& columns, int col) {
-  auto rects = columnRects(headerRow, columns);
+Rect tableHeaderColumnRect(const Rect& headerRow, const std::vector<TableColumn>& columns, int col,
+                          const std::vector<float>* widths) {
+  auto rects = columnRects(headerRow, columns, widths);
   if (col < 0 || col >= (int)rects.size()) return headerRow;
   return rects[(size_t)col];
 }
 
-std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vector<TableColumn>& columns) {
-  return columnRects(headerRow, columns);
+std::vector<Rect> tableHeaderColumnRects(const Rect& headerRow, const std::vector<TableColumn>& columns,
+                                        const std::vector<float>* widths) {
+  return columnRects(headerRow, columns, widths);
 }
 
 std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
@@ -419,9 +440,12 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
                                         int sortColumn, bool sortAscending,
                                         float scrollPx, float rowH,
                                         int hoverRow, int hoverHeaderCol,
-                                        const TableStyle& style) {
+                                        const TableStyle& style,
+                                        const TextFit& cellFit,
+                                        const std::vector<float>* columnWidthsPx) {
   Rect header = tableHeaderRow(area, rowH);
-  auto headerCols = columnRects(header, columns);
+  auto headerCols = columnRects(header, columns, columnWidthsPx);
+  Rect body = {area.x, area.y + rowH, area.w, area.h - rowH};
   float s = rowH * 0.36f;
   float pad = rowH * 0.25f;
 
@@ -430,10 +454,13 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
     const Rect& hc = headerCols[i];
     if ((int)i == hoverHeaderCol)
       c.rect(hc.x, hc.y, hc.w, hc.h, style.headerHover, 0.0f);
+    // Same fit policy as the body cells (cellFit) so a header label is never
+    // a different size than the data beneath it — previously this shrank
+    // independently down to a 60%-floor while body cells used a fixed size,
+    // which could make a narrow column's header visibly smaller than its data.
     std::string label = columns[i].label;
     float textW = hc.w - pad * 2.0f - ((int)i == sortColumn ? rowH * 0.5f : 0.0f);
-    float labelSize = s;
-    while (labelSize > s * 0.6f && c.textWidth(label, labelSize) > textW) labelSize -= rowH * 0.02f;
+    float labelSize = applyTextFit(c, label, textW, s, cellFit);
     c.text(label, hc.x + pad, hc.y + (hc.h - labelSize) * 0.5f, labelSize, style.headerText);
 
     if ((int)i == sortColumn) {
@@ -448,11 +475,12 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
         c.triangle(cx - aw, cy - ah * 0.5f, cx + aw, cy - ah * 0.5f, cx, cy + ah * 0.5f, style.sortGlyph);
     }
   }
-  // Grid lines between header columns.
+  // Grid lines between columns — span the full header+body height in
+  // fullGrid mode, header-only otherwise (the original look).
+  float gridBottom = style.fullGrid ? (body.y + body.h) : (header.y + header.h);
   for (size_t i = 1; i < headerCols.size(); i++)
-    c.rect(headerCols[i].x, header.y, 1.0f, header.h, style.gridLine);
+    c.rect(headerCols[i].x, header.y, 1.0f, gridBottom - header.y, style.gridLine);
 
-  Rect body = {area.x, area.y + rowH, area.w, area.h - rowH};
   std::vector<TableRow> visible;
   c.rect(body.x, body.y, body.w, body.h, style.rowBg, style.radius);
   c.setClip(body.x, body.y, body.w, body.h);
@@ -462,15 +490,16 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
     Rect r = {body.x, ry, body.w, rowH};
     if (i == hoverRow) c.rect(r.x, r.y, r.w, r.h, style.hoverBg, 0.0f);
 
-    auto cells = columnRects(r, columns);
+    auto cells = columnRects(r, columns, columnWidthsPx);
     for (size_t col = 0; col < cells.size(); col++) {
       std::string text = cellText(i, (int)col);
       const Rect& cr = cells[col];
-      float cellSize = s;
       float maxW = cr.w - pad * 2.0f;
-      while (cellSize > s * 0.6f && c.textWidth(text, cellSize) > maxW) cellSize -= rowH * 0.02f;
+      float cellSize = applyTextFit(c, text, maxW, s, cellFit);
       c.text(text, cr.x + pad, cr.y + (cr.h - cellSize) * 0.5f, cellSize, style.rowText);
     }
+    if (style.fullGrid)
+      c.rect(r.x, r.y + r.h - 1.0f, r.w, 1.0f, style.gridLine);
     visible.push_back({r, i});
   }
   c.clearClip();
