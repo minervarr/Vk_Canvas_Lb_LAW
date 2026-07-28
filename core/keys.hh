@@ -30,6 +30,8 @@ constexpr int Delete    = 0x2E;
 // '0'..'9' and 'A'..'Z' are their ASCII values (0x30..0x39, 0x41..0x5A).
 constexpr int Digit0 = 0x30;
 constexpr int A      = 0x41;
+constexpr int C      = 0x43;
+constexpr int V      = 0x56;
 
 constexpr int Numpad0 = 0x60;   // ..Numpad9 = 0x69
 constexpr int F1      = 0x70;   // ..F12     = 0x7B

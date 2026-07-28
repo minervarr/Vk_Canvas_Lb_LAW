@@ -208,7 +208,21 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
 // own the rest of your screen's UI state.
 struct TextFieldState {
   std::string text;
-  size_t cursorByte = 0;   // byte offset into `text`, always on a codepoint boundary
+  size_t cursorByte = 0;        // byte offset into `text`, always on a codepoint boundary
+  size_t selectionAnchor = 0;   // == cursorByte means no active selection
+  double lastClickTimeSec = -1e9;  // for double-click-to-select-word detection
+  size_t lastClickByte = 0;
+};
+
+// Core-only clipboard seam: textFieldHandleInput lives in the
+// platform-agnostic engine and must never call into Wayland/Win32 directly.
+// Each host implements this (forwarding to its native clipboard) and passes
+// an instance in; omit it (nullptr) on a host that hasn't wired one up yet —
+// Ctrl+C/Ctrl+V simply become no-ops.
+struct ClipboardIo {
+  virtual void setText(const std::string& utf8) = 0;
+  virtual std::string getText() = 0;
+  virtual ~ClipboardIo() = default;
 };
 
 struct TextFieldStyle {
@@ -216,13 +230,29 @@ struct TextFieldStyle {
   Color text        = col::text;
   Color placeholder = col::dim;
   Color cursor      = col::accent;
+  Color selection   = {col::accent.r, col::accent.g, col::accent.b, 0.35f};
 };
 inline constexpr TextFieldStyle kTextFieldDefault{};
 
-// Applies this frame's typed codepoints plus Backspace/Delete/Left/Right/
-// Home/End from `input` to `state`. Call only when the field has focus.
-// Returns true if `state` changed.
-bool textFieldHandleInput(TextFieldState& state, const FrameInput& input);
+// Applies this frame's typed codepoints plus editing/navigation/selection
+// shortcuts from `input` to `state`: Backspace/Delete/Left/Right/Home/End
+// (unchanged from before), Shift+<those> to extend/shrink the selection,
+// Ctrl+Left/Right to jump by word (Ctrl+Shift+ to extend by word), Ctrl+A to
+// select all, Ctrl+C/Ctrl+V to copy/paste through `clipboard` (no-op if
+// null). Call only when the field has focus. Returns true if `state` changed.
+bool textFieldHandleInput(TextFieldState& state, const FrameInput& input,
+                          ClipboardIo* clipboard = nullptr);
+
+// Single click positions the cursor at the byte offset nearest `input`'s
+// pointer and collapses the selection; a second click within ~0.4s and a few
+// pixels of the first (double-click) selects the whole word under the point
+// instead. Needs `c` to measure text the same way drawTextField does. Call
+// once per frame such a click should be processed against this field (i.e.
+// when input.pointerWentDown and the field owns focus). Returns true if
+// `state` changed.
+bool textFieldHandleClick(TextFieldState& state, Canvas& c, const Rect& fieldRect,
+                          const FrameInput& input, double nowSeconds,
+                          const TextFieldStyle& style = kTextFieldDefault);
 
 void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
                    bool focused, std::string_view placeholder = {},

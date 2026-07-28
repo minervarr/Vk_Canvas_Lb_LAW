@@ -45,6 +45,12 @@ struct FrameInput : InputSink {
   std::string typedChars;
   std::u32string typedCodepoints;
 
+  // Held state (not edge-triggered, persists across frames like
+  // pointerDown) for the two modifiers text-editing shortcuts need to know
+  // are down at the moment another key's edge fires (e.g. Ctrl+C).
+  bool ctrlDown = false;
+  bool shiftDown = false;
+
   // True if `keyCode`'s key-down arrived this frame.
   bool keyWentDown(int keyCode) const;
 

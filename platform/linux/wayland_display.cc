@@ -11,6 +11,7 @@
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -102,6 +103,14 @@ void show_cursor(wl_compositor* compositor, wl_pointer* pointer)
     wl_surface_commit(g_cursor.surface);
 }
 
+}  // namespace
+
+namespace {
+// Forward-declared: defined further down alongside the other listener
+// tables, but WaylandListeners' inline data_device_data_offer body (below)
+// needs the name visible already — an unrelated file-scope name isn't part
+// of the class's "complete-class" lookup the way a later class member is.
+extern const wl_data_offer_listener kDataOfferListener;
 }  // namespace
 
 // ── static listener thunks ──────────────────────────────────────────────────
@@ -247,6 +256,48 @@ struct WaylandListeners {
     static void data_source_dnd_drop_performed(void*, wl_data_source*) {}
     static void data_source_dnd_finished(void*, wl_data_source*) {}
     static void data_source_action(void*, wl_data_source*, uint32_t) {}
+
+    // wl_data_offer (an announced clipboard/DnD content — we only care about
+    // the clipboard/selection use, never drag-and-drop)
+    static void data_offer_offer(void* data, wl_data_offer* offer, const char* mime) {
+        auto* d = static_cast<WaylandDisplay*>(data);
+        if (d->pending_offer_ == offer &&
+            (std::strcmp(mime, "text/plain;charset=utf-8") == 0 ||
+             std::strcmp(mime, "text/plain") == 0))
+            d->pending_offer_is_text_ = true;
+    }
+    static void data_offer_source_actions(void*, wl_data_offer*, uint32_t) {}
+    static void data_offer_action(void*, wl_data_offer*, uint32_t) {}
+
+    // wl_data_device (the receiving half of the selection protocol)
+    static void data_device_data_offer(void* data, wl_data_device*, wl_data_offer* offer) {
+        auto* d = static_cast<WaylandDisplay*>(data);
+        d->pending_offer_ = offer;
+        d->pending_offer_is_text_ = false;
+        wl_data_offer_add_listener(offer, &kDataOfferListener, d);
+    }
+    static void data_device_selection(void* data, wl_data_device*, wl_data_offer* offer) {
+        auto* d = static_cast<WaylandDisplay*>(data);
+        if (d->selection_offer_ && d->selection_offer_ != offer)
+            wl_data_offer_destroy(d->selection_offer_);
+        if (offer == d->pending_offer_) {
+            d->selection_offer_ = offer;
+            d->selection_offer_is_text_ = d->pending_offer_is_text_;
+        } else {
+            // Not the offer we were just tracking (shouldn't normally
+            // happen) — still adopt it, just without known mime types.
+            d->selection_offer_ = offer;
+            d->selection_offer_is_text_ = false;
+        }
+        d->pending_offer_ = nullptr;
+        d->pending_offer_is_text_ = false;
+    }
+    static void data_device_enter(void*, wl_data_device*, uint32_t, wl_surface*,
+                                  wl_fixed_t, wl_fixed_t, wl_data_offer*) {}
+    static void data_device_leave(void*, wl_data_device*) {}
+    static void data_device_motion(void*, wl_data_device*, uint32_t,
+                                   wl_fixed_t, wl_fixed_t) {}
+    static void data_device_drop(void*, wl_data_device*) {}
 };
 
 namespace {
@@ -299,6 +350,21 @@ const wl_data_source_listener kDataSourceListener = {
     WaylandListeners::data_source_action,
 };
 
+const wl_data_offer_listener kDataOfferListener = {
+    WaylandListeners::data_offer_offer,
+    WaylandListeners::data_offer_source_actions,
+    WaylandListeners::data_offer_action,
+};
+
+const wl_data_device_listener kDataDeviceListener = {
+    WaylandListeners::data_device_data_offer,
+    WaylandListeners::data_device_enter,
+    WaylandListeners::data_device_leave,
+    WaylandListeners::data_device_motion,
+    WaylandListeners::data_device_drop,
+    WaylandListeners::data_device_selection,
+};
+
 const wl_registry_listener kRegistryListener = {
     WaylandListeners::registry_global,
     WaylandListeners::registry_global_remove,
@@ -331,6 +397,7 @@ void WaylandDisplay::on_global(void* data, wl_registry* reg, uint32_t name,
     } else if (std::strcmp(iface, wl_data_device_manager_interface.name) == 0) {
         d->data_device_manager_ = bind<wl_data_device_manager>(
             reg, name, &wl_data_device_manager_interface, min_u32(version, 3));
+        d->ensure_data_device();
     } else if (std::strcmp(iface, wl_shm_interface.name) == 0) {
         g_cursor.shm = bind<wl_shm>(reg, name, &wl_shm_interface, 1);
     } else if (std::strcmp(iface, wl_output_interface.name) == 0) {
@@ -363,6 +430,7 @@ void WaylandDisplay::bind_seat(uint32_t name, uint32_t version)
     seat_ = bind<wl_seat>(registry_, name, &wl_seat_interface,
                           min_u32(version, 5));
     wl_seat_add_listener(seat_, &kSeatListener, this);
+    ensure_data_device();
 }
 
 void WaylandDisplay::update_seat_devices(uint32_t capabilities)
@@ -423,6 +491,9 @@ WaylandDisplay::~WaylandDisplay()
     if (g_cursor.theme)   { wl_cursor_theme_destroy(g_cursor.theme); g_cursor.theme = nullptr; }
     g_cursor = CursorState{};
     if (selection_source_)     wl_data_source_destroy(selection_source_);
+    if (selection_offer_)      wl_data_offer_destroy(selection_offer_);
+    if (pending_offer_ && pending_offer_ != selection_offer_)
+        wl_data_offer_destroy(pending_offer_);
     if (data_device_)          wl_data_device_destroy(data_device_);
     if (data_device_manager_)  wl_data_device_manager_destroy(data_device_manager_);
     if (pointer_)  wl_pointer_destroy(pointer_);
@@ -567,6 +638,13 @@ void WaylandDisplay::keyboard_modifiers(uint32_t depressed, uint32_t latched,
                               0, 0, group);
 }
 
+void WaylandDisplay::ensure_data_device()
+{
+    if (data_device_ || !data_device_manager_ || !seat_) return;
+    data_device_ = wl_data_device_manager_get_data_device(data_device_manager_, seat_);
+    wl_data_device_add_listener(data_device_, &kDataDeviceListener, this);
+}
+
 void WaylandDisplay::set_clipboard_text(const std::string& utf8)
 {
     if (!data_device_manager_ || !seat_) return;   // compositor lacks the protocol
@@ -576,9 +654,7 @@ void WaylandDisplay::set_clipboard_text(const std::string& utf8)
     static bool sigpipe_ignored = false;
     if (!sigpipe_ignored) { std::signal(SIGPIPE, SIG_IGN); sigpipe_ignored = true; }
 
-    if (!data_device_)
-        data_device_ = wl_data_device_manager_get_data_device(
-            data_device_manager_, seat_);
+    ensure_data_device();
 
     // Replace any source we already own.
     if (selection_source_) {
@@ -593,6 +669,38 @@ void WaylandDisplay::set_clipboard_text(const std::string& utf8)
     wl_data_source_offer(selection_source_, "text/plain");
     wl_data_device_set_selection(data_device_, selection_source_, last_serial_);
     if (display_) wl_display_flush(display_);
+}
+
+std::string WaylandDisplay::get_clipboard_text()
+{
+    if (!selection_offer_ || !selection_offer_is_text_) return "";
+
+    int fds[2];
+    if (pipe(fds) != 0) return "";
+
+    wl_data_offer_receive(selection_offer_, "text/plain;charset=utf-8", fds[1]);
+    close(fds[1]);
+    if (display_) wl_display_flush(display_);
+
+    // The offering client writes straight into the pipe (no further
+    // round-trip needed) — read with a bounded total timeout so a client
+    // that never responds can't hang the caller indefinitely.
+    std::string out;
+    char buf[4096];
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    for (;;) {
+        auto left = deadline - std::chrono::steady_clock::now();
+        int left_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(left).count();
+        if (left_ms <= 0) break;
+        pollfd pfd{fds[0], POLLIN, 0};
+        int n = poll(&pfd, 1, left_ms);
+        if (n <= 0) break;   // timeout or error
+        ssize_t r = read(fds[0], buf, sizeof buf);
+        if (r <= 0) break;   // EOF or error
+        out.append(buf, (size_t)r);
+    }
+    close(fds[0]);
+    return out;
 }
 
 void WaylandDisplay::keyboard_repeat_info(int32_t rate, int32_t delay)

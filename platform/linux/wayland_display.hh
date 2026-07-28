@@ -61,6 +61,13 @@ public:
     // or cancelled, serviced by dispatch().
     void set_clipboard_text(const std::string& utf8);
 
+    // Reads the current system clipboard as UTF-8 (empty string if there is
+    // none, the compositor lacks the protocol, or nothing offers text).
+    // Synchronous: writes to a pipe the offering client reads from, then
+    // blocks on our end with a bounded poll() timeout — the same pattern
+    // every desktop toolkit uses for paste (it's a short, user-triggered op).
+    std::string get_clipboard_text();
+
     FrameWaker& waker() { return waker_; }
 
     // Pump: sleep up to timeout_ms for display events / waker / key repeat,
@@ -100,6 +107,13 @@ private:
     void fire_repeat(uint64_t expirations);
     void emit_key(uint32_t xkb_keycode, bool down);
 
+    // Creates data_device_ (and registers its listener) the first time both
+    // data_device_manager_ and seat_ are available — shared by the copy path
+    // (set_clipboard_text) and the eager registration done as soon as the
+    // registry binds both globals, so the receiving half (data_offer/
+    // selection events) is live even before the app ever copies anything.
+    void ensure_data_device();
+
     wl_display*    display_    = nullptr;
     wl_registry*   registry_   = nullptr;
     wl_compositor* compositor_ = nullptr;
@@ -117,6 +131,15 @@ private:
     wl_data_source*         selection_source_    = nullptr;
     std::string             selection_text_;
     uint32_t                last_serial_ = 0;
+
+    // Receiving half (paste): `pending_offer_` is the offer currently being
+    // announced (mime types trickling in via its own listener) until a
+    // `selection` event promotes it — or drops it — to `selection_offer_`,
+    // the offer that actually answers get_clipboard_text().
+    wl_data_offer* pending_offer_          = nullptr;
+    bool           pending_offer_is_text_  = false;
+    wl_data_offer* selection_offer_        = nullptr;
+    bool           selection_offer_is_text_ = false;
 
     std::vector<WaylandOutput> outputs_;
 

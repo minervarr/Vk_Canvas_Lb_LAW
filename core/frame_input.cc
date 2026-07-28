@@ -1,4 +1,5 @@
 #include "frame_input.hh"
+#include "keys.hh"
 
 #include <algorithm>
 
@@ -44,6 +45,8 @@ void FrameInput::onWheel(const WheelEvent& e) {
 
 void FrameInput::onKey(const KeyEvent& e) {
   if (e.down) keysWentDown.push_back(e.keyCode);
+  if (e.keyCode == key::Control) ctrlDown = e.down;
+  if (e.keyCode == key::Shift)   shiftDown = e.down;
 }
 
 void FrameInput::onChar(const CharEvent& e) {
