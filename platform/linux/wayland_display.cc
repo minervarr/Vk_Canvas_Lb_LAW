@@ -103,6 +103,15 @@ void show_cursor(wl_compositor* compositor, wl_pointer* pointer)
     wl_surface_commit(g_cursor.surface);
 }
 
+// The inverse: a null cursor surface is Wayland's only "no pointer image"
+// state (there is no separate hide request) — the counterpart of Win32's
+// SetCursor(nullptr). Costs no theme load, so it works even if show_cursor's
+// wl_shm/theme lookup never succeeded.
+void hide_cursor(wl_pointer* pointer)
+{
+    wl_pointer_set_cursor(pointer, g_cursor.enter_serial, nullptr, 0, 0);
+}
+
 }  // namespace
 
 namespace {
@@ -121,7 +130,8 @@ struct WaylandListeners {
                               wl_surface* s, wl_fixed_t x, wl_fixed_t y) {
         auto* d = static_cast<WaylandDisplay*>(data);
         g_cursor.enter_serial = serial;
-        show_cursor(d->compositor_, p);
+        if (d->cursor_hidden_.count(s)) hide_cursor(p);
+        else                            show_cursor(d->compositor_, p);
         d->pointer_enter(s, wl_fixed_to_double(x), wl_fixed_to_double(y));
     }
     static void pointer_leave(void* data, wl_pointer*, uint32_t, wl_surface* s) {
@@ -517,6 +527,21 @@ void WaylandDisplay::set_sink(wl_surface* surface, InputSink* sink)
 {
     if (sink) sinks_[surface] = sink;
     else      sinks_.erase(surface);
+}
+
+void WaylandDisplay::set_cursor_hidden(wl_surface* surface, bool hidden)
+{
+    if (!surface) return;
+    if (hidden) cursor_hidden_.insert(surface);
+    else        cursor_hidden_.erase(surface);
+    // If the pointer is already inside that surface its enter event has long
+    // since fired, so nothing would apply the new policy on its own — do it
+    // now. g_cursor.enter_serial is that latest enter's serial, which is
+    // exactly what wl_pointer.set_cursor wants.
+    if (pointer_ && pointer_focus_ == surface) {
+        if (hidden) hide_cursor(pointer_);
+        else        show_cursor(compositor_, pointer_);
+    }
 }
 
 InputSink* WaylandDisplay::sink_for(wl_surface* surface) const

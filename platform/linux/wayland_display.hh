@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct xdg_wm_base;   // generated xdg-shell-client-protocol.h (linked in .cc)
@@ -53,6 +54,15 @@ public:
 
     // Route input events from `surface` to `sink` (null unregisters).
     void set_sink(wl_surface* surface, InputSink* sink);
+
+    // Cursor policy per surface. By default every surface gets the themed
+    // arrow on pointer enter (Wayland requires the client to supply one, or
+    // the pointer image is undefined over it). Register a surface here to
+    // leave the pointer hidden over it instead — for a pure viewing surface
+    // (fullscreen art, video) where the cursor is only clutter. Applied on
+    // the next pointer enter, and immediately if the pointer is already
+    // inside that surface.
+    void set_cursor_hidden(wl_surface* surface, bool hidden);
 
     // Put UTF-8 text on the system clipboard (the selection). Needs the
     // compositor to expose wl_data_device_manager and a recent input serial
@@ -144,6 +154,7 @@ private:
     std::vector<WaylandOutput> outputs_;
 
     std::unordered_map<wl_surface*, InputSink*> sinks_;
+    std::unordered_set<wl_surface*> cursor_hidden_;   // see set_cursor_hidden
     wl_surface* pointer_focus_  = nullptr;
     wl_surface* keyboard_focus_ = nullptr;
     double      pointer_x_ = 0.0, pointer_y_ = 0.0;

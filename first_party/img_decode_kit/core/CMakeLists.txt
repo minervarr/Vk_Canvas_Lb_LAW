@@ -25,6 +25,10 @@ add_library(img_decode_kit STATIC
 
 target_include_directories(img_decode_kit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# resampleRGBA() splits its two passes across cores (std::thread).
+find_package(Threads REQUIRED)
+target_link_libraries(img_decode_kit PUBLIC Threads::Threads)
+
 target_compile_features(img_decode_kit PUBLIC cxx_std_17)
 if(MSVC)
     target_compile_options(img_decode_kit PRIVATE /utf-8)
