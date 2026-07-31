@@ -1,6 +1,7 @@
 #include "wayland_display.hh"
 
 #include "keys.hh"
+#include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 #include <linux/input-event-codes.h>
@@ -66,10 +67,55 @@ struct CursorState {
     wl_surface*      surface       = nullptr;
     uint32_t         enter_serial  = 0;
     bool             load_attempted = false;
+    // Shapes beyond the arrow, resolved lazily from the same theme. Cursor
+    // names are not standardised across themes — X11's legacy names
+    // ("hand2", "xterm") and the freedesktop/CSS names ("pointer", "text")
+    // both appear in the wild, so each shape carries a candidate list and
+    // takes the first the theme actually has.
+    wl_cursor*       hand          = nullptr;
+    wl_cursor*       text          = nullptr;
+    bool             hand_attempted = false;
+    bool             text_attempted = false;
 };
 CursorState g_cursor;   // one seat/pointer per process is all we support
 
-void show_cursor(wl_compositor* compositor, wl_pointer* pointer)
+// First of `names` the loaded theme knows, or null.
+wl_cursor* lookup_cursor(const char* const* names, int count)
+{
+    if (!g_cursor.theme) return nullptr;
+    for (int i = 0; i < count; ++i)
+        if (wl_cursor* c = wl_cursor_theme_get_cursor(g_cursor.theme, names[i]))
+            return c;
+    return nullptr;
+}
+
+// The theme cursor for `shape`, falling back to the arrow whenever a theme
+// lacks the name — a missing shape must never leave the pointer undefined.
+wl_cursor* cursor_for(WaylandDisplay::CursorShape shape)
+{
+    switch (shape) {
+    case WaylandDisplay::CursorShape::Hand:
+        if (!g_cursor.hand_attempted) {
+            g_cursor.hand_attempted = true;
+            static const char* kNames[] = { "pointer", "hand2", "hand1", "pointing_hand" };
+            g_cursor.hand = lookup_cursor(kNames, 4);
+        }
+        return g_cursor.hand ? g_cursor.hand : g_cursor.arrow;
+    case WaylandDisplay::CursorShape::Text:
+        if (!g_cursor.text_attempted) {
+            g_cursor.text_attempted = true;
+            static const char* kNames[] = { "text", "xterm", "ibeam" };
+            g_cursor.text = lookup_cursor(kNames, 3);
+        }
+        return g_cursor.text ? g_cursor.text : g_cursor.arrow;
+    case WaylandDisplay::CursorShape::Arrow:
+    default:
+        return g_cursor.arrow;
+    }
+}
+
+void show_cursor(wl_compositor* compositor, wl_pointer* pointer,
+                 WaylandDisplay::CursorShape shape)
 {
     if (!g_cursor.load_attempted) {
         g_cursor.load_attempted = true;
@@ -88,9 +134,10 @@ void show_cursor(wl_compositor* compositor, wl_pointer* pointer)
                 g_cursor.surface = wl_compositor_create_surface(compositor);
         }
     }
-    if (!g_cursor.arrow || !g_cursor.surface || g_cursor.arrow->image_count == 0)
+    wl_cursor* cur = cursor_for(shape);
+    if (!cur || !g_cursor.surface || cur->image_count == 0)
         return;
-    wl_cursor_image* img = g_cursor.arrow->images[0];
+    wl_cursor_image* img = cur->images[0];
     wl_buffer* buf = wl_cursor_image_get_buffer(img);
     if (!buf) return;
     wl_pointer_set_cursor(pointer, g_cursor.enter_serial, g_cursor.surface,
@@ -131,7 +178,7 @@ struct WaylandListeners {
         auto* d = static_cast<WaylandDisplay*>(data);
         g_cursor.enter_serial = serial;
         if (d->cursor_hidden_.count(s)) hide_cursor(p);
-        else                            show_cursor(d->compositor_, p);
+        else                            show_cursor(d->compositor_, p, d->shape_for(s));
         d->pointer_enter(s, wl_fixed_to_double(x), wl_fixed_to_double(y));
     }
     static void pointer_leave(void* data, wl_pointer*, uint32_t, wl_surface* s) {
@@ -408,6 +455,9 @@ void WaylandDisplay::on_global(void* data, wl_registry* reg, uint32_t name,
         d->data_device_manager_ = bind<wl_data_device_manager>(
             reg, name, &wl_data_device_manager_interface, min_u32(version, 3));
         d->ensure_data_device();
+    } else if (std::strcmp(iface, zwp_idle_inhibit_manager_v1_interface.name) == 0) {
+        d->idle_inhibit_manager_ = bind<zwp_idle_inhibit_manager_v1>(
+            reg, name, &zwp_idle_inhibit_manager_v1_interface, 1);
     } else if (std::strcmp(iface, wl_shm_interface.name) == 0) {
         g_cursor.shm = bind<wl_shm>(reg, name, &wl_shm_interface, 1);
     } else if (std::strcmp(iface, wl_output_interface.name) == 0) {
@@ -506,6 +556,10 @@ WaylandDisplay::~WaylandDisplay()
         wl_data_offer_destroy(pending_offer_);
     if (data_device_)          wl_data_device_destroy(data_device_);
     if (data_device_manager_)  wl_data_device_manager_destroy(data_device_manager_);
+    // Inhibitors before their manager — each is a child object of it.
+    for (auto& [surface, inh] : idle_inhibitors_) zwp_idle_inhibitor_v1_destroy(inh);
+    idle_inhibitors_.clear();
+    if (idle_inhibit_manager_) zwp_idle_inhibit_manager_v1_destroy(idle_inhibit_manager_);
     if (pointer_)  wl_pointer_destroy(pointer_);
     if (keyboard_) wl_keyboard_destroy(keyboard_);
     if (seat_)     wl_seat_destroy(seat_);
@@ -540,8 +594,51 @@ void WaylandDisplay::set_cursor_hidden(wl_surface* surface, bool hidden)
     // exactly what wl_pointer.set_cursor wants.
     if (pointer_ && pointer_focus_ == surface) {
         if (hidden) hide_cursor(pointer_);
-        else        show_cursor(compositor_, pointer_);
+        else        show_cursor(compositor_, pointer_, shape_for(surface));
     }
+}
+
+void WaylandDisplay::set_idle_inhibited(wl_surface* surface, bool inhibited)
+{
+    if (!surface || !idle_inhibit_manager_) return;
+    auto it = idle_inhibitors_.find(surface);
+    if (inhibited) {
+        if (it != idle_inhibitors_.end()) return;               // already held
+        if (auto* inh = zwp_idle_inhibit_manager_v1_create_inhibitor(
+                            idle_inhibit_manager_, surface))
+            idle_inhibitors_[surface] = inh;
+    } else if (it != idle_inhibitors_.end()) {
+        // Destroying the object IS the release — the protocol has no
+        // "uninhibit" request.
+        zwp_idle_inhibitor_v1_destroy(it->second);
+        idle_inhibitors_.erase(it);
+    }
+}
+
+WaylandDisplay::CursorShape WaylandDisplay::shape_for(wl_surface* surface) const
+{
+    auto it = cursor_shape_.find(surface);
+    return it == cursor_shape_.end() ? CursorShape::Arrow : it->second;
+}
+
+void WaylandDisplay::set_cursor_shape(wl_surface* surface, CursorShape shape)
+{
+    if (!surface) return;
+    // Arrow is the default, so it is stored as absence — that keeps the map
+    // empty for the common case and makes shape_for()'s fallback the only
+    // place the default is spelled out.
+    if (shape == CursorShape::Arrow) {
+        if (cursor_shape_.erase(surface) == 0) return;   // already the default
+    } else {
+        auto it = cursor_shape_.find(surface);
+        if (it != cursor_shape_.end() && it->second == shape) return;  // unchanged
+        cursor_shape_[surface] = shape;
+    }
+    // Same reasoning as set_cursor_hidden: if the pointer is already inside,
+    // its enter event is long past and nothing else would apply this. Hidden
+    // wins — a surface that asked for no pointer keeps none.
+    if (pointer_ && pointer_focus_ == surface && !cursor_hidden_.count(surface))
+        show_cursor(compositor_, pointer_, shape);
 }
 
 InputSink* WaylandDisplay::sink_for(wl_surface* surface) const

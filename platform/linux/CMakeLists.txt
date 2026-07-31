@@ -17,36 +17,48 @@ pkg_check_modules(VCE_WAYLAND REQUIRED IMPORTED_TARGET
 
 find_program(VCE_WAYLAND_SCANNER wayland-scanner REQUIRED)
 pkg_get_variable(VCE_WAYLAND_PROTOCOLS wayland-protocols pkgdatadir)
-set(_xdg_shell_xml ${VCE_WAYLAND_PROTOCOLS}/stable/xdg-shell/xdg-shell.xml)
 set(_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/protocols)
 
-add_custom_command(
-    OUTPUT ${_gen_dir}/xdg-shell-client-protocol.h
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_gen_dir}
-    COMMAND ${VCE_WAYLAND_SCANNER} client-header ${_xdg_shell_xml}
-            ${_gen_dir}/xdg-shell-client-protocol.h
-    DEPENDS ${_xdg_shell_xml}
-    COMMENT "wayland-scanner: xdg-shell client header")
+# Every protocol we bind is generated the same way: a client header + the
+# marshalling stubs, both from the system XML. Adding one is a single call.
+#   xdg-shell     — the window itself (stable)
+#   idle-inhibit  — "don't blank the screen while this surface is up", for
+#                   fullscreen art (unstable v1; the only version that exists)
+function(vce_wayland_protocol name xml)
+    add_custom_command(
+        OUTPUT ${_gen_dir}/${name}-client-protocol.h
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_gen_dir}
+        COMMAND ${VCE_WAYLAND_SCANNER} client-header ${xml}
+                ${_gen_dir}/${name}-client-protocol.h
+        DEPENDS ${xml}
+        COMMENT "wayland-scanner: ${name} client header")
+    add_custom_command(
+        OUTPUT ${_gen_dir}/${name}-protocol.c
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_gen_dir}
+        COMMAND ${VCE_WAYLAND_SCANNER} private-code ${xml}
+                ${_gen_dir}/${name}-protocol.c
+        DEPENDS ${xml}
+        COMMENT "wayland-scanner: ${name} marshalling stubs")
+    # The generated .c includes the generated header.
+    set_source_files_properties(${_gen_dir}/${name}-protocol.c PROPERTIES
+        OBJECT_DEPENDS ${_gen_dir}/${name}-client-protocol.h)
+endfunction()
 
-add_custom_command(
-    OUTPUT ${_gen_dir}/xdg-shell-protocol.c
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_gen_dir}
-    COMMAND ${VCE_WAYLAND_SCANNER} private-code ${_xdg_shell_xml}
-            ${_gen_dir}/xdg-shell-protocol.c
-    DEPENDS ${_xdg_shell_xml}
-    COMMENT "wayland-scanner: xdg-shell marshalling stubs")
+vce_wayland_protocol(xdg-shell
+    ${VCE_WAYLAND_PROTOCOLS}/stable/xdg-shell/xdg-shell.xml)
+vce_wayland_protocol(idle-inhibit-unstable-v1
+    ${VCE_WAYLAND_PROTOCOLS}/unstable/idle-inhibit/idle-inhibit-unstable-v1.xml)
 
 add_library(vk_canvas_wayland STATIC
     wayland_platform.cc
     wayland_display.cc
     wayland_window.cc
     ${_gen_dir}/xdg-shell-protocol.c
+    ${_gen_dir}/idle-inhibit-unstable-v1-protocol.c
 )
-# The generated .c includes the generated header.
-set_source_files_properties(${_gen_dir}/xdg-shell-protocol.c PROPERTIES
-    OBJECT_DEPENDS ${_gen_dir}/xdg-shell-client-protocol.h)
 target_sources(vk_canvas_wayland PRIVATE
-    ${_gen_dir}/xdg-shell-client-protocol.h)
+    ${_gen_dir}/xdg-shell-client-protocol.h
+    ${_gen_dir}/idle-inhibit-unstable-v1-client-protocol.h)
 
 target_include_directories(vk_canvas_wayland
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}

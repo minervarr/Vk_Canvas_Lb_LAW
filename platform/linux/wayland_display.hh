@@ -64,6 +64,27 @@ public:
     // inside that surface.
     void set_cursor_hidden(wl_surface* surface, bool hidden);
 
+    // Pointer images a surface can ask for. Deliberately tiny: the shapes a
+    // UI actually needs to distinguish — "you can click this" and "you can
+    // type here" — not a mirror of the full X cursor font. Nested rather than
+    // file-scope so it cannot collide with a consumer's own cursor enum.
+    enum class CursorShape { Arrow, Hand, Text };
+
+    // Which themed pointer a surface shows. Orthogonal to set_cursor_hidden:
+    // hidden wins while it is set, and the shape is what returns when it is
+    // cleared. Applied on the next pointer enter, and immediately if the
+    // pointer is already inside that surface — so a client may call this from
+    // its own hover hit-testing, every frame if it likes (a repeat of the
+    // shape already showing costs nothing).
+    void set_cursor_shape(wl_surface* surface, CursorShape shape);
+
+    // Hold the screen awake while `surface` is up (fullscreen artwork, video)
+    // — Wayland's answer to SetThreadExecutionState(ES_DISPLAY_REQUIRED).
+    // Needs the compositor to expose zwp_idle_inhibit_manager_v1; a no-op if
+    // it doesn't, since there is no other portable way to ask. Idempotent:
+    // inhibiting an already-inhibited surface does nothing.
+    void set_idle_inhibited(wl_surface* surface, bool inhibited);
+
     // Put UTF-8 text on the system clipboard (the selection). Needs the
     // compositor to expose wl_data_device_manager and a recent input serial
     // (captured from key/pointer events); a no-op if either is missing. The
@@ -155,6 +176,16 @@ private:
 
     std::unordered_map<wl_surface*, InputSink*> sinks_;
     std::unordered_set<wl_surface*> cursor_hidden_;   // see set_cursor_hidden
+    // Per-surface pointer image; absent = Arrow. See set_cursor_shape.
+    std::unordered_map<wl_surface*, CursorShape> cursor_shape_;
+    CursorShape shape_for(wl_surface* surface) const;
+
+    // Idle inhibitors, one per inhibited surface (the protocol has no
+    // "inhibit everything" request — each is scoped to a surface, and is
+    // released by destroying the object). Opaque here: the real
+    // zwp_idle_inhibit* types only exist in the .cc, like xdg_wm_base.
+    struct zwp_idle_inhibit_manager_v1* idle_inhibit_manager_ = nullptr;
+    std::unordered_map<wl_surface*, struct zwp_idle_inhibitor_v1*> idle_inhibitors_;
     wl_surface* pointer_focus_  = nullptr;
     wl_surface* keyboard_focus_ = nullptr;
     double      pointer_x_ = 0.0, pointer_y_ = 0.0;
