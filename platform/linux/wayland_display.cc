@@ -679,6 +679,10 @@ void WaylandDisplay::pointer_button(uint32_t button, bool down)
     if      (button == BTN_LEFT)   b = 0;
     else if (button == BTN_RIGHT)  b = 1;
     else if (button == BTN_MIDDLE) b = 2;
+    // The two thumb buttons. evdev names them SIDE/EXTRA rather than
+    // back/forward, but every desktop maps them that way — see input.hh.
+    else if (button == BTN_SIDE)   b = 3;
+    else if (button == BTN_EXTRA)  b = 4;
     else return;
     if (InputSink* sink = sink_for(pointer_focus_))
         sink->onPointer({down ? PointerAction::Down : PointerAction::Up,

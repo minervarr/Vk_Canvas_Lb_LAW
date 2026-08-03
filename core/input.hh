@@ -16,7 +16,13 @@ enum class PointerAction { Down, Up, Move, Enter, Leave };
 struct PointerEvent {
   PointerAction action;
   float x = 0, y = 0;      // screen/window pixels, y-down
-  int   button = 0;        // 0 = left, 1 = right, 2 = middle; unused for Move/Enter/Leave
+  // 0 = left, 1 = right, 2 = middle, 3 = back, 4 = forward; unused for
+  // Move/Enter/Leave. 3/4 are the pair of extra buttons on the side of most
+  // mice (Win32 XBUTTON1/XBUTTON2, evdev BTN_SIDE/BTN_EXTRA) — the ones a
+  // browser binds to back/forward. Numbering follows the platforms' own
+  // ordering, so a backend that only knows the first three still maps 0-2 to
+  // the same values it always did.
+  int   button = 0;
 };
 
 struct WheelEvent {
