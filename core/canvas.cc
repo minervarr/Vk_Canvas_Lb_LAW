@@ -386,10 +386,12 @@ void Canvas::emitText_(std::string_view str, float x, float baselineY, float siz
 // and append two triangles to the quad buffer.
 void Canvas::emitTextMsdf_(std::string_view str, float x, float baselineY, float size, Color c) {
     float pen = x;
+    uint32_t prevCp = 0;   // kern partner; must advance even for undrawn glyphs
     for (size_t i = 0; i < str.size(); ) {
         uint32_t cp = utf8::nextCodepoint(str, i);
         GlyphQuad q;
-        pen = msdf_->layout(cp, pen, baselineY, size, q);
+        pen = msdf_->layout(cp, pen, baselineY, size, q, prevCp);
+        prevCp = cp;
         if (!q.draw) continue;
 
         float x0 = q.x0, y0 = q.y0, x1 = q.x1, y1 = q.y1;
@@ -452,10 +454,14 @@ void Canvas::mathGlyph(uint32_t key, float penX, float baselineY, float size, Co
 float Canvas::textWidthStyled(std::string_view str, float size, FontStyle style) const {
     if (style == FontStyle::Roman || !msdf_) return textWidth(str, size);
     float w = 0.0f;
+    uint32_t prevCp = 0;
     for (size_t i = 0; i < str.size(); ) {
         uint32_t cp = utf8::nextCodepoint(str, i);
         uint32_t key = msdf_->keyForStyle(style, cp);
+        // Mirrors textStyled()'s "kern first, then advance" exactly.
+        w += msdf_->kernEmStyled(style, prevCp, cp) * size;
         w += key ? msdf_->advanceKey(key, size) : msdf_->advance(cp, size);
+        prevCp = cp;
     }
     return w;
 }
@@ -463,12 +469,19 @@ float Canvas::textWidthStyled(std::string_view str, float size, FontStyle style)
 void Canvas::textStyled(std::string_view str, float x, float y, float size, Color c, FontStyle style) {
     if (style == FontStyle::Roman || !msdf_ || !quads_) { text(str, x, y, size, c); return; }
     float baselineY = y + size, pen = x;
+    uint32_t prevCp = 0;
     for (size_t i = 0; i < str.size(); ) {
         uint32_t cp = utf8::nextCodepoint(str, i);
         uint32_t key = msdf_->keyForStyle(style, cp);
         GlyphQuad q;
+        // Kerning is applied HERE for both branches, using this style's own
+        // table — layoutByKey() is key-addressed and has no codepoint to pair
+        // on, so layout() is passed prevCp=0 to keep it from applying the
+        // Roman table on top. textWidthStyled() sums the same kernEmStyled().
+        pen += msdf_->kernEmStyled(style, prevCp, cp) * size;
         pen = key ? msdf_->layoutByKey(key, pen, baselineY, size, q)
-                  : msdf_->layout(cp, pen, baselineY, size, q);   // fall back to default face
+                  : msdf_->layout(cp, pen, baselineY, size, q, 0);  // fall back to default face
+        prevCp = cp;
         if (!q.draw) continue;
         float x0 = q.x0, y0 = q.y0, x1 = q.x1, y1 = q.y1;
         float u0 = q.u0, v0 = q.v0, u1 = q.u1, v1 = q.v1;
