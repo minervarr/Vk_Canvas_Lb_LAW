@@ -214,7 +214,17 @@ private:
     ImageLayer image_layer_;
 
     // ── MSDF text pipeline ──────────────────────────────────────────────────
-    static constexpr uint32_t kMaxMsdfVerts = 16384;
+    //
+    // Where the per-frame text VBO STARTS. It used to be a hard ceiling, and
+    // the overflow path was `if (verts > kMaxMsdfVerts) verts = kMaxMsdfVerts`
+    // — a silent truncation that is not even a clean one: 16384 is not a
+    // multiple of the 6 vertices in a glyph quad, so the clamp left four
+    // orphan vertices behind, i.e. one malformed triangle at whatever UV the
+    // glyph it cut in half happened to carry. A dense screen at a high
+    // resolution reaches 2730 glyphs easily, so this was a real ceiling, and
+    // "the text stops halfway down the page" is not a failure mode worth
+    // keeping. The buffer grows instead; see ensureMsdfVboCapacity().
+    static constexpr uint32_t kInitialMsdfVerts = 16384;
 
     VkImage             msdfAtlasImage_    = VK_NULL_HANDLE;
     VkDeviceMemory      msdfAtlasMemory_   = VK_NULL_HANDLE;
@@ -222,6 +232,7 @@ private:
     VkSampler           msdfAtlasSampler_  = VK_NULL_HANDLE;
     uint32_t            msdfAtlasW_        = 0;
     uint32_t            msdfAtlasH_        = 0;
+    uint32_t            msdfAtlasLayers_   = 1;   // atlas pages, as array layers
     float               msdfPxRange_      = 4.0f;
     float               msdfIsMtsdf_      = 0.0f;  // 0 = MSDF, 1 = MTSDF, 2 = raster
     VkFormat            msdfAtlasFormat_  = VK_FORMAT_R8G8B8A8_UNORM;
@@ -229,7 +240,13 @@ private:
     VkBuffer            msdfVbo_[kFramesInFlight]       = {};
     VkDeviceMemory      msdfVboMemory_[kFramesInFlight] = {};
     void*               msdfVboMapped_[kFramesInFlight] = {};
+    uint32_t            msdfVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
     uint32_t            msdfVertCount_     = 0;  // for the frame being recorded
+
+    // Make frame slot `frame`'s text VBO hold at least `verts` vertices,
+    // reallocating it if it does not. Only legal once that slot's fence has
+    // been waited on — draw() does exactly that before it writes the buffer.
+    bool ensureMsdfVboCapacity(uint32_t frame, uint32_t verts);
 
     VkDescriptorSetLayout msdfSetLayout_   = VK_NULL_HANDLE;
     VkDescriptorPool    msdfDescPool_      = VK_NULL_HANDLE;
@@ -238,8 +255,15 @@ private:
     VkPipeline          msdfPipeline_      = VK_NULL_HANDLE;
 
     void createMsdfPipeline();
+    // `pixels` holds `layers` pages of w*h*channels, one after another, and
+    // they become the layers of one 2D array image.
     void uploadMsdfAtlas(const uint8_t* pixels, uint32_t w, uint32_t h,
-                         float pxRange, uint32_t channels);
+                         uint32_t layers, float pxRange, uint32_t channels);
+
+    // Re-upload only the pages the font reports as changed, keeping the image,
+    // view, sampler, descriptor set and pipeline. Only valid when the atlas's
+    // shape is unchanged — initMsdf() decides that.
+    void updateMsdfAtlasPages(const TextFont& font);
     void recordMsdfDraw(VkCommandBuffer cmd, uint32_t frame);
     void cleanupMsdf();
 

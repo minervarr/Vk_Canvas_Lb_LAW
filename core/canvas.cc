@@ -228,12 +228,44 @@ void Canvas::polyline(const float* xy, int count, float thickness, Color c) {
     clipFrom_(start);
 }
 
+void Canvas::emitTextQuad_(float x0, float y0, float x1, float y1,
+                           float u0, float v0, float u1, float v1,
+                           float page, Color c) {
+    static_assert(TextFont::FLOATS_PER_VERT == 9,
+                  "vertex layout changed: update this emitter AND both "
+                  "renderers' attribute tables AND msdf_vert.slang");
+    auto vert = [&](float vx, float vy, float vu, float vv) {
+        xform_(vx, vy);
+        quads_->push_back(vx);  quads_->push_back(vy);
+        quads_->push_back(vu);  quads_->push_back(vv);
+        quads_->push_back(c.r); quads_->push_back(c.g);
+        quads_->push_back(c.b); quads_->push_back(c.a);
+        quads_->push_back(page);
+    };
+    vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
+    vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+}
+
 void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
     if (!msdf_ || !quads_) { rect(x, y, w, h, c, 0.0f); return; }
-    GlyphQuad q;
-    msdf_->layout('I', 0.0f, 0.0f, 100.0f, q);
-    float uc = (q.u0 + q.u1) * 0.5f;
-    float vc = (q.v0 + q.v1) * 0.5f;
+
+    // A texel that samples to full coverage. A font able to reserve one says
+    // so; otherwise fall back to the middle of a laid-out 'I', which is what
+    // this always did.
+    //
+    // That fallback's size used to be a hardcoded 100.0f — harmless for a
+    // distance field baked once for every size, and a trap for a per-size
+    // raster cache, where it requests a 100 px cell nothing will ever draw. It
+    // also ignored q.draw, so a font lacking the glyph sampled (0,0) instead —
+    // a transparent texel, and an invisible "solid" rect.
+    float uc = 0.0f, vc = 0.0f;
+    if (!msdf_->solidTexel(uc, vc)) {
+        GlyphQuad q;
+        msdf_->layout('I', 0.0f, 0.0f, 100.0f, q);
+        if (!q.draw) { rect(x, y, w, h, c, 0.0f); return; }
+        uc = (q.u0 + q.u1) * 0.5f;
+        vc = (q.v0 + q.v1) * 0.5f;
+    }
 
     float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
     if (clipActive_) {
@@ -241,15 +273,9 @@ void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
         x0 = std::max(x0, clipX0_); x1 = std::min(x1, clipX1_);
         y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
     }
-    auto vert = [&](float vx, float vy) {
-        xform_(vx, vy);
-        quads_->push_back(vx); quads_->push_back(vy);
-        quads_->push_back(uc); quads_->push_back(vc);
-        quads_->push_back(c.r); quads_->push_back(c.g);
-        quads_->push_back(c.b); quads_->push_back(c.a);
-    };
-    vert(x0, y0); vert(x1, y0); vert(x1, y1);
-    vert(x0, y0); vert(x1, y1); vert(x0, y1);
+    // A solid rect: one texel for all four corners, and page 0 — the solid
+    // texel is reserved before any glyph, so it is always on the first page.
+    emitTextQuad_(x0, y0, x1, y1, uc, vc, uc, vc, 0.0f, c);
 }
 
 void Canvas::setRotation(float radians, float pivotX, float pivotY) {
@@ -409,15 +435,7 @@ void Canvas::emitTextMsdf_(std::string_view str, float x, float baselineY, float
             x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1;
             u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
         }
-        auto vert = [&](float vx, float vy, float vu, float vv) {
-            xform_(vx, vy);
-            quads_->push_back(vx); quads_->push_back(vy);
-            quads_->push_back(vu); quads_->push_back(vv);
-            quads_->push_back(c.r); quads_->push_back(c.g);
-            quads_->push_back(c.b); quads_->push_back(c.a);
-        };
-        vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
-        vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+        emitTextQuad_(x0, y0, x1, y1, u0, v0, u1, v1, (float)q.page, c);
     }
 }
 
@@ -440,15 +458,7 @@ void Canvas::mathGlyph(uint32_t key, float penX, float baselineY, float size, Co
         x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1;
         u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
     }
-    auto vert = [&](float vx, float vy, float vu, float vv) {
-        xform_(vx, vy);
-        quads_->push_back(vx); quads_->push_back(vy);
-        quads_->push_back(vu); quads_->push_back(vv);
-        quads_->push_back(c.r); quads_->push_back(c.g);
-        quads_->push_back(c.b); quads_->push_back(c.a);
-    };
-    vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
-    vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+    emitTextQuad_(x0, y0, x1, y1, u0, v0, u1, v1, (float)q.page, c);
 }
 
 float Canvas::textWidthStyled(std::string_view str, float size, FontStyle style) const {
@@ -495,15 +505,7 @@ void Canvas::textStyled(std::string_view str, float x, float y, float size, Colo
             float rv0 = v0 + fv0 * (v1 - v0), rv1 = v0 + fv1 * (v1 - v0);
             x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1; u0 = ru0; u1 = ru1; v0 = rv0; v1 = rv1;
         }
-        auto vert = [&](float vx, float vy, float vu, float vv) {
-            xform_(vx, vy);
-            quads_->push_back(vx); quads_->push_back(vy);
-            quads_->push_back(vu); quads_->push_back(vv);
-            quads_->push_back(c.r); quads_->push_back(c.g);
-            quads_->push_back(c.b); quads_->push_back(c.a);
-        };
-        vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
-        vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
+        emitTextQuad_(x0, y0, x1, y1, u0, v0, u1, v1, (float)q.page, c);
     }
 }
 

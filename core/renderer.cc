@@ -440,11 +440,25 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     // Upload MSDF text quads into this frame slot's VBO.
     {
-        uint32_t verts = static_cast<uint32_t>(msdfQuads.size() / 8);
-        if (verts > kMaxMsdfVerts) verts = kMaxMsdfVerts;
-        if (msdfReady() && msdfVboMapped_[frame] && verts > 0)
-            std::memcpy(msdfVboMapped_[frame], msdfQuads.data(),
-                        static_cast<size_t>(verts) * 8 * sizeof(float));
+        constexpr uint32_t kFloatsPerVert = TextFont::FLOATS_PER_VERT;
+        uint32_t verts = static_cast<uint32_t>(msdfQuads.size() / kFloatsPerVert);
+
+        // The buffer grows to fit rather than the text being cut off. If the
+        // allocation genuinely fails, fall back to whatever capacity survives —
+        // rounded down to a whole number of quads, so the tail is a missing
+        // glyph and never half of one.
+        if (msdfReady() && verts > 0) {
+            if (!ensureMsdfVboCapacity(frame, verts))
+                verts = msdfVboVerts_[frame] -
+                        msdfVboVerts_[frame] % static_cast<uint32_t>(TextFont::VERTS_PER_GLYPH);
+            if (msdfVboMapped_[frame] && verts > 0)
+                std::memcpy(msdfVboMapped_[frame], msdfQuads.data(),
+                            static_cast<size_t>(verts) * kFloatsPerVert * sizeof(float));
+            else
+                verts = 0;
+        } else {
+            verts = 0;
+        }
         msdfVertCount_ = verts;
     }
 
@@ -852,6 +866,7 @@ void Renderer::pick_physical_device() {
     vkGetPhysicalDeviceProperties(physical_dev_, &props);
     caps_.api_version                       = props.apiVersion;
     caps_.max_image_dim_2d                  = props.limits.maxImageDimension2D;
+    caps_.max_image_array_layers            = props.limits.maxImageArrayLayers;
     caps_.max_compute_workgroup_invocations = props.limits.maxComputeWorkGroupInvocations;
     caps_.max_storage_buffer_range          = props.limits.maxStorageBufferRange;
 
@@ -1180,16 +1195,45 @@ void Renderer::initMsdf(const TextFont& font) {
         LOGE("initMsdf: atlas pixels not resident (call ensureAtlasLoaded first)");
         return;
     }
+    const uint32_t pages = font.atlasPages() ? font.atlasPages() : 1;
+    const VkFormat wantFormat = font.atlasChannels() == 1 ? VK_FORMAT_R8_UNORM
+                                                          : VK_FORMAT_R8G8B8A8_UNORM;
+
+    // ── The common case: same image, a few pages rewritten ──────────────────
+    //
+    // A lazily-baked glyph adds cells to ONE page. Rebuilding the image, view,
+    // sampler, descriptor pool and pipeline for that — and re-uploading every
+    // byte of a 124 MB atlas — is what made a bake visible as a stall. When
+    // nothing about the image's shape has changed, patch the pages that
+    // actually changed and leave the rest of the pipeline alone.
+    if (msdfPipeline_ != VK_NULL_HANDLE && msdfAtlasImage_ != VK_NULL_HANDLE &&
+        msdfAtlasW_ == font.atlasW() && msdfAtlasH_ == font.atlasH() &&
+        msdfAtlasLayers_ == pages && msdfAtlasFormat_ == wantFormat) {
+        updateMsdfAtlasPages(font);
+        return;
+    }
+
     if (msdfPipeline_ != VK_NULL_HANDLE) {
-        // Re-entrant call: the atlas grew (a fallback font baked new glyphs
-        // — see MsdfFont::bakeCodepoints()) and needs to be re-uploaded at
-        // its new size. Wait for any in-flight frame still sampling the old
+        // The atlas changed SHAPE — it grew a page, or a different font was
+        // bound. Wait for any in-flight frame still sampling the old
         // atlas/descriptor before tearing it down, then rebuild fresh below.
         vkDeviceWaitIdle(device_);
         cleanupMsdf();
     }
 
+    // A full upload covers every page, so whatever the font had recorded as
+    // dirty is now clean. Taking the record here is what stops the next
+    // incremental pass from redundantly re-uploading pages just written.
+    std::vector<uint32_t> ignored;
+    font.takeDirtyPages(ignored);
+
+    if (caps_.max_image_array_layers && pages > caps_.max_image_array_layers) {
+        LOGE("MSDF atlas: %u pages exceeds this device's maxImageArrayLayers "
+             "(%u); text will be incomplete", pages, caps_.max_image_array_layers);
+    }
+
     uploadMsdfAtlas(font.atlas().data(), font.atlasW(), font.atlasH(),
+                    pages,
                     font.distanceRange(), font.atlasChannels());
     // The fragment shader's mode word: 0 = MSDF, 1 = MTSDF (gates the
     // true-SDF blend), 2 = raster coverage. See msdf_frag.slang.
@@ -1199,29 +1243,170 @@ void Renderer::initMsdf(const TextFont& font) {
 
     // Vertex buffers (host-visible, persistently mapped) — one per frame in
     // flight so the CPU's upload for frame N+1 can't race frame N's read.
-    const VkDeviceSize vbBytes = static_cast<VkDeviceSize>(kMaxMsdfVerts) * 8 * sizeof(float);
-    for (uint32_t f = 0; f < kFramesInFlight; f++) {
-        VkBufferCreateInfo vb{};
-        vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        vb.size  = vbBytes;
-        vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        vkCreateBuffer(device_, &vb, nullptr, &msdfVbo_[f]);
-        VkMemoryRequirements vr{};
-        vkGetBufferMemoryRequirements(device_, msdfVbo_[f], &vr);
-        VkMemoryAllocateInfo va{};
-        va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        va.allocationSize = vr.size;
-        va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device_, &va, nullptr, &msdfVboMemory_[f]);
-        vkBindBufferMemory(device_, msdfVbo_[f], msdfVboMemory_[f], 0);
-        vkMapMemory(device_, msdfVboMemory_[f], 0, vbBytes, 0, &msdfVboMapped_[f]);
-    }
+    for (uint32_t f = 0; f < kFramesInFlight; f++)
+        ensureMsdfVboCapacity(f, kInitialMsdfVerts);
 
     LOGI("MSDF pipeline ready (atlas %ux%u, pxRange %.1f)", msdfAtlasW_, msdfAtlasH_, msdfPxRange_);
 }
 
+void Renderer::updateMsdfAtlasPages(const TextFont& font) {
+    std::vector<uint32_t> dirty;
+    font.takeDirtyPages(dirty);
+    if (dirty.empty()) return;
+
+    const uint32_t channels = font.atlasChannels();
+    const VkDeviceSize pageBytes =
+        static_cast<VkDeviceSize>(msdfAtlasW_) * msdfAtlasH_ * channels;
+    const VkDeviceSize total = pageBytes * dirty.size();
+    if (font.atlas().size() < pageBytes * msdfAtlasLayers_) {
+        LOGE("MSDF atlas: source holds %zu bytes, expected %llu for %u pages",
+             font.atlas().size(), (unsigned long long)(pageBytes * msdfAtlasLayers_),
+             msdfAtlasLayers_);
+        return;
+    }
+
+    // Pack only the dirty pages into the staging buffer, back to back; the
+    // copy regions below map slot i to its real layer.
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    VkBufferCreateInfo sb{};
+    sb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    sb.size  = total;
+    sb.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (vkCreateBuffer(device_, &sb, nullptr, &stagingBuf) != VK_SUCCESS) return;
+    VkMemoryRequirements smr{};
+    vkGetBufferMemoryRequirements(device_, stagingBuf, &smr);
+    VkMemoryAllocateInfo sa{};
+    sa.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    sa.allocationSize = smr.size;
+    sa.memoryTypeIndex = find_memory_type(smr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device_, &sa, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(device_, stagingBuf, nullptr);
+        return;
+    }
+    vkBindBufferMemory(device_, stagingBuf, stagingMem, 0);
+    void* mapped = nullptr;
+    vkMapMemory(device_, stagingMem, 0, total, 0, &mapped);
+    for (size_t i = 0; i < dirty.size(); i++)
+        std::memcpy(static_cast<uint8_t*>(mapped) + pageBytes * i,
+                    font.atlas().data() + pageBytes * dirty[i],
+                    static_cast<size_t>(pageBytes));
+    vkUnmapMemory(device_, stagingMem);
+
+    // Nothing in flight may still be sampling the image while it is written.
+    vkDeviceWaitIdle(device_);
+
+    VkCommandBufferAllocateInfo cba{};
+    cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cba.commandPool = cmd_pool_;
+    cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cba.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(device_, &cba, &cmd);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // SHADER_READ_ONLY_OPTIMAL, *not* UNDEFINED. The full-upload path uses
+    // UNDEFINED because its image is brand new; using it here would permit the
+    // implementation to discard the image's contents — every page that is not
+    // being re-copied, which is most of them.
+    VkImageMemoryBarrier toDst{};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.image = msdfAtlasImage_;
+    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, msdfAtlasLayers_};
+    toDst.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+    std::vector<VkBufferImageCopy> regions(dirty.size());
+    for (size_t i = 0; i < dirty.size(); i++) {
+        regions[i] = {};
+        regions[i].bufferOffset = pageBytes * i;
+        regions[i].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, dirty[i], 1};
+        regions[i].imageExtent = {msdfAtlasW_, msdfAtlasH_, 1};
+    }
+    vkCmdCopyBufferToImage(cmd, stagingBuf, msdfAtlasImage_,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()), regions.data());
+
+    VkImageMemoryBarrier toRead = toDst;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue_);
+    vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+    vkDestroyBuffer(device_, stagingBuf, nullptr);
+    vkFreeMemory(device_, stagingMem, nullptr);
+}
+
+bool Renderer::ensureMsdfVboCapacity(uint32_t frame, uint32_t verts) {
+    if (verts <= msdfVboVerts_[frame] && msdfVboMapped_[frame]) return true;
+
+    // Grow by doubling, never by exactly what was asked for: a scene that
+    // creeps past the capacity one glyph at a time would otherwise reallocate
+    // every frame.
+    uint32_t want = msdfVboVerts_[frame] ? msdfVboVerts_[frame] : kInitialMsdfVerts;
+    while (want < verts) want *= 2;
+
+    // Whole quads only, so a capacity can never cut a glyph in half.
+    want -= want % static_cast<uint32_t>(TextFont::VERTS_PER_GLYPH);
+
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(want) *
+                               TextFont::FLOATS_PER_VERT * sizeof(float);
+
+    // The caller has already waited on this slot's fence, so nothing in flight
+    // can still be reading the old buffer.
+    if (msdfVboMapped_[frame]) { vkUnmapMemory(device_, msdfVboMemory_[frame]); msdfVboMapped_[frame] = nullptr; }
+    if (msdfVbo_[frame])       { vkDestroyBuffer(device_, msdfVbo_[frame], nullptr); msdfVbo_[frame] = VK_NULL_HANDLE; }
+    if (msdfVboMemory_[frame]) { vkFreeMemory(device_, msdfVboMemory_[frame], nullptr); msdfVboMemory_[frame] = VK_NULL_HANDLE; }
+    msdfVboVerts_[frame] = 0;
+
+    VkBufferCreateInfo vb{};
+    vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vb.size  = bytes;
+    vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &vb, nullptr, &msdfVbo_[frame]) != VK_SUCCESS) {
+        LOGE("text VBO: cannot create a buffer for %u vertices", want);
+        return false;
+    }
+    VkMemoryRequirements vr{};
+    vkGetBufferMemoryRequirements(device_, msdfVbo_[frame], &vr);
+    VkMemoryAllocateInfo va{};
+    va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    va.allocationSize = vr.size;
+    va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device_, &va, nullptr, &msdfVboMemory_[frame]) != VK_SUCCESS) {
+        LOGE("text VBO: cannot allocate %llu bytes for %u vertices",
+             (unsigned long long)bytes, want);
+        vkDestroyBuffer(device_, msdfVbo_[frame], nullptr);
+        msdfVbo_[frame] = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindBufferMemory(device_, msdfVbo_[frame], msdfVboMemory_[frame], 0);
+    vkMapMemory(device_, msdfVboMemory_[frame], 0, bytes, 0, &msdfVboMapped_[frame]);
+    msdfVboVerts_[frame] = want;
+    return true;
+}
+
 void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
+                               uint32_t layers,
                               float pxRange, uint32_t channels) {
     msdfAtlasW_ = w;
     msdfAtlasH_ = h;
@@ -1233,7 +1418,20 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
     // arrived here.
     msdfAtlasFormat_ = channels == 1 ? VK_FORMAT_R8_UNORM
                                      : VK_FORMAT_R8G8B8A8_UNORM;
-    VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * channels;
+    if (layers == 0) layers = 1;
+    msdfAtlasLayers_ = layers;
+
+    // One staging buffer for every page; the pages are contiguous and
+    // page-major in the source, so layer N starts at N * pageBytes.
+    const VkDeviceSize pageBytes = static_cast<VkDeviceSize>(w) * h * channels;
+    VkDeviceSize imageSize = pageBytes * layers;
+
+    // bufferOffset must be 4-byte aligned for a colour copy, and every page
+    // offset is a multiple of pageBytes.
+    if (pageBytes % 4 != 0)
+        LOGE("MSDF atlas: page of %llu bytes is not 4-byte aligned; "
+             "per-layer copies will be rejected",
+             (unsigned long long)pageBytes);
 
     // Staging buffer
     VkBuffer stagingBuf = VK_NULL_HANDLE;
@@ -1264,7 +1462,7 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
     ci.format = msdfAtlasFormat_;
     ci.extent = {w, h, 1};
     ci.mipLevels = 1;
-    ci.arrayLayers = 1;
+    ci.arrayLayers = layers;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -1297,15 +1495,20 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
     toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toDst.image = msdfAtlasImage_;
-    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
     toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {w, h, 1};
+    std::vector<VkBufferImageCopy> regions(layers);
+    for (uint32_t l = 0; l < layers; l++) {
+        regions[l] = {};
+        regions[l].bufferOffset = pageBytes * l;
+        regions[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
+        regions[l].imageExtent = {w, h, 1};
+    }
     vkCmdCopyBufferToImage(cmd, stagingBuf, msdfAtlasImage_,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()), regions.data());
     VkImageMemoryBarrier toRead = toDst;
     toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1329,9 +1532,14 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
     VkImageViewCreateInfo vc{};
     vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vc.image = msdfAtlasImage_;
-    vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    // ALWAYS an array view, even for a single-page atlas. The fragment shader
+    // declares Sampler2DArray, and a plain 2D view bound to it is a descriptor
+    // dimensionality mismatch — undefined sampling, and a validation error
+    // rather than a compile error. A one-layer array sampled at layer 0 is
+    // spec-identical to a 2D sample, so there is no second pipeline for it.
+    vc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     vc.format = msdfAtlasFormat_;
-    vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, msdfAtlasLayers_};
     vkCreateImageView(device_, &vc, nullptr, &msdfAtlasView_);
 
     // Sampler
@@ -1426,17 +1634,27 @@ void Renderer::createMsdfPipeline() {
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                  VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
 
-    VkVertexInputBindingDescription bind{0, 8 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[3]{
+    // The stride comes from TextFont, never from a literal, and the assert
+    // below fails the build if the layout changes without this table changing
+    // with it. It was `8 * sizeof(float)` with an `attrs[3]` beside it, in two
+    // renderers and a shader, and nothing tied the four together.
+    static_assert(TextFont::FLOATS_PER_VERT == 9,
+                  "text vertex layout changed: update attrs[] and msdf_vert.slang");
+    VkVertexInputBindingDescription bind{
+        0, TextFont::FLOATS_PER_VERT * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[4]{
         {0, 0, VK_FORMAT_R32G32_SFLOAT,       0},
         {1, 0, VK_FORMAT_R32G32_SFLOAT,       2 * sizeof(float)},
         {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 4 * sizeof(float)},
+        {3, 0, VK_FORMAT_R32_SFLOAT,          8 * sizeof(float)},   // atlas page
     };
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &bind;
-    vi.vertexAttributeDescriptionCount = 3;
+    // Derived from the array, not restated: the two disagreeing is a
+    // validation error at pipeline creation and nothing at compile time.
+    vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(std::size(attrs));
     vi.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -1542,6 +1760,7 @@ void Renderer::cleanupMsdf() {
         if (msdfVboMapped_[f]) { vkUnmapMemory(device_, msdfVboMemory_[f]); msdfVboMapped_[f] = nullptr; }
         if (msdfVbo_[f])       { vkDestroyBuffer(device_, msdfVbo_[f], nullptr); msdfVbo_[f] = VK_NULL_HANDLE; }
         if (msdfVboMemory_[f]) { vkFreeMemory(device_, msdfVboMemory_[f], nullptr); msdfVboMemory_[f] = VK_NULL_HANDLE; }
+        msdfVboVerts_[f] = 0;
     }
     if (msdfPipeline_)   { vkDestroyPipeline(device_, msdfPipeline_, nullptr); msdfPipeline_ = VK_NULL_HANDLE; }
     if (msdfPipelineLayout_) { vkDestroyPipelineLayout(device_, msdfPipelineLayout_, nullptr); msdfPipelineLayout_ = VK_NULL_HANDLE; }

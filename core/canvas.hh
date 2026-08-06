@@ -246,4 +246,12 @@ private:
   // Internal: emit str at (x, baseline_y)
   void emitText_(std::string_view str, float x, float baselineY, float size, Color c);
   void emitTextMsdf_(std::string_view str, float x, float baselineY, float size, Color c);
+
+  // Two triangles into quads_, in the text vertex format. THE one place that
+  // format is written out: quadMsdfRect, emitTextMsdf_, mathGlyph and
+  // textStyled all carried byte-identical copies of it, so every change to the
+  // vertex layout was four edits that had to agree.
+  void emitTextQuad_(float x0, float y0, float x1, float y1,
+                     float u0, float v0, float u1, float v1,
+                     float page, Color c);
 };

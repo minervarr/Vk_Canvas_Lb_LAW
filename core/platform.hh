@@ -40,6 +40,10 @@ struct FrameWaker {
 struct DeviceCaps {
     uint32_t     api_version                       = 0;
     uint32_t     max_image_dim_2d                  = 0;
+    // Layers a 2D array image may have. Vulkan guarantees at least 256, so a
+    // paged glyph atlas runs out of memory long before it runs out of layers —
+    // this is here so the renderer can SAY so rather than fail obscurely.
+    uint32_t     max_image_array_layers            = 0;
     uint32_t     max_compute_workgroup_invocations = 0;
     VkDeviceSize max_storage_buffer_range          = 0;
     bool         has_sampler_ycbcr_conversion      = false;  // gates camera path
