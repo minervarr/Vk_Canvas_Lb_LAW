@@ -1172,7 +1172,7 @@ void Renderer::recreate_swapchain() {
 
 // ── MSDF text pipeline ─────────────────────────────────────────────────────
 
-void Renderer::initMsdf(const MsdfFont& font) {
+void Renderer::initMsdf(const TextFont& font) {
     if (!device_ || !render_pass_) return;
     // Callers may release the font's CPU atlas pixels after upload
     // (MsdfFont::releaseAtlasPixels()); an upload needs them resident.
@@ -1189,8 +1189,12 @@ void Renderer::initMsdf(const MsdfFont& font) {
         cleanupMsdf();
     }
 
-    uploadMsdfAtlas(font.atlas().data(), font.atlasW(), font.atlasH(), font.distanceRange());
-    msdfIsMtsdf_ = font.isMtsdf() ? 1.0f : 0.0f;  // gates the shader's true-SDF blend
+    uploadMsdfAtlas(font.atlas().data(), font.atlasW(), font.atlasH(),
+                    font.distanceRange(), font.atlasChannels());
+    // The fragment shader's mode word: 0 = MSDF, 1 = MTSDF (gates the
+    // true-SDF blend), 2 = raster coverage. See msdf_frag.slang.
+    msdfIsMtsdf_ = font.textMode() == TextMode::Raster ? 2.0f
+                                                       : (font.isMtsdf() ? 1.0f : 0.0f);
     createMsdfPipeline();
 
     // Vertex buffers (host-visible, persistently mapped) — one per frame in
@@ -1217,12 +1221,19 @@ void Renderer::initMsdf(const MsdfFont& font) {
     LOGI("MSDF pipeline ready (atlas %ux%u, pxRange %.1f)", msdfAtlasW_, msdfAtlasH_, msdfPxRange_);
 }
 
-void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h, float pxRange) {
+void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
+                              float pxRange, uint32_t channels) {
     msdfAtlasW_ = w;
     msdfAtlasH_ = h;
     msdfPxRange_ = pxRange;
 
-    VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+    // 4 for an MSDF/MTSDF sheet (RGB field + alpha), 1 for raster coverage.
+    // Getting this wrong reads past the end of the source buffer, which is
+    // exactly what a hardcoded *4 did the first time a 1-channel atlas
+    // arrived here.
+    msdfAtlasFormat_ = channels == 1 ? VK_FORMAT_R8_UNORM
+                                     : VK_FORMAT_R8G8B8A8_UNORM;
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * channels;
 
     // Staging buffer
     VkBuffer stagingBuf = VK_NULL_HANDLE;
@@ -1250,7 +1261,7 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h, floa
     VkImageCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.imageType = VK_IMAGE_TYPE_2D;
-    ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ci.format = msdfAtlasFormat_;
     ci.extent = {w, h, 1};
     ci.mipLevels = 1;
     ci.arrayLayers = 1;
@@ -1319,7 +1330,7 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h, floa
     vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vc.image = msdfAtlasImage_;
     vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vc.format = msdfAtlasFormat_;
     vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCreateImageView(device_, &vc, nullptr, &msdfAtlasView_);
 

@@ -5,8 +5,8 @@
 #include "texture.hh"
 
 struct Font;
-class  MsdfFont;
-enum class FontStyle : uint8_t;   // defined in msdf.hh (Roman/Bold/Math/Italic)
+class  TextFont;
+enum class FontStyle : uint8_t;   // defined in text_font.hh (Roman/Bold/Math/Italic)
 
 struct Color { float r, g, b, a; };
 
@@ -56,7 +56,7 @@ public:
   // appended to quadOut (8 floats/vert) for the MSDF pipeline to draw. When set,
   // text()/button labels and textWidth() use MSDF metrics. Pass nullptr to fall
   // back to the curve path.
-  void useMsdf(const MsdfFont* font, std::vector<float>* quadOut) {
+  void useMsdf(const TextFont* font, std::vector<float>* quadOut) {
     msdf_ = font; quads_ = quadOut;
   }
 
@@ -169,7 +169,7 @@ public:
 
   // The active MSDF font (for 2D math layout that needs OpenType MATH metrics,
   // constants and stretchy constructions). nullptr if text isn't MSDF-routed.
-  const MsdfFont* msdfFont() const { return msdf_; }
+  const TextFont* msdfFont() const { return msdf_; }
 
   // Draw one math glyph addressed by key = (fontId<<24)|gid at pen (penX,
   // baselineY), honoring the active clip + rotation. For math-italic atoms and
@@ -199,7 +199,7 @@ private:
   std::vector<float>& out_;
   uint32_t screenW_, screenH_;
   const Font* font_;
-  const MsdfFont* msdf_ = nullptr;
+  const TextFont* msdf_ = nullptr;
   std::vector<float>* quads_ = nullptr;
   std::vector<float>* shapes_ = nullptr;
   std::vector<ImageDraw>* images_ = nullptr;

@@ -18,7 +18,7 @@
 #include "image_layer.hh"
 #include "texture.hh"
 
-class MsdfFont;
+class TextFont;
 
 class Renderer {
 public:
@@ -49,10 +49,11 @@ public:
               const std::vector<float>& msdfQuads = {},
               const std::vector<float>& shapeVerts = {});
 
-    // Create MSDF pipeline, atlas texture and vertex buffer from an MsdfFont.
+    // Create the text pipeline, atlas texture and vertex buffer from a TextFont
+    // (MTSDF or per-size raster — see text_font.hh).
     // Must be called once after the Renderer is constructed, before any draw()
     // that passes non-empty msdfQuads.
-    void initMsdf(const MsdfFont& font);
+    void initMsdf(const TextFont& font);
     bool msdfReady() const { return msdfPipeline_ != VK_NULL_HANDLE; }
 
     // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
@@ -222,7 +223,8 @@ private:
     uint32_t            msdfAtlasW_        = 0;
     uint32_t            msdfAtlasH_        = 0;
     float               msdfPxRange_      = 4.0f;
-    float               msdfIsMtsdf_      = 0.0f;  // 1 when atlas alpha = true SDF
+    float               msdfIsMtsdf_      = 0.0f;  // 0 = MSDF, 1 = MTSDF, 2 = raster
+    VkFormat            msdfAtlasFormat_  = VK_FORMAT_R8G8B8A8_UNORM;
 
     VkBuffer            msdfVbo_[kFramesInFlight]       = {};
     VkDeviceMemory      msdfVboMemory_[kFramesInFlight] = {};
@@ -236,7 +238,8 @@ private:
     VkPipeline          msdfPipeline_      = VK_NULL_HANDLE;
 
     void createMsdfPipeline();
-    void uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h, float pxRange);
+    void uploadMsdfAtlas(const uint8_t* pixels, uint32_t w, uint32_t h,
+                         float pxRange, uint32_t channels);
     void recordMsdfDraw(VkCommandBuffer cmd, uint32_t frame);
     void cleanupMsdf();
 
