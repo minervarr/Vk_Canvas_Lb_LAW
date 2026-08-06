@@ -61,6 +61,13 @@ public:
     VkQueue          vkQueue() const { return queue_; }
     VkImage          msdfAtlasImage() const { return msdfAtlasImage_; }
     uint32_t         msdfAtlasLayers() const { return msdfAtlasLayers_; }
+    // Bumped every time the atlas IMAGE is (re)created, and therefore emptied.
+    // A consumer that wrote pixels into it has to notice that and write them
+    // again — and it cannot do so by comparing VkImage handles, because Vulkan
+    // recycles them: destroying a 2-page atlas and creating a 3-page one hands
+    // back the same handle value, the comparison says "unchanged", and every
+    // glyph baked into the old image is silently gone.
+    uint32_t         msdfAtlasGeneration() const { return msdfAtlasGen_; }
 
     bool msdfReady() const { return msdfPipeline_ != VK_NULL_HANDLE; }
 
@@ -241,6 +248,7 @@ private:
     uint32_t            msdfAtlasW_        = 0;
     uint32_t            msdfAtlasH_        = 0;
     uint32_t            msdfAtlasLayers_   = 1;   // atlas pages, as array layers
+    uint32_t            msdfAtlasGen_      = 0;   // ++ on every image (re)creation
     float               msdfPxRange_      = 4.0f;
     float               msdfIsMtsdf_      = 0.0f;  // 0 = MSDF, 1 = MTSDF, 2 = raster
     VkFormat            msdfAtlasFormat_  = VK_FORMAT_R8G8B8A8_UNORM;

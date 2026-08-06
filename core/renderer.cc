@@ -1423,6 +1423,7 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
                                      : VK_FORMAT_R8G8B8A8_UNORM;
     if (layers == 0) layers = 1;
     msdfAtlasLayers_ = layers;
+    msdfAtlasGen_++;   // a new image is an EMPTY image; see msdfAtlasGeneration()
 
     // One staging buffer for every page; the pages are contiguous and
     // page-major in the source, so layer N starts at N * pageBytes.
