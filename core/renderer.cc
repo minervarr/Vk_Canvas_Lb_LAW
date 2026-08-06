@@ -1191,7 +1191,7 @@ void Renderer::initMsdf(const TextFont& font) {
     if (!device_ || !render_pass_) return;
     // Callers may release the font's CPU atlas pixels after upload
     // (MsdfFont::releaseAtlasPixels()); an upload needs them resident.
-    if (font.atlas().empty()) {
+    if (!font.atlasOnGpu() && font.atlas().empty()) {
         LOGE("initMsdf: atlas pixels not resident (call ensureAtlasLoaded first)");
         return;
     }
@@ -1209,7 +1209,10 @@ void Renderer::initMsdf(const TextFont& font) {
     if (msdfPipeline_ != VK_NULL_HANDLE && msdfAtlasImage_ != VK_NULL_HANDLE &&
         msdfAtlasW_ == font.atlasW() && msdfAtlasH_ == font.atlasH() &&
         msdfAtlasLayers_ == pages && msdfAtlasFormat_ == wantFormat) {
-        updateMsdfAtlasPages(font);
+        // A GPU-resident atlas has nothing to upload — whatever wrote it wrote
+        // it in place. The image is already correct and already in
+        // SHADER_READ_ONLY_OPTIMAL.
+        if (!font.atlasOnGpu()) updateMsdfAtlasPages(font);
         return;
     }
 
@@ -1452,7 +1455,11 @@ void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
     vkBindBufferMemory(device_, stagingBuf, stagingMem, 0);
     void* mapped = nullptr;
     vkMapMemory(device_, stagingMem, 0, imageSize, 0, &mapped);
-    std::memcpy(mapped, rgba, static_cast<size_t>(imageSize));
+    // A GPU-resident atlas has no CPU pixels: the image is created empty and
+    // whatever owns it writes it in place. Zeroing rather than skipping the
+    // copy keeps the layout transitions below on one path.
+    if (rgba) std::memcpy(mapped, rgba, static_cast<size_t>(imageSize));
+    else      std::memset(mapped, 0, static_cast<size_t>(imageSize));
     vkUnmapMemory(device_, stagingMem);
 
     // Image

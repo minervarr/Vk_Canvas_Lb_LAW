@@ -54,6 +54,14 @@ public:
     // Must be called once after the Renderer is constructed, before any draw()
     // that passes non-empty msdfQuads.
     void initMsdf(const TextFont& font);
+    // Handles a GPU-side glyph baker needs to write the atlas itself.
+    VkDevice         vkDevice() const { return device_; }
+    VkPhysicalDevice vkPhysicalDevice() const { return physical_dev_; }
+    VkCommandPool    vkCommandPool() const { return cmd_pool_; }
+    VkQueue          vkQueue() const { return queue_; }
+    VkImage          msdfAtlasImage() const { return msdfAtlasImage_; }
+    uint32_t         msdfAtlasLayers() const { return msdfAtlasLayers_; }
+
     bool msdfReady() const { return msdfPipeline_ != VK_NULL_HANDLE; }
 
     // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
