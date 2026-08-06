@@ -1450,7 +1450,14 @@ void Renderer::createMsdfPipeline() {
 
     VkPipelineColorBlendAttachmentState cba{};
     cba.blendEnable = VK_TRUE;
-    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // PREMULTIPLIED source colour, not SRC_ALPHA. msdf_frag.slang composites
+    // the glyph in linear light and emits colour already multiplied by
+    // coverage, because fixed-function blending on this UNORM swapchain
+    // (presented as SRGB_NONLINEAR) would otherwise mix coverage in GAMMA
+    // space and render every antialiased edge too dark — light-on-dark text
+    // comes out too thin. The shader and this blend factor are one change;
+    // see the long comment in msdf_frag.slang before touching either.
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cba.colorBlendOp = VK_BLEND_OP_ADD;
     cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
