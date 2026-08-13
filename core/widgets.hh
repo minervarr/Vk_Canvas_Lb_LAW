@@ -239,7 +239,15 @@ inline constexpr TextFieldStyle kTextFieldDefault{};
 // (unchanged from before), Shift+<those> to extend/shrink the selection,
 // Ctrl+Left/Right to jump by word (Ctrl+Shift+ to extend by word), Ctrl+A to
 // select all, Ctrl+C/Ctrl+V to copy/paste through `clipboard` (no-op if
-// null). Call only when the field has focus. Returns true if `state` changed.
+// null). Call only when the field has focus — with an input method attached
+// (Android), `input.textEdited` describes *the focused field* and an unfocused
+// one calling this would adopt the other field's text.
+//
+// When input.textEdited is set, the platform's input method is the owner of
+// the buffer: its contents replace `state` wholesale and the delta path above
+// is skipped entirely. Desktop backends never set it.
+//
+// Returns true if `state` changed.
 bool textFieldHandleInput(TextFieldState& state, const FrameInput& input,
                           ClipboardIo* clipboard = nullptr);
 

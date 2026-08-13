@@ -51,6 +51,15 @@ struct FrameInput : InputSink {
   bool ctrlDown = false;
   bool shiftDown = false;
 
+  // Set when a platform input method replaced the focused field's contents
+  // this frame (see TextEditEvent). When true, `editedText`/`editedCursorByte`
+  // are authoritative and supersede typedCodepoints — the IME owns the buffer,
+  // so applying both would double-insert. Cleared by beginFrame() like every
+  // other per-frame accumulator.
+  bool textEdited = false;
+  std::string editedText;
+  size_t editedCursorByte = 0;
+
   // True if `keyCode`'s key-down arrived this frame.
   bool keyWentDown(int keyCode) const;
 
@@ -62,4 +71,5 @@ struct FrameInput : InputSink {
   void onWheel(const WheelEvent&) override;
   void onKey(const KeyEvent&) override;
   void onChar(const CharEvent&) override;
+  void onTextEdit(const TextEditEvent&) override;
 };

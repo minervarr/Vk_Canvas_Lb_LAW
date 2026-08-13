@@ -9,7 +9,9 @@
 // (platform/linux/wayland_display.cc) maps xkb keysyms into the same values.
 // Consumers compare against key::* from keys.hh, never platform constants.
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 
 enum class PointerAction { Down, Up, Move, Enter, Leave };
 
@@ -44,6 +46,26 @@ struct CharEvent {
   uint32_t codepoint = 0;
 };
 
+// Whole-buffer text replacement from a platform input method.
+//
+// CharEvent cannot express what an IME does. Composing Korean jamo into a
+// syllable, or picking a Chinese candidate over a pinyin reading, *rewrites*
+// the pending run rather than appending to it — the text that was on screen a
+// moment ago is not a prefix of the text that follows. A stream of "a character
+// was typed" events has nowhere to put that.
+//
+// So the platform reports the field's authoritative contents instead of a
+// delta, and the widget adopts them wholesale. This also means the input method
+// keeps ownership of composition state, which is the only place it can
+// correctly live: reconstructing it on our side would be writing an IME.
+//
+// Backends without an input method (Win32 WM_CHAR, Wayland xkb) never emit
+// this and keep using CharEvent.
+struct TextEditEvent {
+  std::string text;         // UTF-8, the complete new contents of the field
+  size_t cursorByte = 0;    // caret offset in bytes into `text`
+};
+
 struct InputSink {
   virtual void onPointer(const PointerEvent&) = 0;
   virtual void onWheel(const WheelEvent&) = 0;
@@ -51,5 +73,6 @@ struct InputSink {
   // Default no-op (not pure) so existing sinks that predate text entry keep
   // compiling unchanged.
   virtual void onChar(const CharEvent&) {}
+  virtual void onTextEdit(const TextEditEvent&) {}
   virtual ~InputSink() = default;
 };

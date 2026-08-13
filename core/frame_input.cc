@@ -14,6 +14,9 @@ void FrameInput::beginFrame() {
   keysWentDown.clear();
   typedChars.clear();
   typedCodepoints.clear();
+  textEdited = false;
+  editedText.clear();
+  editedCursorByte = 0;
 }
 
 void FrameInput::onPointer(const PointerEvent& e) {
@@ -56,4 +59,14 @@ void FrameInput::onChar(const CharEvent& e) {
   if (e.codepoint >= 0x20 && e.codepoint != 0x7F) {
     typedCodepoints += (char32_t)e.codepoint;
   }
+}
+
+void FrameInput::onTextEdit(const TextEditEvent& e) {
+  // Last writer wins: several of these can arrive between two frames (an IME
+  // fires one per keystroke of a composition), and only the newest describes
+  // the field as it now stands. Accumulating them would be meaningless — they
+  // are snapshots, not deltas.
+  textEdited = true;
+  editedText = e.text;
+  editedCursorByte = std::min(e.cursorByte, editedText.size());
 }

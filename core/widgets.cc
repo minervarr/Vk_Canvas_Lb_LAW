@@ -123,6 +123,19 @@ bool textFieldHandleInput(TextFieldState& state, const FrameInput& input,
     state.selectionAnchor = s;
   };
 
+  // An input method reported the field's contents outright (see TextEditEvent).
+  // Adopt them and stop: the IME owns the buffer, so it has already applied
+  // this frame's typing, deletions and composition. Running the delta path as
+  // well would apply everything twice.
+  if (input.textEdited) {
+    if (state.text == input.editedText && state.cursorByte == input.editedCursorByte)
+      return false;
+    state.text = input.editedText;
+    state.cursorByte = input.editedCursorByte;
+    state.selectionAnchor = state.cursorByte;
+    return true;
+  }
+
   for (char32_t cp : input.typedCodepoints) {
     if (hasSelection()) eraseSelection();
     std::string enc = Utf8Encode(cp);
