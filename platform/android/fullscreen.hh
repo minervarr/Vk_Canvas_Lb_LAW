@@ -86,13 +86,121 @@ inline jint flags_for(ImmersiveMode mode) {
 }
 
 // ---------------------------------------------------------------------------
+// The API 30+ path: WindowInsetsController.
+//
+// setSystemUiVisibility() (below) was deprecated in API 30 and, from
+// ANDROID 15 (API 35), THE SYSTEM IGNORES IT OUTRIGHT for apps targeting 35 or
+// newer — Android 15 enforces edge-to-edge and the legacy flags are simply not
+// consulted. Measured, not read: on a moto g06 (Android 15, targetSdk 36) the
+// legacy call below runs, raises no exception, and both bars stay on screen.
+// A no-op that reports success is the worst shape a failure can take, which is
+// why this function exists and why it returns a bool.
+//
+// Returns false if any step failed (old platform, JNI error, Java exception) —
+// the caller falls back to the legacy flags, which are still correct below 30.
+//
+// THREAD NOTE, and the reason this may still fail on a correct platform: view-
+// hierarchy calls belong to the UI thread, and a NativeActivity app runs
+// android_main() on its OWN thread. Whether hide() tolerates that is a
+// platform-version detail, not something to assume either way — so every call
+// is exception-checked and the answer is reported rather than swallowed.
+inline bool hide_system_bars_modern(android_app* app, bool sticky) {
+    JNIEnv* env = jni::env_for(app);
+    if (!env) return false;
+
+    jobject activity = app->activity->clazz;
+    jclass  act_cls  = env->GetObjectClass(activity);
+
+    jmethodID get_window = env->GetMethodID(act_cls, "getWindow", "()Landroid/view/Window;");
+    if (jni::check_exc(env, "GetMethodID(getWindow)") || !get_window) {
+        env->DeleteLocalRef(act_cls);
+        return false;
+    }
+    jobject window = env->CallObjectMethod(activity, get_window);
+    env->DeleteLocalRef(act_cls);
+    if (jni::check_exc(env, "getWindow") || !window) return false;
+
+    jclass win_cls = env->GetObjectClass(window);
+
+    // window.getInsetsController() — API 30. Absent below it, which is the
+    // ordinary "old platform" answer rather than an error.
+    jmethodID get_ctrl = env->GetMethodID(win_cls, "getInsetsController",
+                                          "()Landroid/view/WindowInsetsController;");
+    if (jni::check_exc(env, "GetMethodID(getInsetsController)") || !get_ctrl) {
+        env->DeleteLocalRef(win_cls);
+        env->DeleteLocalRef(window);
+        return false;
+    }
+    jobject controller = env->CallObjectMethod(window, get_ctrl);
+    env->DeleteLocalRef(win_cls);
+    env->DeleteLocalRef(window);
+    if (jni::check_exc(env, "getInsetsController") || !controller) return false;
+
+    // WindowInsets.Type.systemBars() — the status bar and the navigation bar
+    // together. Deliberately NOT displayCutout(): a camera hole is glass, and
+    // no inset type hides it. Avoiding it is the window's job, and the default
+    // LAYOUT_IN_DISPLAY_CUTOUT_MODE already does that for us.
+    jclass type_cls = env->FindClass("android/view/WindowInsets$Type");
+    if (jni::check_exc(env, "FindClass(WindowInsets$Type)") || !type_cls) {
+        env->DeleteLocalRef(controller);
+        return false;
+    }
+    jmethodID system_bars = env->GetStaticMethodID(type_cls, "systemBars", "()I");
+    if (jni::check_exc(env, "GetStaticMethodID(systemBars)") || !system_bars) {
+        env->DeleteLocalRef(type_cls);
+        env->DeleteLocalRef(controller);
+        return false;
+    }
+    jint bars = env->CallStaticIntMethod(type_cls, system_bars);
+    env->DeleteLocalRef(type_cls);
+    if (jni::check_exc(env, "systemBars()")) {
+        env->DeleteLocalRef(controller);
+        return false;
+    }
+
+    jclass ctrl_cls = env->GetObjectClass(controller);
+
+    // setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2): the
+    // bars come back translucent on an edge swipe and hide themselves again,
+    // which is the sticky behaviour the legacy IMMERSIVE_STICKY flag meant.
+    // Non-sticky (BEHAVIOR_DEFAULT = 1) leaves them up once revealed.
+    jmethodID set_behavior = env->GetMethodID(ctrl_cls, "setSystemBarsBehavior", "(I)V");
+    if (!jni::check_exc(env, "GetMethodID(setSystemBarsBehavior)") && set_behavior) {
+        env->CallVoidMethod(controller, set_behavior, sticky ? 2 : 1);
+        jni::check_exc(env, "setSystemBarsBehavior");
+    }
+
+    jmethodID hide = env->GetMethodID(ctrl_cls, "hide", "(I)V");
+    env->DeleteLocalRef(ctrl_cls);
+    if (jni::check_exc(env, "GetMethodID(hide)") || !hide) {
+        env->DeleteLocalRef(controller);
+        return false;
+    }
+    env->CallVoidMethod(controller, hide, bars);
+    const bool threw = jni::check_exc(env, "WindowInsetsController.hide");
+    env->DeleteLocalRef(controller);
+    return !threw;
+}
+
+// ---------------------------------------------------------------------------
 // Apply the given immersive mode. Must be called:
 //   (1) at startup (e.g. in APP_CMD_INIT_WINDOW), and
 //   (2) on every APP_CMD_GAINED_FOCUS (system clears flags on focus loss).
 // Passing kNone restores the system default.
+//
+// Tries the API 30+ controller first and only falls back to the legacy flags
+// when it is unavailable — see hide_system_bars_modern() for why the order is
+// that way round and not the other.
 // ---------------------------------------------------------------------------
 inline void enable_immersive(android_app* app, ImmersiveMode mode) {
     jint flag_bits = flags_for(mode);
+
+    const bool wantsBothHidden = (mode == ImmersiveMode::kFullImmersive ||
+                                  mode == ImmersiveMode::kFullImmersiveNonSticky);
+    if (wantsBothHidden &&
+        hide_system_bars_modern(app, mode == ImmersiveMode::kFullImmersive)) {
+        return;
+    }
 
     JNIEnv* env = jni::env_for(app);
     if (!env) return;
