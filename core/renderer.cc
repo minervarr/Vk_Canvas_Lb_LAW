@@ -997,7 +997,31 @@ void Renderer::create_swapchain() {
     // TRANSFER_SRC lets readbackLastFrame() copy a rendered image to a host
     // buffer (headless UI capture). Harmless for the windowed present path.
     ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    ci.preTransform     = caps.currentTransform;
+    // preTransform is a PROMISE, not a request. Setting it to
+    // caps.currentTransform tells the presentation engine "my images are
+    // ALREADY rotated by that much" — so it applies nothing further. On a
+    // desktop currentTransform is always IDENTITY and the distinction never
+    // surfaces; on Android it becomes ROTATE_90/180/270 the moment the device
+    // turns, and an app that keeps drawing upright then has its frame
+    // presented un-rotated onto a turned panel. Measured on a moto g06: the
+    // whole UI came out upside down and squashed across the long edge.
+    //
+    // Asking for IDENTITY hands the rotation back to the compositor, which is
+    // what an app that does not pre-rotate its own geometry must do. It costs
+    // one composition pass on some hardware — the price of not having a
+    // rotation matrix threaded through every draw call in the engine, which
+    // is the alternative and is not worth it for this app.
+    //
+    // Falls back to currentTransform where IDENTITY is not advertised, which
+    // is the only honest answer there: refusing to create a swapchain would be
+    // worse than a rotated one.
+    VkSurfaceTransformFlagBitsKHR pre_transform = caps.currentTransform;
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    LOGI("Swapchain extent=%ux%u currentExtent=%ux%u currentTransform=0x%x preTransform=0x%x",
+         width_, height_, caps.currentExtent.width, caps.currentExtent.height,
+         (unsigned)caps.currentTransform, (unsigned)pre_transform);
+    ci.preTransform     = pre_transform;
     ci.compositeAlpha   = composite_alpha;
     ci.presentMode      = present_mode;
     ci.clipped          = VK_TRUE;
