@@ -42,6 +42,16 @@ std::string get_clipboard();
 // Caller must already have validated the scheme — see Host::openUrl.
 bool open_url(const std::string& url);
 
+// Root of SHARED storage as a real path, e.g. "/storage/emulated/0". Empty if
+// the activity does not answer (which is what a consumer whose Activity does
+// not extend AppShellActivity gets); callers should fall back rather than
+// treat "" as a directory.
+//
+// NOT app_paths::stateDir(). That one is private to the app and is deleted on
+// uninstall — the right place for a cache and the wrong place for a library
+// the user believes is theirs.
+std::string external_storage_root();
+
 // ── Down-calls, collected ───────────────────────────────────────────────────
 
 // Everything Java has reported since the last drain, coalesced.

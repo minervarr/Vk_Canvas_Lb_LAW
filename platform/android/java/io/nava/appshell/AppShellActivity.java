@@ -226,6 +226,25 @@ public class AppShellActivity extends NativeActivity {
         });
     }
 
+    /**
+     * Root of SHARED storage, e.g. {@code /storage/emulated/0} — a real
+     * filesystem path, not a SAF tree URI.
+     *
+     * <p>Distinct from {@code app_paths::stateDir()}, which is the app's own
+     * private directory and is deleted on uninstall. An app that stores
+     * documents, music or photos the user considers theirs must not put them
+     * there, and must not receive them as {@code content://} URIs either —
+     * anything walking a tree with {@code std::filesystem} needs a path.
+     *
+     * <p>Reaching it requires MANAGE_EXTERNAL_STORAGE (see
+     * {@code os/storage_permission.cc}); this only says WHERE, never whether
+     * the app may write there.
+     */
+    @SuppressWarnings("unused")
+    public String externalStorageRoot() {
+        return android.os.Environment.getExternalStorageDirectory().getAbsolutePath();
+    }
+
     @SuppressWarnings("unused")
     public void openUrl(final String url) {
         // The native side has already rejected anything that is not plainly an

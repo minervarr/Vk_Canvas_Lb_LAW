@@ -139,6 +139,8 @@ std::string get_clipboard() { return call_string("getClipboard"); }
 
 bool open_url(const std::string& url) { return call_with_string("openUrl", url); }
 
+std::string external_storage_root() { return call_string("externalStorageRoot"); }
+
 bool drain(Update& out) {
     std::lock_guard<std::mutex> lock(g_pending.mu);
     if (!g_pending.hasText && !g_pending.committed &&
