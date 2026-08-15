@@ -265,6 +265,7 @@ void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
 
   // Always clip to the field — unclipped text (a long token/path) used to
   // spill out past the rounded box into whatever sat next to it.
+  const auto savedClip = c.saveClip();
   c.setClip(row.x, row.y, row.w, row.h);
   if (state.text.empty()) {
     if (!placeholder.empty())
@@ -288,7 +289,7 @@ void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
       c.rect(cursorX, row.y + row.h * 0.2f, row.h * 0.06f, row.h * 0.6f, style.cursor);
     }
   }
-  c.clearClip();
+  c.restoreClip(savedClip);
 }
 
 namespace {
@@ -517,6 +518,7 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const ScrollListStyle& style) {
   std::vector<ListRow> visible;
   c.rect(area.x, area.y, area.w, area.h, style.background, c.pad());
+  const auto savedClip = c.saveClip();
   c.setClip(area.x, area.y, area.w, area.h);
   float s = rowH * 0.42f;
   for (int i = 0; i < (int)items.size(); i++) {
@@ -562,7 +564,7 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
     c.text(item, textX, r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
     visible.push_back({r, i});
   }
-  c.clearClip();
+  c.restoreClip(savedClip);
   return visible;
 }
 
@@ -656,6 +658,7 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
 
   std::vector<TableRow> visible;
   c.rect(body.x, body.y, body.w, body.h, style.rowBg, style.radius);
+  const auto savedClip = c.saveClip();
   c.setClip(body.x, body.y, body.w, body.h);
   for (int i = 0; i < rowCount; i++) {
     float ry = body.y + i * rowH - scrollPx;
@@ -675,7 +678,7 @@ std::vector<TableRow> drawSortableTable(Canvas& c, const Rect& area,
       c.rect(r.x, r.y + r.h - 1.0f, r.w, 1.0f, style.gridLine);
     visible.push_back({r, i});
   }
-  c.clearClip();
+  c.restoreClip(savedClip);
   return visible;
 }
 

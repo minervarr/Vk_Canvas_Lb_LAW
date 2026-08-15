@@ -179,6 +179,20 @@ public:
   void setClip(float x, float y, float w, float h);
   void clearClip();
 
+  // The clip is one rectangle, not a stack, so a widget that clips its own
+  // interior and then calls clearClip() silently throws away whatever clip
+  // its caller had established — and every later draw escapes it. Save before
+  // and restore after instead: a scrolling panel built out of clipping
+  // widgets stays clipped.
+  struct ClipState { bool active; float x0, y0, x1, y1; };
+  ClipState saveClip() const {
+    return {clipActive_, clipX0_, clipY0_, clipX1_, clipY1_};
+  }
+  void restoreClip(const ClipState& s) {
+    clipActive_ = s.active;
+    clipX0_ = s.x0; clipY0_ = s.y0; clipX1_ = s.x1; clipY1_ = s.y1;
+  }
+
   // Cull every text glyph already emitted whose center lies inside `rect`, an
   // opaque occluder. All MSDF text composites in a single pass *after* all SDF
   // geometry, so draw order alone can't make a later panel hide earlier text —

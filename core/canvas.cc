@@ -349,8 +349,22 @@ void Canvas::emitRotatableRect_(float x, float y, float w, float h, Color c) {
 }
 
 void Canvas::setClip(float x, float y, float w, float h) {
+    // Intersects with whatever is already clipped rather than replacing it.
+    // Nested is the only reading that is ever right: a text field inside a
+    // scrolling panel wants "my row AND what my caller allows", and under the
+    // replacing behaviour its contents drew straight through the panel's
+    // boundary — the field's box stopped at the edge while the text in it
+    // carried on over the toolbar above.
+    float nx0 = x, ny0 = y, nx1 = x + w, ny1 = y + h;
+    if (clipActive_) {
+        nx0 = std::max(nx0, clipX0_); ny0 = std::max(ny0, clipY0_);
+        nx1 = std::min(nx1, clipX1_); ny1 = std::min(ny1, clipY1_);
+    }
     clipActive_ = true;
-    clipX0_ = x; clipY0_ = y; clipX1_ = x + w; clipY1_ = y + h;
+    clipX0_ = nx0; clipY0_ = ny0;
+    // An empty intersection must stay empty, not invert into a rect that
+    // passes everything.
+    clipX1_ = std::max(nx1, nx0); clipY1_ = std::max(ny1, ny0);
 }
 
 void Canvas::clearClip() { clipActive_ = false; }
@@ -359,11 +373,20 @@ void Canvas::occlude(float x, float y, float w, float h) {
     if (!quads_ || quads_->empty()) return;
     const float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
     std::vector<float>& q = *quads_;
-    constexpr int kFloatsPerGlyph = 48;  // 6 verts × 8 floats (pos.xy, uv, rgba)
+    // Derived from the emitter's own layout constant, not restated: this read
+    // 48 (6 verts × 8 floats) after the vertex grew a page index to 9, so it
+    // walked the buffer at the wrong stride — dropping and re-packing glyphs
+    // at arbitrary offsets, which shreds the text rather than occluding it.
+    constexpr int kVerts = 6;
+    constexpr int kStride = TextFont::FLOATS_PER_VERT;
+    constexpr int kFloatsPerGlyph = kVerts * kStride;
     size_t write = 0;
     for (size_t g = 0; g + kFloatsPerGlyph <= q.size(); g += kFloatsPerGlyph) {
         float cx = 0.0f, cy = 0.0f;       // glyph centre = mean of its 6 verts
-        for (int v = 0; v < 6; v++) { cx += q[g + v * 8]; cy += q[g + v * 8 + 1]; }
+        for (int v = 0; v < kVerts; v++) {
+            cx += q[g + (size_t)v * kStride];
+            cy += q[g + (size_t)v * kStride + 1];
+        }
         cx /= 6.0f; cy /= 6.0f;
         if (cx >= x0 && cx < x1 && cy >= y0 && cy < y1) continue;  // occluded → drop
         if (write != g) std::copy(q.begin() + g, q.begin() + g + kFloatsPerGlyph,
