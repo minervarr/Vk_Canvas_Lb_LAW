@@ -42,7 +42,27 @@ public:
     // delivers this frame's events; clearing afterwards discards exactly the
     // events the frame was about to act on, and the symptom is a UI that
     // ignores every second click rather than an obvious failure.
-    void beginFrame() { input_.beginFrame(); }
+    void beginFrame() { input_.beginFrame(); sawInput_ = false; }
+
+    // Did ANY input reach this view since the last beginFrame()?
+    //
+    // An event-driven app redraws when something happened and sleeps when
+    // nothing did, so it needs to ask that question once a frame. The obvious
+    // way is to enumerate the FrameInput fields that could have changed —
+    // pointerWentDown, wheelDelta, typedCodepoints, keysWentDown — and that is
+    // exactly the shape that breaks, silently, the day a new kind of input
+    // exists. Forgetting to extend the list is not a compile error; it is a UI
+    // that ignores one kind of input and nothing else.
+    //
+    // Measured: an input method does not produce typed codepoints at all. It
+    // rewrites the whole buffer (see AppView::onTextEditPortable), so a list
+    // that named the other four was complete and still missed every keystroke
+    // typed on a phone — the screen only caught up when the user happened to
+    // tap something.
+    //
+    // So the view answers instead. Every override below sets this, which means
+    // a callback added later is covered by having been written at all.
+    bool inputArrived() const { return sawInput_; }
 
     // Read while building the frame. Non-const so an app may consume an edge
     // it has handled (a common immediate-mode idiom) rather than having every
@@ -51,16 +71,23 @@ public:
     const FrameInput& input() const { return input_; }
 
     // ── AppView: the input half ─────────────────────────────────────────────
+    //
+    // Every one of these marks sawInput_. See inputArrived() for why that is
+    // the view's job rather than each consumer's.
     void onMouseMove(int x, int y) override {
+        sawInput_ = true;
         input_.onPointer({PointerAction::Move, (float)x, (float)y, 0});
     }
     void onMouseLeave() override {
+        sawInput_ = true;
         input_.onPointer({PointerAction::Leave, 0, 0, 0});
     }
     void onLButtonDown(int x, int y) override {
+        sawInput_ = true;
         input_.onPointer({PointerAction::Down, (float)x, (float)y, 0});
     }
     void onLButtonUp(int x, int y) override {
+        sawInput_ = true;
         input_.onPointer({PointerAction::Up, (float)x, (float)y, 0});
     }
     // A double-click is also a click. FrameInput has no double-click concept,
@@ -75,19 +102,24 @@ public:
     // either end is what keeps both conventions intact for their own
     // consumers.
     void onMouseWheel(int x, int y, int delta) override {
+        sawInput_ = true;
         input_.onWheel({(float)x, (float)y, (float)delta / 120.0f});
     }
 
     void onKeyDownPortable(int keyCode) override {
+        sawInput_ = true;
         input_.onKey({keyCode, /*down=*/true});
     }
     void onKeyUpPortable(int keyCode) override {
+        sawInput_ = true;
         input_.onKey({keyCode, /*down=*/false});
     }
     void onCharPortable(uint32_t codepoint) override {
+        sawInput_ = true;
         input_.onChar({codepoint});
     }
     void onTextEditPortable(const std::string& text, size_t cursorByte) override {
+        sawInput_ = true;
         input_.onTextEdit({text, cursorByte});
     }
 
@@ -99,4 +131,5 @@ public:
 
 private:
     FrameInput input_;
+    bool       sawInput_ = false;
 };

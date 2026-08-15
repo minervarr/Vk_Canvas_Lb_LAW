@@ -46,6 +46,12 @@ constexpr float kTouchSlopPx = 24.0f;
 // screen.
 constexpr float kWheelPerPixel = 1.0f;
 
+// The eventfd activity_bridge's waker writes to. A file-scope int rather than a
+// member because the waker is a plain function pointer with nowhere to keep a
+// `this` — see where it is installed in init(). One host per process, so there
+// is nothing to disambiguate.
+int g_wakeFd = -1;
+
 // ── Make the app's own diagnostics visible ───────────────────────────────────
 //
 // player_view.cc, the scanner and both audio backends report through printf on
@@ -149,6 +155,26 @@ bool AndroidHost::init(AppView* owner) {
         ALooper_addFd(looper, eventFd_, kLooperIdEvents, ALOOPER_EVENT_INPUT, nullptr, nullptr);
     if (looper && timerFd_ >= 0)
         ALooper_addFd(looper, timerFd_, kLooperIdTimer, ALOOPER_EVENT_INPUT, nullptr, nullptr);
+
+    // The IME's doorbell, on the SAME eventfd postAppEvent() uses — a wake-up
+    // is a wake-up, and the payload is collected from the slot either way.
+    //
+    // Without it, text typed on a phone reached the app correctly and was
+    // never drawn: pump() sleeps in ALooper_pollOnce with no timeout, and
+    // Android's UI thread putting a string into a mutex is not something the
+    // looper can see. The screen caught up only when the user touched it,
+    // because a touch IS a looper event.
+    //
+    // A plain function pointer rather than a lambda with captures, because
+    // there is one host per process and the alternative is a std::function
+    // holding a `this` that must then outlive every JNI callback.
+    activity::set_waker([] {
+        if (g_wakeFd < 0) return;
+        uint64_t one = 1;
+        ssize_t ignored = write(g_wakeFd, &one, sizeof(one));
+        (void)ignored;
+    });
+    g_wakeFd = eventFd_;
 
     // Android gives us a window when it is ready to, which is some time after
     // android_main() starts. Pump until it arrives; everything the app does

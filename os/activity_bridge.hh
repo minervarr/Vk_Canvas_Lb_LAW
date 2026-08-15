@@ -28,6 +28,19 @@ namespace activity {
 // no other way to reach it.
 void set_app(android_app* app);
 
+// Rings the host's doorbell after something has been stored below.
+//
+// Storing is not enough, and the difference is the whole reason this exists: a
+// blocked pump() is asleep in ALooper_pollOnce with no timeout, and Android's
+// UI thread dropping text into a mutex does not wake it. Measured on a phone —
+// every character typed was received, decoded and parked correctly, and the
+// screen did not change until the user touched it, because a touch is an event
+// the LOOPER knows about and an IME callback is not.
+//
+// AndroidHost installs one that writes its eventfd. Nothing is lost if none is
+// installed: the next event of any kind drains the slot as well.
+void set_waker(void (*wake)());
+
 // ── Up-calls ────────────────────────────────────────────────────────────────
 
 // Raise the IME, seeding its buffer. `cursorByte` is a BYTE offset into `text`

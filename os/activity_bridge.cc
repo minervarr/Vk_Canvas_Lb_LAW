@@ -13,6 +13,13 @@ using vce::platform::jni::check_exc;
 namespace {
 
 android_app* g_app = nullptr;
+void (*g_wake)() = nullptr;
+
+// Called at the END of every JNI entry point, after the lock is released.
+// Outside the lock deliberately: the waker writes a file descriptor, and doing
+// that while holding a mutex the app thread wants is how a wake-up turns into
+// a stall.
+void ring() { if (g_wake) g_wake(); }
 
 // The one slot every down-call writes and drain() empties. See the header for
 // why text is a slot and the rest are latches.
@@ -111,6 +118,7 @@ bool call_with_string(const char* name, const std::string& arg) {
 namespace activity {
 
 void set_app(android_app* app) { g_app = app; }
+void set_waker(void (*wake)()) { g_wake = wake; }
 
 void show_keyboard(const std::string& text, size_t cursorByte) {
     if (!g_app) return;
@@ -189,30 +197,42 @@ Java_io_nava_appshell_AppShellActivity_nativeOnTextChanged(
                                       (size_t)len, (size_t)cursorUnits, &cursorByte);
     env->ReleaseStringChars(text, u);
 
-    std::lock_guard<std::mutex> lock(g_pending.mu);
-    g_pending.hasText    = true;
-    g_pending.text       = std::move(utf8);
-    g_pending.cursorByte = cursorByte;
+    {
+        std::lock_guard<std::mutex> lock(g_pending.mu);
+        g_pending.hasText    = true;
+        g_pending.text       = std::move(utf8);
+        g_pending.cursorByte = cursorByte;
+    }
+    ring();
 }
 
 JNIEXPORT void JNICALL
 Java_io_nava_appshell_AppShellActivity_nativeOnTextCommitted(JNIEnv*, jclass) {
-    std::lock_guard<std::mutex> lock(g_pending.mu);
-    g_pending.committed = true;
+    {
+        std::lock_guard<std::mutex> lock(g_pending.mu);
+        g_pending.committed = true;
+    }
+    ring();
 }
 
 JNIEXPORT void JNICALL
 Java_io_nava_appshell_AppShellActivity_nativeOnKeyboardHidden(JNIEnv*, jclass) {
-    std::lock_guard<std::mutex> lock(g_pending.mu);
-    g_pending.dismissed = true;
+    {
+        std::lock_guard<std::mutex> lock(g_pending.mu);
+        g_pending.dismissed = true;
+    }
+    ring();
 }
 
 JNIEXPORT void JNICALL
 Java_io_nava_appshell_AppShellActivity_nativeOnImeInset(
     JNIEnv*, jclass, jint bottom) {
-    std::lock_guard<std::mutex> lock(g_pending.mu);
-    g_pending.imeInsetChanged = true;
-    g_pending.imeBottom       = bottom;
+    {
+        std::lock_guard<std::mutex> lock(g_pending.mu);
+        g_pending.imeInsetChanged = true;
+        g_pending.imeBottom       = bottom;
+    }
+    ring();
 }
 
 } // extern "C"
