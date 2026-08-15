@@ -25,7 +25,14 @@ enum class SnapEdge { Left, Right, Top, Bottom, Center };
 // answer — "this is clickable", "you can type here" — and deliberately
 // separate from vk_canvas's own CursorShape so the portable seam doesn't
 // depend on the Wayland backend's header; linux_host.cc maps between them.
-enum class CursorShape { Arrow, Hand, Text };
+//
+// Hidden is for viewing surfaces — a fullscreen picture is looked at, not
+// pointed at. It is a policy, not a shape, so it does not collapse with a
+// repeat of itself inside the hosts' "already showing" checks the way Arrow/
+// Hand/Text do; each backend answers it with its own hide mechanism
+// (Wayland's set_cursor_hidden, Win32's SetCursor(NULL)), and Android has no
+// pointer to hide. The next non-Hidden setCursor brings the pointer back.
+enum class CursorShape { Arrow, Hand, Text, Hidden };
 
 struct MonitorInfo {
     LayoutRect bounds;    // full monitor bounds, px

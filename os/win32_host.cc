@@ -223,11 +223,26 @@ public:
     }
 
     void setCursor(CursorShape shape) override {
+        // Hidden is a viewing-surface policy, not a shape: WM_SETCURSOR
+        // re-asserts the class cursor on every move, so the policy has to
+        // persist there too (see WM_SETCURSOR). cursorId_ is nulled on the way
+        // in so the "already showing" collapse below can't skip the SetCursor
+        // that brings a real shape back.
+        if (shape == CursorShape::Hidden) {
+            if (cursorHidden_) return;
+            cursorHidden_ = true;
+            cursor_       = nullptr;
+            cursorId_     = nullptr;
+            SetCursor(nullptr);
+            return;
+        }
+        cursorHidden_ = false;
         LPCWSTR id = IDC_ARROW;
         switch (shape) {
         case CursorShape::Hand: id = IDC_HAND; break;
         case CursorShape::Text: id = IDC_IBEAM; break;
         case CursorShape::Arrow: break;
+        case CursorShape::Hidden: break;   // handled above
         }
         if (id == cursorId_) return;               // already showing
         cursorId_ = id;
@@ -443,8 +458,11 @@ private:
             // Windows re-asks on every move over the client area, and the
             // window class's own hCursor would win otherwise — answering here
             // is what makes setCursor() stick. Only the client area: the
-            // frame's resize arrows are DefWindowProc's to draw.
+            // frame's resize arrows are DefWindowProc's to draw. A hidden
+            // pointer (the fullscreen art scene) must be re-hidden on every
+            // ask, the same way ArtWindow answers its own WM_SETCURSOR.
             if (LOWORD(lp) == HTCLIENT) {
+                if (cursorHidden_) { SetCursor(nullptr); return TRUE; }
                 SetCursor(cursor_ ? cursor_ : LoadCursorW(nullptr, IDC_ARROW));
                 return TRUE;
             }
@@ -560,9 +578,11 @@ private:
     bool      quit_ = false;
     // Current pointer image, re-asserted from WM_SETCURSOR. cursorId_ is kept
     // only to collapse repeat calls — LoadCursorW's shared handles are not
-    // owned, so neither field needs releasing.
-    HCURSOR   cursor_   = nullptr;
-    LPCWSTR   cursorId_ = nullptr;
+    // owned, so neither field needs releasing. cursorHidden_ is the art
+    // scene's policy and lives alongside so WM_SETCURSOR can re-answer it.
+    HCURSOR   cursor_        = nullptr;
+    LPCWSTR   cursorId_      = nullptr;
+    bool      cursorHidden_  = false;
 
     std::unique_ptr<Win32SurfaceProvider> vkSurface_;
     FileAssetReader                       assets_;

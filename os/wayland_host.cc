@@ -124,11 +124,21 @@ public:
         // Two enums on purpose: host.hh's is the portable one, WaylandDisplay's
         // belongs to the backend. This is the only place they meet.
         using WlShape = WaylandDisplay::CursorShape;
+        // Hidden is a per-surface POLICY in vk_canvas (set_cursor_hidden), not
+        // a shape — and it wins over any later set_cursor_shape (see
+        // wayland_display.cc), so every visible shape must clear it first.
+        // Matches ArtWindow's own one-time registration for its window.
+        if (shape == CursorShape::Hidden) {
+            display_->set_cursor_hidden(window_->surface(), true);
+            return;
+        }
+        display_->set_cursor_hidden(window_->surface(), false);
         WlShape want = WlShape::Arrow;
         switch (shape) {
         case CursorShape::Hand: want = WlShape::Hand; break;
         case CursorShape::Text: want = WlShape::Text; break;
         case CursorShape::Arrow: break;
+        case CursorShape::Hidden: break;   // handled above
         }
         display_->set_cursor_shape(window_->surface(), want);
     }

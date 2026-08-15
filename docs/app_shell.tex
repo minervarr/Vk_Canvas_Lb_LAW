@@ -449,7 +449,7 @@ can still draw, it should draw.
 
 \begin{lstlisting}
 enum class SnapEdge   { Left, Right, Top, Bottom, Center };
-enum class CursorShape { Arrow, Hand, Text };
+enum class CursorShape { Arrow, Hand, Text, Hidden };
 
 struct MonitorInfo { LayoutRect bounds; LayoutRect workArea; };
 struct SafeInsets  { int top = 0, bottom = 0, left = 0, right = 0; };
