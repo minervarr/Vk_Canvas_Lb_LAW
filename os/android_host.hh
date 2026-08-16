@@ -40,9 +40,15 @@ public:
     // constructor parameter rather than a constant here because naming it was
     // the LAST piece of one application's vocabulary left inside this host.
     // `fallback` is what to return when the extra is absent or empty.
+    // `requestAllFilesAccess` gates the MANAGE_EXTERNAL_STORAGE prompt:
+    // Matrix Player scans shared storage and wants it; an app whose files all
+    // live in internalDataPath does not — it would only see a Settings screen
+    // it cannot use (and, because the permission is absent from its manifest,
+    // a toggle it cannot even press).
     explicit AndroidHost(android_app* state,
                          const char* launchExtraKey = nullptr,
-                         const char* fallback       = nullptr);
+                         const char* fallback       = nullptr,
+                         bool requestAllFilesAccess = true);
     ~AndroidHost() override;
 
     // ── Host ────────────────────────────────────────────────────────────────
@@ -140,6 +146,7 @@ private:
     AppView*    owner_          = nullptr;
     const char* launchKey_      = nullptr;
     const char* launchFallback_ = nullptr;
+    bool        requestAllFilesAccess_ = true;
     int      timerId_ = 0;
 
     std::unique_ptr<AndroidSurfaceProvider> surface_;

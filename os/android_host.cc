@@ -115,8 +115,9 @@ std::unique_ptr<Host> make_host() {
 }
 
 AndroidHost::AndroidHost(android_app* state, const char* launchExtraKey,
-                         const char* fallback)
-    : state_(state), launchKey_(launchExtraKey), launchFallback_(fallback) {
+                         const char* fallback, bool requestAllFilesAccess)
+    : state_(state), launchKey_(launchExtraKey), launchFallback_(fallback),
+      requestAllFilesAccess_(requestAllFilesAccess) {
     // First thing, before any of the app's own code can print: everything
     // player_view.cc and the engine report is otherwise thrown away here.
     redirect_stdio_to_logcat();
@@ -397,6 +398,10 @@ void AndroidHost::onResume() {
 // contributed nothing but a second modal — and it is the one that literally
 // asks the listener to select a folder.
 void AndroidHost::ensureStoragePermission() {
+    if (!requestAllFilesAccess_) {
+        LOGI("storage: all-files access not requested for this app");
+        return;
+    }
     if (storageAsked_) return;
     storageAsked_ = true;
     if (has_all_files_access(state_)) {
@@ -427,7 +432,7 @@ void AndroidHost::maybeSignalHostReady() {
     // callers who happen to exist today.
     if (hostReadySignalled_ || !appReady_ || !owner_) return;
     ensureStoragePermission();
-    if (!has_all_files_access(state_)) {
+    if (requestAllFilesAccess_ && !has_all_files_access(state_)) {
         // Deferred, not skipped: the next pump() asks again, so an app whose
         // launch argument names a path is not told about it until it could
         // actually be read.
