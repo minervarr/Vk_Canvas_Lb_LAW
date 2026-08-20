@@ -31,15 +31,16 @@ int roundOrientation(float angleDeg, int prev) {
 }
 }  // namespace
 
-void Orientation::start() {
+void Orientation::start(int looperId) {
     manager_ = ASensorManager_getInstance();
     if (!manager_) { LOGE("no sensor manager"); return; }
     accel_ = ASensorManager_getDefaultSensor(manager_, ASENSOR_TYPE_ACCELEROMETER);
     if (!accel_) { LOGE("no accelerometer"); return; }
 
     ALooper* looper = ALooper_forThread();
-    queue_ = ASensorManager_createEventQueue(manager_, looper, LOOPER_ID, nullptr, nullptr);
-    LOGI("orientation sensor ready");
+    queue_ = ASensorManager_createEventQueue(manager_, looper, looperId, nullptr, nullptr);
+    looperId_ = looperId;
+    LOGI("orientation sensor ready (looperId=%d)", looperId);
 }
 
 void Orientation::enable() {

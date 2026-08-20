@@ -73,6 +73,34 @@ bool ComputeContext::init() {
         return false;
     };
     std::vector<const char*> enabled;
+
+    // Half-precision shader math. Compute kernels that are bound by groupshared
+    // bandwidth or ALU (image filters, denoisers) roughly halve their cost by
+    // keeping intermediates in fp16 while accumulating in fp32. Core in Vulkan
+    // 1.2; this device is created at 1.1, so it comes in as an extension.
+    VkPhysicalDeviceShaderFloat16Int8Features f16{};
+    f16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+    if (has_ext(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)) {
+        VkPhysicalDeviceShaderFloat16Int8Features probe{};
+        probe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+        VkPhysicalDeviceFeatures2 f2{};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &probe;
+        // Vulkan 1.1 core, but Android's libvulkan.so only exports the 1.0
+        // symbols, so it has to be resolved dynamically.
+        auto pfn_features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFeatures2"));
+        if (!pfn_features2)
+            pfn_features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFeatures2KHR"));
+        if (pfn_features2) pfn_features2(phys_, &f2);
+        if (pfn_features2 && probe.shaderFloat16) {
+            enabled.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+            f16.shaderFloat16 = VK_TRUE;
+            fp16_supported_   = true;
+        }
+    }
+
     if (has_ext(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME)) {
         enabled.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
         ahb_supported_ = true;
@@ -88,6 +116,7 @@ bool ComputeContext::init() {
     dci.pQueueCreateInfos       = &qci;
     dci.enabledExtensionCount   = static_cast<uint32_t>(enabled.size());
     dci.ppEnabledExtensionNames = enabled.empty() ? nullptr : enabled.data();
+    if (fp16_supported_) dci.pNext = &f16;
     if (vkCreateDevice(phys_, &dci, nullptr, &device_) != VK_SUCCESS) {
         LOGE("vkCreateDevice failed");
         return false;

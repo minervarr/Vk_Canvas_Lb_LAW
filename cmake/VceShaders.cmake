@@ -27,6 +27,11 @@ set(VCE_SLANGC "${_vce_slangc_default}"
 
 function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
     file(MAKE_DIRECTORY ${OUT_DIR})
+    # Depend on every .slang in the directory, not just the entry point being
+    # compiled: shaders that #include a shared source (e.g. an fp16 variant that
+    # wraps the fp32 one) would otherwise go stale whenever the included file
+    # changed, silently shipping a mismatched .spv.
+    file(GLOB _slang_sources ${SHADER_SRC_DIR}/*.slang)
     set(_spv_outputs "")
     foreach(SHADER ${ARGN})
         add_custom_command(
@@ -34,7 +39,7 @@ function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
             COMMAND ${VCE_SLANGC} ${SHADER_SRC_DIR}/${SHADER}.slang
                               -o ${OUT_DIR}/${SHADER}.spv
                               -target spirv
-            DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang
+            DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang ${_slang_sources}
             COMMENT "Compiling ${SHADER}.slang"
         )
         list(APPEND _spv_outputs ${OUT_DIR}/${SHADER}.spv)

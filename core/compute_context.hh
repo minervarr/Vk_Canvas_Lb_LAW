@@ -67,6 +67,11 @@ public:
     bool import_ahb(AHardwareBuffer* ahb, Image& out,
                     VkFormat want = VK_FORMAT_R16_UINT);
     bool ahb_import_supported() const { return ahb_supported_; }
+
+    // True when shaderFloat16 was enabled at device creation, so SPIR-V using
+    // the Float16 capability will load. Callers that ship an fp16 kernel must
+    // check this and keep an fp32 variant for devices without it.
+    bool fp16_supported() const { return fp16_supported_; }
     // Queue family the gralloc/producer "owns" imported buffers as, for
     // ownership-transfer barriers: FOREIGN if that extension is enabled, else
     // EXTERNAL.
@@ -90,6 +95,7 @@ private:
 
     // AHB-import (zero-copy input) capability, resolved at init.
     bool ahb_supported_     = false;
+    bool fp16_supported_    = false;
     bool foreign_queue_ext_ = false;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID pfn_ahb_props_ = nullptr;
 };

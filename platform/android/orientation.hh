@@ -20,10 +20,13 @@ namespace platform {
 
 class Orientation {
 public:
-    static constexpr int LOOPER_ID = 3;  // distinct from glue's MAIN(1)/INPUT(2)
+    static constexpr int DEFAULT_LOOPER_ID = 3;  // distinct from glue's MAIN(1)/INPUT(2)
 
     // Create the sensor event queue on the current (glue) thread's looper.
-    void start();
+    // `looperId` must not collide with other fds on the same looper — when
+    // using app_shell, IDs 3 and 4 are taken by the host's eventFd/timerFd,
+    // so pass 5 or higher.
+    void start(int looperId = DEFAULT_LOOPER_ID);
     void stop();
 
     // Battery: only listen while the app is in the foreground.
@@ -35,11 +38,13 @@ public:
     void handleEvents();
 
     int degrees() const { return orientation_; }
+    int looperId() const { return looperId_; }
 
 private:
     ASensorManager*    manager_ = nullptr;
     const ASensor*     accel_   = nullptr;
     ASensorEventQueue* queue_   = nullptr;
+    int   looperId_    = DEFAULT_LOOPER_ID;
 
     int   orientation_ = 0;     // snapped 0/90/180/270
     float rawAngle_    = 0.0f;  // last continuous angle (deg, [0,360))
