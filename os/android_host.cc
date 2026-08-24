@@ -457,13 +457,74 @@ int32_t AndroidHost::handleInputEvent(android_app* app, AInputEvent* event) {
     auto* self = reinterpret_cast<AndroidHost*>(app->userData);
     if (!self->owner_ || AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) return 0;
 
+    const int32_t action = AMotionEvent_getAction(event);
+    const int32_t masked  = action & AMOTION_EVENT_ACTION_MASK;
+
+    // ── The raw multi-pointer stream ────────────────────────────────────────
+    //
+    // Reported FIRST and separately from the single-pointer synthesis below,
+    // which is left exactly as it was. The two are different questions: this
+    // one is "which fingers are where", and that one is "was that a tap, a
+    // drag or a scroll". Answering the second has never needed the second
+    // finger; a pinch cannot be answered without it.
+    //
+    // ACTION_POINTER_DOWN/UP name ONE pointer, carried in the action's high
+    // bits, and MOVE names none — it is a batch covering every pointer still
+    // down. That asymmetry is why this is a switch and not one loop.
+    const int32_t idx = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                        >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+    switch (masked) {
+        case AMOTION_EVENT_ACTION_DOWN:
+        case AMOTION_EVENT_ACTION_POINTER_DOWN:
+            self->owner_->onPointerDown((int)AMotionEvent_getPointerId(event, idx),
+                                        (int)AMotionEvent_getX(event, idx),
+                                        (int)AMotionEvent_getY(event, idx));
+            break;
+        case AMOTION_EVENT_ACTION_UP:
+        case AMOTION_EVENT_ACTION_POINTER_UP:
+            self->owner_->onPointerUp((int)AMotionEvent_getPointerId(event, idx),
+                                      (int)AMotionEvent_getX(event, idx),
+                                      (int)AMotionEvent_getY(event, idx));
+            break;
+        case AMOTION_EVENT_ACTION_MOVE: {
+            const size_t n = AMotionEvent_getPointerCount(event);
+            for (size_t i = 0; i < n; ++i)
+                self->owner_->onPointerMove((int)AMotionEvent_getPointerId(event, i),
+                                            (int)AMotionEvent_getX(event, i),
+                                            (int)AMotionEvent_getY(event, i));
+            break;
+        }
+        case AMOTION_EVENT_ACTION_CANCEL: {
+            // Every live pointer is gone at once. Reported as an up for each,
+            // because an app tracking a set of fingers would otherwise strand
+            // all of them — see the note on AppView::onPointerUp.
+            const size_t n = AMotionEvent_getPointerCount(event);
+            for (size_t i = 0; i < n; ++i)
+                self->owner_->onPointerUp((int)AMotionEvent_getPointerId(event, i),
+                                          (int)AMotionEvent_getX(event, i),
+                                          (int)AMotionEvent_getY(event, i));
+            break;
+        }
+        default: break;
+    }
+
+    // ── The single-pointer synthesis, unchanged ─────────────────────────────
+    //
+    // Pointer 0 only, and deliberately: a tap or a scroll is a one-finger
+    // gesture, and feeding it a second finger's coordinates would make every
+    // existing consumer misbehave the moment a palm touched the screen.
     const float x = AMotionEvent_getX(event, 0);
     const float y = AMotionEvent_getY(event, 0);
-    switch (AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) {
+    switch (masked) {
         case AMOTION_EVENT_ACTION_DOWN:   self->onTouchDown(x, y);        return 1;
         case AMOTION_EVENT_ACTION_MOVE:   self->onTouchMove(x, y);        return 1;
         case AMOTION_EVENT_ACTION_UP:     self->onTouchUp(x, y, false);   return 1;
         case AMOTION_EVENT_ACTION_CANCEL: self->onTouchUp(x, y, true);    return 1;
+        // A second finger arriving or leaving is not a tap, a drag or a
+        // scroll, so the synthesis ignores it — but it WAS reported above, and
+        // the event is consumed either way.
+        case AMOTION_EVENT_ACTION_POINTER_DOWN:
+        case AMOTION_EVENT_ACTION_POINTER_UP:                             return 1;
         default: return 0;
     }
 }

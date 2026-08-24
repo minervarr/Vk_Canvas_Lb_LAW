@@ -245,6 +245,59 @@ public class AppShellActivity extends NativeActivity {
         return android.os.Environment.getExternalStorageDirectory().getAbsolutePath();
     }
 
+    /**
+     * The bytes this activity was launched to open, or {@code null} when it
+     * was not launched with any.
+     *
+     * <p>Native code cannot do this for itself, and the reason is not a
+     * missing binding: a file manager launches a viewer with
+     * {@code ACTION_VIEW} and a {@code content://} URI, which names a row in
+     * some other app's {@link android.content.ContentProvider}. There is no
+     * path behind it, so no {@code open()} reaches it, and the permission that
+     * lets us read it at all was granted to this Intent rather than to this
+     * process. Only a {@link android.content.ContentResolver} can resolve
+     * that, and only Java has one.
+     *
+     * <p>Distinct from {@code externalStorageRoot()} above, which answers the
+     * other half of the same problem — that one is for an app given a
+     * DIRECTORY to walk with {@code std::filesystem}, this one is for an app
+     * handed a single DOCUMENT it may not otherwise reach.
+     *
+     * <p>Read whole rather than streamed. What arrives this way is one file a
+     * user picked in a file manager, and the caller is a native app that wants
+     * to decode or parse it — a streaming seam would add a handle to own and a
+     * lifetime to get wrong for every consumer, to save nothing on the sizes
+     * this is actually used at. A consumer opening multi-gigabyte files should
+     * ask for a file descriptor instead, and that is a different method.
+     *
+     * <p>Returns {@code null}, never throws, for every failure — no data URI,
+     * a provider that has gone away, a revoked permission, an I/O error. The
+     * native side gets "nothing to show", which is a state an app must handle
+     * regardless of the reason.
+     */
+    @SuppressWarnings("unused")
+    public byte[] readIntentData() {
+        final Intent intent = getIntent();
+        if (intent == null) return null;
+        final Uri uri = intent.getData();
+        if (uri == null) return null;
+
+        java.io.InputStream in = null;
+        try {
+            in = getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(1 << 16);
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (in != null) try { in.close(); } catch (java.io.IOException ignored) {}
+        }
+    }
+
     @SuppressWarnings("unused")
     public void openUrl(final String url) {
         // The native side has already rejected anything that is not plainly an

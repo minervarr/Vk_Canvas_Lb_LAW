@@ -55,3 +55,36 @@ std::string read_string_extra(android_app* app, const char* key,
     env->DeleteLocalRef(act_cls);
     return result;
 }
+
+std::vector<uint8_t> read_intent_data_bytes(android_app* app) {
+    JNIEnv* env = env_for(app);
+    if (!env) return {};
+
+    jobject activity = app->activity->clazz;
+    jclass  act_cls  = env->GetObjectClass(activity);
+
+    // Declared on AppShellActivity. A consumer whose activity does not extend
+    // it simply has no such method: the lookup fails, the exception is
+    // cleared, and this returns empty — see the header.
+    jmethodID read = env->GetMethodID(act_cls, "readIntentData", "()[B");
+    if (check_exc(env, "GetMethodID(readIntentData)") || !read) {
+        env->DeleteLocalRef(act_cls);
+        return {};
+    }
+
+    auto bytes = static_cast<jbyteArray>(env->CallObjectMethod(activity, read));
+    bool exc = check_exc(env, "readIntentData");
+    env->DeleteLocalRef(act_cls);
+    if (exc || !bytes) return {};
+
+    const jsize n = env->GetArrayLength(bytes);
+    std::vector<uint8_t> out((size_t)(n < 0 ? 0 : n));
+    if (n > 0) {
+        // GetByteArrayRegion copies into our storage directly; no Get/Release
+        // pair to leak if something between them throws.
+        env->GetByteArrayRegion(bytes, 0, n, reinterpret_cast<jbyte*>(out.data()));
+        if (check_exc(env, "GetByteArrayRegion")) out.clear();
+    }
+    env->DeleteLocalRef(bytes);
+    return out;
+}

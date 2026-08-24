@@ -113,6 +113,36 @@ public:
     // onDragEnd, which is deliberately silent below the host's slop.
     virtual void onLButtonUp(int x, int y) {}
     virtual void onLButtonDblClk(int x, int y) {}
+
+    // ── Raw multi-pointer touch ─────────────────────────────────────────────
+    //
+    // The callbacks above are ONE pointer, because a mouse is one pointer and
+    // they were shaped by a desktop. A touch screen is not: a pinch is two
+    // fingers whose DISTANCE is the whole signal, and no amount of
+    // single-pointer history reconstructs it — the midpoint of two fingers can
+    // sit perfectly still while they separate.
+    //
+    // So these carry the pointer's IDENTITY, and are delivered raw: no slop,
+    // no tap/drag classification, no synthesis into a wheel. A host reports
+    // every pointer it sees; what a second finger MEANS is the app's question,
+    // exactly as onAppEvent's integer is.
+    //
+    // They are additive. Android keeps synthesising the single-pointer events
+    // above from pointer 0 as it always did, so an app that overrides nothing
+    // here sees no change at all. An app that wants pinch overrides these and
+    // ignores those.
+    //
+    // `pointerId` is stable for the life of one finger's contact and is reused
+    // afterwards; it is NOT an index into anything. The desktops report their
+    // single pointer as id 0 — a documented narrowing in the same spirit as
+    // registerHotkey being system-wide on Win32 and focus-local on Wayland. A
+    // mouse genuinely has one pointer; pretending otherwise would be the fake.
+    virtual void onPointerDown(int pointerId, int x, int y) {}
+    virtual void onPointerMove(int pointerId, int x, int y) {}
+    // Fires for a lifted finger AND for a cancelled one (the window losing the
+    // gesture to a system edge swipe). An app that tracks a set of live
+    // pointers must remove on both or it strands a finger that never came up.
+    virtual void onPointerUp(int pointerId, int x, int y) {}
     virtual void onMouseWheel(int x, int y, int delta) {}
 
     // A drag that has ENDED: the pointer travelled dx,dy with the button held
