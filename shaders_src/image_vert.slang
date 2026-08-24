@@ -17,7 +17,7 @@ struct VertexOutput {
   float u0;   float v0;   float u1;   float v1;
   float screenW; float screenH;
   float exposure; float toneMode; float white; float clipWarn;
-  float pad0; float pad1;
+  float whiteNits; float headroom;
 };
 
 [shader("vertex")]

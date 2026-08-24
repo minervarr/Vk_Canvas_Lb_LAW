@@ -66,4 +66,16 @@ struct ImageDraw {
   float toneMode = 0.0f;   // a ToneMode, as a float because push constants are floats
   float white    = 1.0f;   // kRolloff knee's white point, in linear units, >= 1
   float clipWarn = 0.0f;   // non-zero: stripe pixels that exceed the display range
+
+  // HDR output controls. Both are IGNORED on an SDR swapchain (the default),
+  // where these defaults also reproduce the old behaviour exactly.
+  //
+  // whiteNits: what linear 1.0 should mean in absolute luminance, used only by
+  //   the PQ target (Hdr10PQ). 203 is BT.2408 graphics white — a sane
+  //   reference for "SDR white" inside an HDR signal.
+  // headroom: how far above display white this target can actually go, in the
+  //   same linear units. Drives the clipWarn threshold, so on an HDR target
+  //   only genuinely unreachable highlights get striped. 1.0 == no headroom.
+  float whiteNits = 203.0f;
+  float headroom  = 1.0f;
 };

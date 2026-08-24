@@ -143,6 +143,71 @@ device, do not assume.
 2. Does `setColorMode(COLOR_MODE_HDR)` change the enumerated format list on Samsung? (Re-enumerate after.)
 3. Does FP16-extended exist across Samsung's driver generations, or is PQ the safe Android pick?
 
+## Status (implementation)
+
+Items 1–5 and 7 are implemented, default-off. What that means concretely:
+
+| # | Item | State |
+|---|---|---|
+| 1 | `pickTarget()` selector | done — `core/output_target.{hh,cc}`, pure, no Vulkan calls |
+| 2 | Unit test | done — `core/tests/output_target_test.cc`, wired into the Windows test list. **Run and passing** |
+| 3 | Selector wired into `create_swapchain()`; ctor flag; `hdrActive()`/`activeTarget()`/`activeEncode()`; stale comment fixed | done. The full surface-format enumeration is logged every run — that log is how the Open questions below get answered |
+| 4 | `shaders_src/output_encode.slang`; `OUTPUT_ENCODE` spec constant on the image, shape and overlay pipelines | done for vk_canvas's own shaders. **Not** done for the font engine's — see the gap below |
+| 5 | `image_frag` gates saturate/dither/clipWarn on the encode | done. The two `pad0/pad1` push floats became `whiteNits`/`headroom` (still 16 floats / 64 B, blocks verified character-identical vert↔frag) |
+| 6 | `VK_EXT_hdr_metadata` | **not done** |
+| 7 | `readbackLastFrame` SDR guard | done — returns false + logs under an HDR swapchain; `capture/capture.cc` documents the pin |
+| 8 | Consumer contract | documented in the `Renderer` ctor comment and §Platform reality |
+
+### The remaining gap: submodule shaders
+
+`msdf_frag.slang` and `composite_frag.slang` live in `first_party/vulkan_font_engine`
+and each hard-code their own sRGB encode (msdf's is load-bearing — it is the
+linear-light coverage blend). They do **not** declare `OUTPUT_ENCODE`, so under
+an HDR target **MSDF text and the Android camera composite will be encoded
+wrongly** (sRGB numbers written into a linear/PQ surface — washed out). Fixing
+it means giving the font engine the same shared encode header, which is a
+change in that repo; `#include`-ing across the two `shaders_src/` trees would
+invert the dependency direction (the font engine must not depend on vk_canvas).
+
+Until then: an HDR consumer whose UI is images + shapes is correct; one that
+draws MSDF text over an HDR swapchain is not.
+
+### Known limitation: PQ and alpha blending
+
+Under `Hdr10PQ` the fragment stages emit PQ code values, and the pipelines blend
+them with fixed-function factors — the shape pipeline uses
+`SRC_ALPHA / ONE_MINUS_SRC_ALPHA`. PQ is a steep non-linearity, so mixing two
+code values by a coverage weight is not the same as mixing the luminances they
+stand for: antialiased edges and translucent UI come out visibly wrong, in a way
+that reads as bad antialiasing rather than as bad colour.
+
+Under `ExtendedLinearScrgb` the same blend operates on *linear light*, which is
+strictly more correct than the SDR path has ever been.
+
+That asymmetry is the recommendation: **prefer `ExtendedLinearScrgb`; treat
+`Hdr10PQ` as the fallback for devices that expose nothing else.** Fixing PQ
+properly means blending in a linear intermediate and encoding once at the end —
+a separate pass, deliberately out of scope here.
+
+(This is the same class of problem as the long gamma-correct-coverage comment in
+`msdf_frag.slang`, and it has the same real answer: composite linear, encode last.)
+
+### What has NOT been verified
+
+No shader was compiled — `slangc` is not installed on the machine this landed
+from, so `output_encode.slang` and its four dependents are **unbuilt and
+unrun**. Nothing has been on a panel.
+
+What *is* checked: the C++ all syntax-checks, and `output_target_test` passes,
+now including golden ST.2084 values against the PQ constants
+(100 nits → 0.508078, 1000 → 0.751827, 10000 → 1.0) plus monotonicity over the
+full range. That tests the PQ **math**, on the C++ side, where `pqEncode()` in
+`core/output_target.cc` is the authority; `output_encode.slang` mirrors it by
+inspection and is still untested as a shader.
+
+Treat items 4 and 5 as written-but-untested until a build machine (and then an
+HDR display) says otherwise.
+
 ## Rollout order (party rules)
 
 1. Land items 1–7 here, default-off, via `git_wrapper` from inside this repo.

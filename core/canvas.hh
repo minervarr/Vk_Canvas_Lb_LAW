@@ -105,8 +105,31 @@ public:
     toneWhite_    = white;
     toneClipWarn_ = clipWarn ? 1.0f : 0.0f;
   }
+  // Resets the tone controls AND the HDR controls (whiteNits/headroom) to
+  // their defaults — the name says "tone", but this is the full reset for
+  // everything setImageTone()/setImageHdr() touch, so a later image() call
+  // cannot inherit either from an earlier one.
   void clearImageTone() {
     toneExposure_ = 1.0f; toneMode_ = 0.0f; toneWhite_ = 1.0f; toneClipWarn_ = 0.0f;
+    toneWhiteNits_ = 203.0f; toneHeadroom_ = 1.0f;
+  }
+
+  // HDR output controls for subsequent image() calls. Both are ignored on an
+  // SDR swapchain (the default), where these defaults are also the old
+  // behaviour exactly — an SDR consumer never needs to call this.
+  //
+  // whiteNits: what linear 1.0 means in absolute luminance; used only by the
+  //   PQ target. 203 is BT.2408 graphics white.
+  // headroom: how far above display white this target can actually reach, in
+  //   the same linear units the tone controls use. Only affects where clipWarn
+  //   starts striping, so an HDR consumer stops getting false clip warnings on
+  //   highlights the panel can genuinely show.
+  //
+  // Ask the Renderer what it actually got (hdrActive()/activeTarget()) before
+  // deciding these — an HDR request can silently fall back to SDR.
+  void setImageHdr(float whiteNits, float headroom) {
+    toneWhiteNits_ = whiteNits;
+    toneHeadroom_  = headroom;
   }
 
   // Measure text width in pixels at the given cap-height size.
@@ -252,6 +275,8 @@ private:
   float toneMode_     = 0.0f;
   float toneWhite_    = 1.0f;
   float toneClipWarn_ = 0.0f;
+  float toneWhiteNits_ = 203.0f;
+  float toneHeadroom_  = 1.0f;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
   float contentW_, contentH_;
 

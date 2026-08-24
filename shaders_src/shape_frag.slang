@@ -1,3 +1,5 @@
+#include "output_encode.slang"
+
 // SDF shape pipeline, fragment stage: evaluates the shape's analytic signed
 // distance at this pixel and converts it to coverage — the same idea as the
 // MSDF text pipeline, but with closed-form distance functions instead of a
@@ -55,5 +57,8 @@ float4 main(float4 color : COLOR0, float4 d0 : TEXCOORD0, float4 d1 : TEXCOORD1,
   // where fwidth(d) == 1).
   float w = max(fwidth(d), 1e-6);
   float cov = clamp(0.5 - d / w, 0.0, 1.0);
-  return float4(color.rgb, color.a * cov);
+  // color.rgb is an authored display-referred sRGB number. Written raw into a
+  // linear/PQ surface it would wash out (the camera bug, from the other side),
+  // so it goes through the target's encode. Identity on the SDR target.
+  return float4(encodeUiColor(color.rgb), color.a * cov);
 }

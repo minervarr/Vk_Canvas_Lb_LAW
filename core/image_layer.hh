@@ -5,6 +5,7 @@
 #include <vector>
 #include "platform.hh"
 #include "texture.hh"
+#include "output_target.hh"
 
 // ImageLayer: uploads app-supplied RGBA pixel buffers as sampled textures and
 // draws them as textured quads (album art, icons) — the raster counterpart to
@@ -19,7 +20,8 @@ public:
     // by the time this is called.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
-              VkCommandPool cmdPool, VkQueue queue);
+              VkCommandPool cmdPool, VkQueue queue,
+              OutputEncode encode = OutputEncode::Srgb);
     void cleanup();
 
     bool ready() const { return pipeline_ != VK_NULL_HANDLE; }

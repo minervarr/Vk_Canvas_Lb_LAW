@@ -107,6 +107,13 @@ int capture_main(int argc, char** argv,
 
         sc.render(renderer);
 
+        // Capture is pinned to the SDR output target, and the Renderer this
+        // runner builds never requests otherwise. readbackLastFrame() refuses
+        // under an HDR swapchain on purpose: its contract is tightly packed
+        // RGBA8, which an FP16/10-bit source is not, and 8-bit PNG could not
+        // represent the luminance even after a conversion. Capturing HDR UI
+        // needs a different container and a documented tone-map, not a wider
+        // readback. See USAGE_hdr_output.md.
         uint32_t w = 0, h = 0;
         if (!renderer.readbackLastFrame(rgba, w, h)) {
             std::fprintf(stderr, "  FAIL (readback) %s\n", sc.path.c_str());

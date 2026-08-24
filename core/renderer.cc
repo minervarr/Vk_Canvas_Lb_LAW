@@ -16,9 +16,11 @@ static inline int64_t now_ns() {
 #define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
 
 Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
-                   uint32_t desiredSwapchainImages)
+                   uint32_t desiredSwapchainImages,
+                   OutputTarget requestedOutput)
     : surface_provider_(surface), assets_(assets),
-      desired_swapchain_images_(desiredSwapchainImages) {
+      desired_swapchain_images_(desiredSwapchainImages),
+      requested_output_(requestedOutput) {
     VkExtent2D ext = surface_provider_.extent();
     width_  = ext.width;
     height_ = ext.height;
@@ -26,13 +28,16 @@ Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
     create_surface();
     pick_physical_device();
     create_logical_device();
+    resolve_output_target();
     create_swapchain();
     create_render_pass();
     create_framebuffers();
     create_command_buffers();
     create_sync_objects();
-    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_);
-    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_);
+    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_,
+                  output_.encode);
+    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_,
+                      output_.encode);
     initShapes();
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
@@ -217,6 +222,11 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].module = frag;
     shaderStages[1].pName = "main";
+    // NOTE: composite_frag.slang lives in the font-engine submodule and does
+    // not yet declare OUTPUT_ENCODE, so this pipeline is NOT specialized. It
+    // only carries the Android camera composite, which is SDR by definition —
+    // but see USAGE_hdr_output.md's remaining-work note before using it under
+    // an HDR target.
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -681,6 +691,18 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 bool Renderer::readbackLastFrame(std::vector<uint8_t>& rgba_out,
                                  uint32_t& out_w, uint32_t& out_h) {
     if (last_drawn_image_index_ >= swapchain_images_.size()) return false;
+
+    // The contract is tightly packed RGBA8, PNG-ready with no swizzle, which
+    // only holds for the SDR 8-bit target. Under an HDR swapchain the source
+    // is FP16 or 10-bit-packed and the copy below would produce garbage — and
+    // a PNG could not represent the luminance anyway. Capture pins SDR.
+    if (output_.hdr) {
+        LOGE("readbackLastFrame: unsupported under an HDR swapchain (target=%s, fmt=%d) — "
+             "the PNG path requires the SDR 8-bit target",
+             outputTargetName(output_.target), swapchain_format_);
+        return false;
+    }
+
     VkImage image = swapchain_images_[last_drawn_image_index_];
 
     // All draw/present work must be finished before we touch the image.
@@ -933,16 +955,61 @@ void Renderer::create_logical_device() {
 #endif
 }
 
+void Renderer::resolve_output_target() {
+    // Output target: what surface we present into. SDR (the default) pins
+    // 8-bit sRGB, which is what an SDR consumer must have — a camera preview
+    // stream is SDR, and presenting its HLG-encoded pixels into the only
+    // 10-bit colorspace one phone exposed (BT2020 *linear*) made the preview
+    // wash out, because the display read non-linear data as linear. HDR is
+    // opt-in per consumer and resolved against what this surface actually
+    // advertises; see output_target.hh and USAGE_hdr_output.md.
+    //
+    // Resolved EXACTLY ONCE, from the constructor, before the first
+    // create_swapchain(). The design is deliberately "one target per process":
+    // the render pass and every graphics pipeline bake this in (the render
+    // pass from swapchain_format_, the pipelines from output_.encode as the
+    // OUTPUT_ENCODE specialization constant), and recreate_swapchain() rebuilds
+    // neither. Re-resolving on resize would therefore leave the pipelines
+    // encoding for a target the swapchain no longer uses — silently wrong
+    // colour, not a validation error. If a runtime target switch is ever
+    // wanted, it has to tear down and rebuild the render pass and all
+    // pipelines, and this guard is where that decision starts.
+    if (output_resolved_) return;
+    output_resolved_ = true;
+
+    uint32_t fmt_count = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(fmt_count);
+    if (fmt_count)
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, formats.data());
+
+    // Log the FULL enumeration, once per process. We do not yet know what real
+    // drivers expose (Samsung/Pixel/Windows ICDs all differ) and this log is
+    // how we find out — do not trim it without a device session to replace it.
+    LOGI("Swapchain: surface advertises %u format/colorspace pairs%s", fmt_count,
+         ext_swapchain_colorspace_ ? "" : " (VK_EXT_swapchain_colorspace ABSENT)");
+    for (uint32_t i = 0; i < fmt_count; ++i)
+        LOGI("  [%u] format=%d colorspace=%d", i, formats[i].format, formats[i].colorSpace);
+
+    output_ = pickTarget(formats, ext_swapchain_colorspace_, requested_output_);
+    swapchain_format_     = output_.format;
+    swapchain_colorspace_ = output_.colorspace;
+
+    if (output_.fellBack)
+        LOGE("Swapchain: %s requested but unsupported here — falling back to SDR 8-bit sRGB",
+             outputTargetName(requested_output_));
+    if (output_.degraded)
+        LOGE("Swapchain: %s resolved to a PASSTHROUGH colorspace — the compositor will NOT "
+             "interpret our encoding; correct output depends on the panel already being in "
+             "that mode", outputTargetName(output_.target));
+    LOGI("Swapchain: target=%s encode=%s fmt=%d colorspace=%d hdr=%d",
+         outputTargetName(output_.target), outputEncodeName(output_.encode),
+         swapchain_format_, swapchain_colorspace_, output_.hdr ? 1 : 0);
+}
+
 void Renderer::create_swapchain() {
-    // Preview is presented in SDR. The camera's preview stream is an SDR output
-    // (the HLG/10-bit path is used only for the video encoder), so an 8-bit sRGB
-    // swapchain shows correct, un-washed colors. Presenting HLG-encoded pixels to
-    // the only 10-bit colorspace this panel exposes (BT2020 *linear*) made the
-    // preview look washed out — the display read non-linear data as linear.
-    swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
-    swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    swapchain_hdr_        = false;
-    LOGI("Swapchain: SDR 8-bit (fmt=%d)", swapchain_format_);
+    // swapchain_format_/_colorspace_ were fixed by resolve_output_target() in
+    // the constructor and deliberately do not move across a resize — see there.
 
     // Present mode: prefer MAILBOX over FIFO. With FIFO the present queue is a
     // hard line — vkQueuePresentKHR/acquire block until the compositor releases an
@@ -1846,6 +1913,10 @@ void Renderer::initShapes() {
                  VK_SHADER_STAGE_VERTEX_BIT,   vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                  VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
+    // Bake the swapchain's output encoding in (OUTPUT_ENCODE, see
+    // shaders_src/output_encode.slang). Must outlive the create call below.
+    OutputEncodeSpec encodeSpec(output_.encode);
+    stages[1].pSpecializationInfo = encodeSpec.get();
 
     VkVertexInputBindingDescription bind{0, kShapeFloatsPerVert * sizeof(float),
                                           VK_VERTEX_INPUT_RATE_VERTEX};

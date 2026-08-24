@@ -17,6 +17,7 @@
 #include "overlay.hh"
 #include "image_layer.hh"
 #include "texture.hh"
+#include "output_target.hh"
 
 class TextFont;
 
@@ -26,8 +27,23 @@ public:
     // to the surface's min/max). The default 4 exists for Android, where the
     // compositor can hold an image ~60ms mid-hitch (see create_swapchain());
     // desktop callers on MAILBOX can pass 3 and save one full-screen image.
+    //
+    // requestedOutput: what kind of surface to present into. The default
+    // SdrSrgb is bit-identical to the pre-HDR behavior. An HDR request is
+    // resolved against what the surface actually enumerates and silently
+    // degrades to the SDR pin when unsupported — ask hdrActive() what you
+    // got, never assume. See USAGE_hdr_output.md, and note the consumer-side
+    // contract there: Android needs Window.setColorMode(COLOR_MODE_HDR) from
+    // the app's Activity, desktop needs OS HDR enabled, or the HDR formats
+    // are never advertised in the first place.
     Renderer(SurfaceProvider& surface, AssetReader& assets,
-             uint32_t desiredSwapchainImages = 4);
+             uint32_t desiredSwapchainImages = 4,
+             OutputTarget requestedOutput = OutputTarget::SdrSrgb);
+
+    // What we actually got, after capability resolution — not what was asked.
+    bool         hdrActive()    const { return output_.hdr; }
+    OutputTarget activeTarget() const { return output_.target; }
+    OutputEncode activeEncode() const { return output_.encode; }
     ~Renderer();
 
     // Composite, in order: the camera frame (if any); background textured
@@ -152,12 +168,17 @@ private:
     VkQueue          queue_          = VK_NULL_HANDLE;
     VkSwapchainKHR   swapchain_      = VK_NULL_HANDLE;
 
-    // Swapchain pixel format/colorspace — resolved at create_swapchain(): 10-bit
-    // HDR (A2B10G10R10 + an HDR colorspace) when the surface supports it, else
-    // the 8-bit SDR default. Shared by the render pass and framebuffer views.
+    // Swapchain pixel format/colorspace — resolved at create_swapchain() by
+    // pickTarget() (output_target.hh) from the ctor's requested target and the
+    // surface's own format enumeration. Falls back to the 8-bit SDR pin
+    // whenever the request can't be honored. Shared by the render pass and
+    // framebuffer views; output_.encode is also baked into every pipeline as
+    // the OUTPUT_ENCODE specialization constant.
+    OutputTarget     requested_output_ = OutputTarget::SdrSrgb;
+    OutputSelection  output_{};
+    bool             output_resolved_ = false;  // resolve_output_target() ran
     VkFormat         swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
     VkColorSpaceKHR  swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    bool             swapchain_hdr_        = false;
     bool             ext_swapchain_colorspace_ = false;  // instance ext enabled
 
     VkRenderPass                 render_pass_ = VK_NULL_HANDLE;
@@ -309,6 +330,9 @@ private:
     void create_surface();
     void pick_physical_device();
     void create_logical_device();
+    // Resolves the output target once, from the constructor, before the first
+    // create_swapchain(). See the definition for why it must not re-run.
+    void resolve_output_target();
     void create_swapchain();
     void create_render_pass();
     void create_framebuffers();

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include "platform.hh"
+#include "output_target.hh"
 
 // ---------------------------------------------------------------------------
 // OverlayRasterizer: renders a Canvas's curve records (20-float Bézier records,
@@ -42,7 +43,8 @@ public:
     // records) pay nothing for the compute rasterizer they don't use.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
-              uint32_t width, uint32_t height);
+              uint32_t width, uint32_t height,
+              OutputEncode encode = OutputEncode::Srgb);
     void cleanup();
 
     // Recreates the size-dependent resources (output image, tile/row buffers)
@@ -70,6 +72,11 @@ public:
     void recordComposite(VkCommandBuffer cmd, int rotation_deg);
 
 private:
+    // The swapchain's output encoding, baked into the overlay pipeline as the
+    // OUTPUT_ENCODE specialization constant at init(). Implementation detail:
+    // callers ask the Renderer (activeEncode()), not this.
+    OutputEncode encode_ = OutputEncode::Srgb;
+
     VkDevice         device_         = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     AssetReader*     assets_         = nullptr;

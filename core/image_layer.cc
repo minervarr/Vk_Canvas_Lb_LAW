@@ -39,7 +39,8 @@ VkShaderModule ImageLayer::loadShader(const char* path) {
 
 void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                        AssetReader& assets, VkRenderPass renderPass,
-                       VkCommandPool cmdPool, VkQueue queue) {
+                       VkCommandPool cmdPool, VkQueue queue,
+                       OutputEncode encode) {
     device_         = device;
     physicalDevice_ = physicalDevice;
     assets_         = &assets;
@@ -74,7 +75,7 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
     // dstX,Y,W,H, u0,v0,u1,v1, screenW,H  (vertex)
-    // exposure, toneMode, white, clipWarn (fragment), + 2 pad
+    // exposure, toneMode, white, clipWarn, whiteNits, headroom (fragment)
     // 64 bytes, half of the 128 Vulkan guarantees.
     pcRange.size       = sizeof(float) * 16;
 
@@ -95,6 +96,11 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module = vm; stages[0].pName = "main";
     stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fm; stages[1].pName = "main";
+    // Bake the swapchain's output encoding into the pipeline (OUTPUT_ENCODE in
+    // shaders_src/output_encode.slang). Fixed for the pipeline's lifetime, so
+    // this costs nothing per fragment. Must outlive the create call below.
+    OutputEncodeSpec encodeSpec(encode);
+    stages[1].pSpecializationInfo = encodeSpec.get();
 
     VkPipelineVertexInputStateCreateInfo   vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -481,7 +487,7 @@ void ImageLayer::recordComposite(VkCommandBuffer cmd, const std::vector<ImageDra
         float pc[16] = {d.x, d.y, d.w, d.h, d.u0, d.v0, d.u1, d.v1,
                         (float)screenW, (float)screenH,
                         d.exposure, d.toneMode, d.white, d.clipWarn,
-                        0.0f, 0.0f};
+                        d.whiteNits, d.headroom};
         vkCmdPushConstants(cmd, pipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(pc), pc);
