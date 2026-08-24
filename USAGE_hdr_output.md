@@ -137,11 +137,31 @@ device, do not assume.
   params asserted in the unit test.
 - Same honesty rules as always: claims limited to what was actually run.
 
-## Open questions (need one real device session each)
+## Open questions
 
-1. What does an S23 Ultra's Android Vulkan driver actually enumerate? (Item 3's log answers.)
-2. Does `setColorMode(COLOR_MODE_HDR)` change the enumerated format list on Samsung? (Re-enumerate after.)
-3. Does FP16-extended exist across Samsung's driver generations, or is PQ the safe Android pick?
+**1. What does an S23 Ultra's Android Vulkan driver enumerate? — ANSWERED.**
+68 format/colorspace pairs. `R16G16B16A16_SFLOAT` + `EXTENDED_SRGB_LINEAR_EXT`
+(format 97, colorspace 1000104002) is present and is what `pickTarget()` takes.
+`A2B10G10R10_UNORM_PACK32` + `HDR10_ST2084` is present too, so both HDR tables
+have a real candidate on this device.
+
+**2. Does `setColorMode(COLOR_MODE_HDR)` change the enumerated list on Samsung?
+— ANSWERED: NO.** Measured directly by flipping the consumer's opt-in
+meta-data off and relaunching: with the colour mode **not** requested the
+driver still advertises the same 68 pairs, still selects format 97 +
+1000104002, and still reports `hdr=1`. So on this device the format list is a
+property of the surface, not of the window's colour mode.
+
+That is worth stating plainly rather than burying: **the `setColorMode` call is
+not what makes format selection work here.** It is retained because it is what
+tells the *compositor* to treat the surface as HDR — which is a separate
+question from what the driver will enumerate, and one this experiment does not
+answer. Do not conclude from this that the call is unnecessary; conclude that
+format enumeration is not the evidence for it.
+
+**3. Does FP16-extended exist across Samsung's driver generations? — STILL
+OPEN.** One device (SM-S918B, Android 16 / API 36) says yes. One device is not
+a generation sweep, and nothing here justifies a claim about Samsung at large.
 
 ## Status (implementation)
 
