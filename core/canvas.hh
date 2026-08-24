@@ -82,6 +82,33 @@ public:
   // in the order: background images -> vector overlay -> foreground images.
   void useImagesFg(std::vector<ImageDraw>* out) { imagesFg_ = out; }
 
+  // Tone controls applied to every subsequent image()/imageFg() draw.
+  //
+  // A state-setter rather than four more parameters on image(), which already
+  // carries four defaulted floats -- eight trailing defaults would make every
+  // call site a row of unlabelled numbers. This mirrors setClip()/clearClip(),
+  // the idiom this class already uses for "applies until changed".
+  //
+  // The default state is kPassthrough with unit exposure, which is exactly what
+  // this engine did before tone mapping existed, so a caller that never touches
+  // this sees no difference at all.
+  //
+  //   exposure : LINEAR gain, already exp2(EV). The shader does no pow().
+  //   mode     : see ToneMode. kClip and kRolloff treat the texture as linear
+  //              light and encode sRGB on output; kPassthrough does neither.
+  //   white    : kRolloff's knee white point, in linear units, >= 1. At 1.0 the
+  //              curve is an exact identity, which is what an SDR image wants.
+  //   clipWarn : stripe pixels that exceed the display range at this exposure.
+  void setImageTone(float exposure, ToneMode mode, float white, bool clipWarn) {
+    toneExposure_ = exposure;
+    toneMode_     = static_cast<float>(mode);
+    toneWhite_    = white;
+    toneClipWarn_ = clipWarn ? 1.0f : 0.0f;
+  }
+  void clearImageTone() {
+    toneExposure_ = 1.0f; toneMode_ = 0.0f; toneWhite_ = 1.0f; toneClipWarn_ = 0.0f;
+  }
+
   // Measure text width in pixels at the given cap-height size.
   float textWidth(std::string_view str, float size) const;
 
@@ -218,6 +245,13 @@ private:
   std::vector<float>* shapes_ = nullptr;
   std::vector<ImageDraw>* images_ = nullptr;
   std::vector<ImageDraw>* imagesFg_ = nullptr;
+
+  // Defaults chosen so an untouched Canvas emits exactly the ImageDraw it
+  // always did. See setImageTone().
+  float toneExposure_ = 1.0f;
+  float toneMode_     = 0.0f;
+  float toneWhite_    = 1.0f;
+  float toneClipWarn_ = 0.0f;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
   float contentW_, contentH_;
 

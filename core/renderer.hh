@@ -75,8 +75,9 @@ public:
     // Canvas::image() draws. See ImageLayer::create_texture for details
     // (incl. the mips flag — pass false for textures never minified).
     TextureHandle create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                 bool mips = true) {
-        return image_layer_.create_texture(rgba, w, h, mips);
+                                 bool mips = true,
+                                 TextureFormat fmt = TextureFormat::RGBA8_UNORM) {
+        return image_layer_.create_texture(rgba, w, h, mips, fmt);
     }
     void destroy_texture(TextureHandle handle) { image_layer_.destroy_texture(handle); }
 

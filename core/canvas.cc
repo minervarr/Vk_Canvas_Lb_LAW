@@ -121,6 +121,8 @@ void Canvas::image(TextureHandle tex, float x, float y, float w, float h,
   d.tex = tex;
   d.x = x; d.y = y; d.w = w; d.h = h;
   d.u0 = u0; d.v0 = v0; d.u1 = u1; d.v1 = v1;
+  d.exposure = toneExposure_; d.toneMode = toneMode_;
+  d.white    = toneWhite_;    d.clipWarn = toneClipWarn_;
   if (clipActive_) {
     d.hasClip = true;
     d.clipX = clipX0_; d.clipY = clipY0_;
@@ -136,6 +138,8 @@ void Canvas::imageFg(TextureHandle tex, float x, float y, float w, float h,
   d.tex = tex;
   d.x = x; d.y = y; d.w = w; d.h = h;
   d.u0 = u0; d.v0 = v0; d.u1 = u1; d.v1 = v1;
+  d.exposure = toneExposure_; d.toneMode = toneMode_;
+  d.white    = toneWhite_;    d.clipWarn = toneClipWarn_;
   if (clipActive_) {
     d.hasClip = true;
     d.clipX = clipX0_; d.clipY = clipY0_;

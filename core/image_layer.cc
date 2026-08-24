@@ -66,10 +66,17 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     pci.maxSets       = kMaxTextures;
     vkCreateDescriptorPool(device_, &pci, nullptr, &descPool_);
 
+    // ONE range covering both stages rather than two ranges sharing an offset:
+    // the shaders declare a single push block each and Slang lays it out by
+    // declaration order, so the C++ side must present it as one contiguous
+    // thing to both stages or the offsets disagree.
     VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
-    pcRange.size       = sizeof(float) * 10;  // dstX,Y,W,H, u0,v0,u1,v1, screenW,H
+    // dstX,Y,W,H, u0,v0,u1,v1, screenW,H  (vertex)
+    // exposure, toneMode, white, clipWarn (fragment), + 2 pad
+    // 64 bytes, half of the 128 Vulkan guarantees.
+    pcRange.size       = sizeof(float) * 16;
 
     VkPipelineLayoutCreateInfo pli{};
     pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -134,9 +141,37 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
 }
 
 TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                          bool mips) {
+                                          bool mips, TextureFormat fmt) {
     if (!rgba || w == 0 || h == 0) return kInvalidTexture;
-    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * 4;
+
+    // One place decides the VkFormat, used by BOTH the image and its view
+    // below. They used to be two independent literals that happened to agree
+    // -- a hazard that only surfaces much later, as a validation error.
+    const VkFormat vkfmt = (fmt == TextureFormat::RGBA32F) ? VK_FORMAT_R32G32B32A32_SFLOAT
+                         : (fmt == TextureFormat::RGBA16F) ? VK_FORMAT_R16G16B16A16_SFLOAT
+                                                           : VK_FORMAT_R8G8B8A8_UNORM;
+
+    // The first vkGetPhysicalDeviceFormatProperties call in this engine.
+    // R8G8B8A8_UNORM is mandated by Vulkan, so nothing needed asking before;
+    // the float formats are not equally guaranteed. R32G32B32A32_SFLOAT in
+    // particular commonly lacks linear filtering, and sampling it with a
+    // LINEAR sampler anyway is undefined behaviour, not a soft failure.
+    VkFormatProperties fprops{};
+    vkGetPhysicalDeviceFormatProperties(physicalDevice_, vkfmt, &fprops);
+    const VkFormatFeatureFlags feats = fprops.optimalTilingFeatures;
+    if (!(feats & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ||
+        !(feats & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+        LOGE("ImageLayer: format %d not sampleable with linear filtering here", (int)vkfmt);
+        return kInvalidTexture;   // the caller degrades -- see TextureFormat
+    }
+    // Mip generation is a vkCmdBlitImage chain, which needs its own features.
+    // Silently dropping to a single level beats refusing the upload.
+    if (mips && (!(feats & VK_FORMAT_FEATURE_BLIT_SRC_BIT) ||
+                 !(feats & VK_FORMAT_FEATURE_BLIT_DST_BIT))) {
+        LOGI("ImageLayer: format %d cannot blit; uploading without mips", (int)vkfmt);
+        mips = false;
+    }
+    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * bytes_per_pixel(fmt);
 
     // Staging buffer (host-visible) holding the source pixels.
     VkBuffer staging = VK_NULL_HANDLE;
@@ -180,7 +215,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     VkImageCreateInfo imgInfo{};
     imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType     = VK_IMAGE_TYPE_2D;
-    imgInfo.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.format        = vkfmt;
     imgInfo.extent        = {w, h, 1};
     imgInfo.mipLevels     = mipLevels;
     imgInfo.arrayLayers   = 1;
@@ -208,7 +243,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     viewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image            = rec.image;
     viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format           = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format           = vkfmt;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     vkCreateImageView(device_, &viewInfo, nullptr, &rec.view);
 
@@ -441,9 +476,15 @@ void ImageLayer::recordComposite(VkCommandBuffer cmd, const std::vector<ImageDra
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
                                 0, 1, &it->second.descSet, 0, nullptr);
 
-        float pc[10] = {d.x, d.y, d.w, d.h, d.u0, d.v0, d.u1, d.v1,
-                        (float)screenW, (float)screenH};
-        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), pc);
+        // Order and count must match the cbuffer PC block in BOTH
+        // image_vert.slang and image_frag.slang. See the comment there.
+        float pc[16] = {d.x, d.y, d.w, d.h, d.u0, d.v0, d.u1, d.v1,
+                        (float)screenW, (float)screenH,
+                        d.exposure, d.toneMode, d.white, d.clipWarn,
+                        0.0f, 0.0f};
+        vkCmdPushConstants(cmd, pipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(pc), pc);
         vkCmdDraw(cmd, 4, 1, 0, 0);
     }
 }

@@ -1,17 +1,23 @@
-// Draws one textured quad (album art, icons) at an arbitrary screen rect with
-// a UV sub-rect, via push constants — no vertex buffer. 4 vertices, triangle
-// strip: vertexId bits give (0,0) (1,0) (0,1) (1,1) — the standard bit-trick
-// quad (same idiom as overlay_vert.slang's fullscreen triangle), no dynamic
-// array indexing.
 struct VertexOutput {
   float4 position : SV_Position;
   float2 uv       : TEXCOORD0;
 };
 
+// ── The push-constant block ─────────────────────────────────────────────────
+//
+// This block MUST be character-identical in image_vert.slang and
+// image_frag.slang. Slang assigns offsets by declaration order within the
+// block, so a field added to one file and not the other silently shifts every
+// later field in that stage only -- the fragment shader then reads the vertex
+// shader's dstW as its exposure, which looks like a geometry bug and is not.
+//
+// 16 floats = 64 bytes, half of the 128 bytes Vulkan guarantees.
 [[vk::push_constant]] cbuffer PC {
   float dstX; float dstY; float dstW; float dstH;
   float u0;   float v0;   float u1;   float v1;
   float screenW; float screenH;
+  float exposure; float toneMode; float white; float clipWarn;
+  float pad0; float pad1;
 };
 
 [shader("vertex")]
