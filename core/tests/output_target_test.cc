@@ -213,13 +213,58 @@ int main() {
 
         // The curve does reach the ceiling. It is unbounded, so "reaches" is a
         // crossing, analytically at a == sqrt(span / (ceiling - k)).
-        if (P > 1.0f) {
+        //
+        // Only meaningful when the ceiling is genuinely BELOW the image's white
+        // point, i.e. when there is something to compress. A ceiling at or
+        // above `white` is clamped to it and the curve is the identity, which
+        // never "reaches" anything -- see the never-amplifies block below.
+        if (P > 1.0f && P < W) {
           float span = W - k;
           float xc = k + span * std::sqrt(span / (P - k));
           assert(std::fabs(rolloffCurve(xc, W, P) - P) < 1e-3f);
         }
       }
     }
+  }
+
+  {
+    // NEVER AMPLIFIES. This curve compresses; it must not be able to make a
+    // pixel brighter than it came in, at any ceiling.
+    //
+    // Regression: the ceiling was briefly allowed to exceed the image's own
+    // white point, and the curve then EXTRAPOLATED instead of compressing --
+    // a photo with white == 1.37 on a panel with headroom 2.22 had its
+    // highlights multiplied by up to 2.24x and overshot the ceiling itself
+    // (1.37 -> 3.279 against a ceiling of 2.22). On a device that looked like
+    // coloured speckle over every specular highlight, because the runaway
+    // values then hit the desaturate-toward-white step channel by channel.
+    for (float P : {1.0f, 1.37f, 2.22f, 8.0f})
+      for (float W : {1.0f, 1.37f, 4.0f, 10.0f})
+        for (float x = 0.0f; x <= 2.0f * W; x += 0.001f)
+          assert(rolloffCurve(x, W, P) <= x + 1e-6f);
+
+    // An image that already fits the target's headroom passes through
+    // UNTOUCHED. This is the ordinary case on an HDR panel and the whole point
+    // of asking for one.
+    //
+    // Identity to within TWO float ULP, not bit-exact, and the difference is
+    // arithmetic rather than behavioural: with the ceiling clamped to `white`
+    // the expression collapses to k + span * ((x - k) / span), whose round
+    // trip through the division costs a last-place bit or two. Measured worst
+    // case over this sweep is 2.384e-07 at x = 1.842, W = 2.0 -- which is 2
+    // ULP at that magnitude.
+    for (float W : {1.0f, 1.37f, 2.0f}) {
+      for (float x = 0.0f; x <= W; x += 0.001f) {
+        float y = rolloffCurve(x, W, /*ceiling=*/W + 1.0f);
+        assert(std::fabs(y - x) <= 2.5e-7f * std::fmax(x, 1.0f));
+      }
+    }
+
+    // ...including an SDR image on an HDR panel: headroom is not licence to
+    // stretch a picture that never had the range.
+    for (float x = 0.0f; x <= 1.0f; x += 0.001f)
+      assert(std::fabs(rolloffCurve(x, 1.0f, 2.22f) - x) <= 2.5e-7f);
+
   }
 
   printf("output_target_test: OK\n");

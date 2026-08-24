@@ -217,6 +217,17 @@ identity-below-knee, monotonicity, more-headroom-compresses-less, and the
 analytic ceiling crossing. The assertions were mutation-checked to confirm
 they are live.
 
+**A second bug, found on the panel.** The ceiling has to be clamped to the
+image's own white point. `rolloffCurve()` COMPRESSES -- it maps `white` down
+onto `ceiling` -- and handed a ceiling *above* `white` it extrapolated instead:
+a photo with `white = 1.37` on a panel with 2.22x headroom had its highlights
+multiplied by up to 2.24x and overshot the ceiling it was given
+(1.37 -> 3.279 against a ceiling of 2.22). `ceiling = min(ceiling, white)` now
+lives inside the curve, so both the C++ and the shader get it. The clamp makes
+the already-fits case an exact identity (to 2 ULP), which is what "the panel
+can show this picture" should mean, and it also stops an SDR image being
+stretched across headroom it never had.
+
 What *is* checked: the C++ all syntax-checks, and `output_target_test` passes,
 now including golden ST.2084 values against the PQ constants
 (100 nits → 0.508078, 1000 → 0.751827, 10000 → 1.0) plus monotonicity over the

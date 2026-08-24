@@ -48,6 +48,9 @@
 float rolloff(float x, float W, float P) {
   const float k = 0.8;
   if (x <= k) return x;
+  // P can never exceed W: this curve compresses, and given a ceiling above the
+  // white point it amplifies instead. See rolloffCurve() in output_target.cc.
+  P = min(P, W);
   float span = max(W - k, 1e-4);
   float a = (x - k) / span;
   float d = span / max(P - k, 1e-4);

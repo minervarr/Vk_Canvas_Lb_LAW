@@ -117,6 +117,15 @@ float pqEncode(float y) {
 float rolloffCurve(float x, float white, float ceiling) {
     constexpr float k = 0.8f;
     if (x <= k) return x;
+    // The ceiling can never exceed the image's own white point. This curve
+    // COMPRESSES -- it maps `white` down onto `ceiling` -- and handed a ceiling
+    // above `white` it extrapolates instead, amplifying highlights and
+    // overshooting the ceiling it was given. Clamping here makes the
+    // already-fits case (ceiling >= white, the ordinary one on an HDR panel)
+    // an exact identity, which is what "the panel can show this picture"
+    // should mean. It also stops an SDR image being stretched across headroom
+    // it never had.
+    ceiling = std::fmin(ceiling, white);
     const float span = std::fmax(white - k, 1e-4f);
     const float a    = (x - k) / span;
     const float d    = span / std::fmax(ceiling - k, 1e-4f);
