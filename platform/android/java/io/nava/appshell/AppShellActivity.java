@@ -6,9 +6,11 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Display;
@@ -240,6 +242,8 @@ public class AppShellActivity extends NativeActivity {
      */
     private static final String HDR_META = "io.nava.appshell.HDR";
 
+    private static final String TAG = "AppShell";
+
     /**
      * Asks the window manager for an HDR colour mode, if — and only if — the
      * consumer opted in through the manifest.
@@ -269,8 +273,16 @@ public class AppShellActivity extends NativeActivity {
         try {
             Bundle meta = getPackageManager().getActivityInfo(
                     getComponentName(), PackageManager.GET_META_DATA).metaData;
-            if (meta == null || !meta.getBoolean(HDR_META, false)) return;
+            if (meta == null || !meta.getBoolean(HDR_META, false)) {
+                Log.i(TAG, "HDR colour mode NOT requested (no " + HDR_META + " meta-data)");
+                return;
+            }
             getWindow().setColorMode(ActivityInfo.COLOR_MODE_HDR);
+            // Logged because it is otherwise UNOBSERVABLE. setColorMode returns
+            // nothing and reports no refusal, so without this line there is no
+            // way to tell "we never asked" from "we asked and were ignored" --
+            // and those want opposite fixes.
+            Log.i(TAG, "HDR colour mode requested (COLOR_MODE_HDR)");
         } catch (Exception e) {
             // A missing entry, a renamed component, an OEM that throws from
             // setColorMode: all mean "no HDR window", which is a state the
@@ -280,43 +292,86 @@ public class AppShellActivity extends NativeActivity {
     }
 
     /**
-     * How far above SDR white this display can actually go, as a multiplier —
+     * The display this activity is on, without touching the view hierarchy.
+     *
+     * <p>Deliberately NOT {@code getWindow().getDecorView().getDisplay()}:
+     * every caller here arrives on the native app thread, not the UI thread,
+     * and {@code getDecorView()} instantiates the decor view if it does not
+     * exist yet — a UI-thread operation. It happens to be there by the time
+     * native code asks, which makes the bug a race rather than a crash, and
+     * that is worse. {@link DisplayManager} is thread-safe by contract.
+     */
+    private Display activityDisplay() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Display d = getDisplay();          // the display we are actually on
+            if (d != null) return d;
+        }
+        DisplayManager dm = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+        return dm == null ? null : dm.getDisplay(Display.DEFAULT_DISPLAY);
+    }
+
+    /**
+     * How far above SDR white this display can currently go, as a multiplier —
      * {@code 1.0} means no headroom at all (an SDR panel, or one that will not
      * say).
      *
-     * <p>Native code needs this and cannot get it: {@code Display.HdrCapabilities}
-     * has no NDK equivalent, and the alternative is to hardcode a number and
-     * call it headroom. A tone curve rolling highlights toward a guessed peak
-     * is either crushing detail the panel could have shown or pushing past
-     * what it can, and both look like a bad photograph rather than a bad
-     * constant.
+     * <p>Native code needs this and cannot get it: none of this has an NDK
+     * equivalent, and the alternative is to hardcode a number and call it
+     * headroom. A tone curve rolling highlights toward a guessed peak either
+     * crushes detail the panel could have shown or pushes past what it can,
+     * and both look like a bad photograph rather than a bad constant.
      *
-     * <p>Derived as {@code desiredMaxLuminance / 203}, BT.2408 graphics white
-     * being what {@code 1.0} means in the linear units the renderer's tone
-     * controls use. Returns the DESIRED rather than the maximum luminance:
-     * the maximum is typically a peak the panel sustains over a small window
-     * only, and mapping a whole image to it is how HDR gets a reputation for
-     * being painful to look at.
+     * <p><strong>CURRENTLY, not permanently.</strong> On API 34+ this is
+     * {@link Display#getHdrSdrRatio()}, which is a live measurement and moves
+     * with the brightness slider — SDR white is whatever the system is
+     * presently driving it at, so the same panel has a lot of headroom in a
+     * dark room and almost none outdoors. A caller that reads this once and
+     * keeps it will drift; re-read it when the surface comes back.
+     *
+     * <p>The pre-34 fallback is {@code desiredMaxLuminance / 203} — the
+     * panel's static capability over BT.2408 graphics white. That is an
+     * approximation of the same quantity and it is the reason the ratio API
+     * is preferred: it assumes SDR white sits at 203 nits, which is exactly
+     * the assumption the ratio API exists to stop making. DESIRED rather than
+     * maximum luminance, because the maximum is a peak the panel sustains
+     * over a small window only, and mapping a whole image to it is how HDR
+     * gets a reputation for being painful to look at.
      *
      * <p>Clamped to at least {@code 1.0} so a caller can multiply by it
      * unconditionally, and never throws — an unknown display reports no
      * headroom rather than an error.
      */
-    @SuppressWarnings("unused")
+    @SuppressWarnings({"unused", "deprecation"})
     public float displayHdrHeadroom() {
         try {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return 1.0f;
-            Display d = getWindow().getDecorView().getDisplay();
-            if (d == null) d = getWindowManager().getDefaultDisplay();
+            Display d = activityDisplay();
             if (d == null) return 1.0f;
+
+            // API 34+: the display reports the ratio itself, live.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                    && d.isHdrSdrRatioAvailable()) {
+                float r = d.getHdrSdrRatio();
+                if (!Float.isNaN(r)) {
+                    // A valid answer of exactly 1.0 means "no headroom right
+                    // now", which is a real state (SDR mode, or the brightness
+                    // already at the top), not a failure to answer.
+                    float live = r > 1.0f ? r : 1.0f;
+                    Log.i(TAG, "headroom " + live + "x from getHdrSdrRatio (live)");
+                    return live;
+                }
+            }
+
             Display.HdrCapabilities caps = d.getHdrCapabilities();
             if (caps == null) return 1.0f;
-            int[] types = caps.getSupportedHdrTypes();
-            if (types == null || types.length == 0) return 1.0f;
             float desired = caps.getDesiredMaxLuminance();
             if (Float.isNaN(desired) || desired <= 0.0f) return 1.0f;
             float headroom = desired / 203.0f;
-            return headroom < 1.0f ? 1.0f : headroom;
+            if (headroom < 1.0f) headroom = 1.0f;
+            // Which source answered matters when the number looks wrong: the
+            // static one cannot track brightness and will read high in daylight.
+            Log.i(TAG, "headroom " + headroom + "x from desiredMaxLuminance="
+                    + desired + " (static fallback; ratio API unavailable)");
+            return headroom;
         } catch (Exception e) {
             return 1.0f;
         }
