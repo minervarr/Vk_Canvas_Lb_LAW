@@ -55,6 +55,17 @@ std::string get_clipboard();
 // Caller must already have validated the scheme — see Host::openUrl.
 bool open_url(const std::string& url);
 
+// How far above SDR white this display can go, as a multiplier of it. 1.0
+// means no headroom -- an SDR panel, an activity that does not extend
+// AppShellActivity, or a display that will not say. Never below 1.0, so a
+// caller can multiply by it unconditionally.
+//
+// A REPORT ABOUT THE DISPLAY, not about what was granted. An app still has to
+// ask its surface which colourspace it actually got: a panel can have headroom
+// while the window is SDR, and the window's colour mode is a request the
+// system may refuse without saying so.
+float display_hdr_headroom();
+
 // Root of SHARED storage as a real path, e.g. "/storage/emulated/0". Empty if
 // the activity does not answer (which is what a consumer whose Activity does
 // not extend AppShellActivity gets); callers should fall back rather than

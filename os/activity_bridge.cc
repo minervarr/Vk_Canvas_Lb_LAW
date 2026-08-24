@@ -101,6 +101,27 @@ std::string call_string(const char* name) {
     return out;
 }
 
+float call_float(const char* name, float fallback) {
+    if (!g_app) return fallback;
+    JNIEnv* env = env_for(g_app);
+    if (!env) return fallback;
+    jobject act = g_app->activity->clazz;
+    jclass  cls = env->GetObjectClass(act);
+    jmethodID m = env->GetMethodID(cls, name, "()F");
+    if (!m) {
+        // A consumer whose Activity does not extend AppShellActivity gets here.
+        // Not an error: it means "this app never opted in", and the fallback is
+        // the answer for that.
+        check_exc(env, name);
+        env->DeleteLocalRef(cls);
+        return fallback;
+    }
+    jfloat v = env->CallFloatMethod(act, m);
+    bool bad = check_exc(env, name);
+    env->DeleteLocalRef(cls);
+    return bad ? fallback : (float)v;
+}
+
 bool call_with_string(const char* name, const std::string& arg) {
     if (!g_app) return false;
     JNIEnv* env = env_for(g_app);
@@ -148,6 +169,8 @@ std::string get_clipboard() { return call_string("getClipboard"); }
 bool open_url(const std::string& url) { return call_with_string("openUrl", url); }
 
 std::string external_storage_root() { return call_string("externalStorageRoot"); }
+
+float display_hdr_headroom() { return call_float("displayHdrHeadroom", 1.0f); }
 
 bool drain(Update& out) {
     std::lock_guard<std::mutex> lock(g_pending.mu);

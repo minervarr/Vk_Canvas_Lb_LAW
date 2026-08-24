@@ -4,11 +4,14 @@ import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -118,6 +121,8 @@ public class AppShellActivity extends NativeActivity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
 
+        maybeRequestHdrColorMode();
+
         // Keep our own surface from being resized or panned when the IME opens.
         // The app draws its own layout and moves the focused field itself,
         // using the imeBottom inset above; letting the window manager also pan
@@ -224,6 +229,97 @@ public class AppShellActivity extends NativeActivity {
             if (imm != null) imm.hideSoftInputFromWindow(input_.getWindowToken(), 0);
             input_.clearFocus();
         });
+    }
+
+    /**
+     * Name of the {@code <meta-data>} an app sets to ask for an HDR window.
+     *
+     * <pre>{@code
+     * <meta-data android:name="io.nava.appshell.HDR" android:value="true" />
+     * }</pre>
+     */
+    private static final String HDR_META = "io.nava.appshell.HDR";
+
+    /**
+     * Asks the window manager for an HDR colour mode, if — and only if — the
+     * consumer opted in through the manifest.
+     *
+     * <p><strong>Opt-in, never inferred.</strong> An HDR window is not free:
+     * on many devices it forces the panel into a different, more
+     * power-hungry mode for as long as it is up, and an app whose content is
+     * ordinary SDR gains nothing for that cost. So the default is off and
+     * stays off, and every existing consumer of this library sees no change
+     * whatsoever.
+     *
+     * <p><strong>This must happen in {@code onCreate}</strong>, before the
+     * NativeActivity's surface exists. The colour mode is a property of the
+     * window, and the set of {@code VkSurfaceFormatKHR} pairs a driver
+     * enumerates for a surface can depend on it — asking afterwards means the
+     * native side has already chosen a format from a list that did not
+     * include the HDR ones.
+     *
+     * <p>This is a request, not a guarantee. {@code setColorMode} is silent
+     * about refusal, and a device may honour it, ignore it, or honour it only
+     * while the app is in the foreground. Nothing here reports success;
+     * native code must ask the surface what it actually got rather than
+     * assume this worked.
+     */
+    private void maybeRequestHdrColorMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            Bundle meta = getPackageManager().getActivityInfo(
+                    getComponentName(), PackageManager.GET_META_DATA).metaData;
+            if (meta == null || !meta.getBoolean(HDR_META, false)) return;
+            getWindow().setColorMode(ActivityInfo.COLOR_MODE_HDR);
+        } catch (Exception e) {
+            // A missing entry, a renamed component, an OEM that throws from
+            // setColorMode: all mean "no HDR window", which is a state the
+            // native side already has to handle because the request can be
+            // refused silently anyway.
+        }
+    }
+
+    /**
+     * How far above SDR white this display can actually go, as a multiplier —
+     * {@code 1.0} means no headroom at all (an SDR panel, or one that will not
+     * say).
+     *
+     * <p>Native code needs this and cannot get it: {@code Display.HdrCapabilities}
+     * has no NDK equivalent, and the alternative is to hardcode a number and
+     * call it headroom. A tone curve rolling highlights toward a guessed peak
+     * is either crushing detail the panel could have shown or pushing past
+     * what it can, and both look like a bad photograph rather than a bad
+     * constant.
+     *
+     * <p>Derived as {@code desiredMaxLuminance / 203}, BT.2408 graphics white
+     * being what {@code 1.0} means in the linear units the renderer's tone
+     * controls use. Returns the DESIRED rather than the maximum luminance:
+     * the maximum is typically a peak the panel sustains over a small window
+     * only, and mapping a whole image to it is how HDR gets a reputation for
+     * being painful to look at.
+     *
+     * <p>Clamped to at least {@code 1.0} so a caller can multiply by it
+     * unconditionally, and never throws — an unknown display reports no
+     * headroom rather than an error.
+     */
+    @SuppressWarnings("unused")
+    public float displayHdrHeadroom() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return 1.0f;
+            Display d = getWindow().getDecorView().getDisplay();
+            if (d == null) d = getWindowManager().getDefaultDisplay();
+            if (d == null) return 1.0f;
+            Display.HdrCapabilities caps = d.getHdrCapabilities();
+            if (caps == null) return 1.0f;
+            int[] types = caps.getSupportedHdrTypes();
+            if (types == null || types.length == 0) return 1.0f;
+            float desired = caps.getDesiredMaxLuminance();
+            if (Float.isNaN(desired) || desired <= 0.0f) return 1.0f;
+            float headroom = desired / 203.0f;
+            return headroom < 1.0f ? 1.0f : headroom;
+        } catch (Exception e) {
+            return 1.0f;
+        }
     }
 
     /**
