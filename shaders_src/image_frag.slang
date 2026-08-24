@@ -33,6 +33,11 @@
 // wrong for an instrument. Someone opening this to inspect a photograph needs
 // the midtones to be numerically what the file says.
 //
+// MIRRORS rolloffCurve() in core/output_target.cc, which is the AUTHORITY --
+// same arrangement as the PQ constants above it. This shader cannot be
+// unit-tested (it needs slangc plus a GPU), so the maths is guarded on the C++
+// side in core/tests/output_target_test.cc. Change one, change both.
+//
 // P is the OUTPUT CEILING -- what the brightest input maps to. On an SDR
 // target it is 1.0 and this is exactly the curve that existed before, term for
 // term. On an HDR target it is the display's headroom, and that distinction is

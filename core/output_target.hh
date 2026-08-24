@@ -70,6 +70,27 @@ inline OutputSelection pickTarget(const std::vector<VkSurfaceFormatKHR>& formats
 // non-linear code value in [0,1].
 float pqEncode(float y);
 
+// ── The highlight rolloff curve ─────────────────────────────────────────────
+//
+// THIS IS THE AUTHORITY for the tone curve, on the same terms as pqEncode()
+// above: shaders_src/image_frag.slang mirrors it, the shader cannot be
+// unit-tested, so core/tests/output_target_test.cc guards the maths here.
+//
+// Extended Reinhard with a linear knee at k = 0.8. Below k it is the IDENTITY,
+// so an ordinary SDR image passes through numerically untouched. Above k the
+// range is compressed monotonically toward `ceiling`.
+//
+// `ceiling` is what the highlights roll TOWARD -- 1.0 (display white) on an
+// SDR target, the display's headroom on an HDR one. That parameter is the
+// whole reason this is not hardcoded: pinned at 1.0, the rolloff path can
+// never emit a value above display white, so an HDR swapchain could be
+// requested, granted, and then handed nothing but SDR-range pixels. At
+// ceiling == 1.0 this is bit-identical to the pre-HDR curve.
+//
+// The curve is UNBOUNDED -- it crosses `ceiling` and keeps going; capping is
+// the caller's saturate/desaturate step, exactly as before.
+float rolloffCurve(float x, float white, float ceiling);
+
 // Absolute luminance that PQ code value 1.0 represents.
 inline constexpr float kPQPeakNits = 10000.0f;
 // BT.2408 "graphics white": UI authored as white should land here, NOT at the

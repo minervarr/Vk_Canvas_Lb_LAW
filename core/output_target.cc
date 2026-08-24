@@ -114,6 +114,15 @@ float pqEncode(float y) {
     return std::pow((c1 + c2 * yp) / (1.0f + c3 * yp), m2);
 }
 
+float rolloffCurve(float x, float white, float ceiling) {
+    constexpr float k = 0.8f;
+    if (x <= k) return x;
+    const float span = std::fmax(white - k, 1e-4f);
+    const float a    = (x - k) / span;
+    const float d    = span / std::fmax(ceiling - k, 1e-4f);
+    return k + (ceiling - k) * (a * (1.0f + a / d) / (1.0f + a));
+}
+
 const char* outputTargetName(OutputTarget t) {
     switch (t) {
         case OutputTarget::SdrSrgb:             return "SdrSrgb";

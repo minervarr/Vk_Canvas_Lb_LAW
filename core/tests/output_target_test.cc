@@ -168,6 +168,60 @@ int main() {
     assert(std::fabs(pqEncode(kGraphicsWhiteNits / kPQPeakNits) - 0.580689f) < 1e-4f);
   }
 
+  // ── The rolloff curve ─────────────────────────────────────────────────────
+  // rolloffCurve() gained a `ceiling` parameter so highlights can roll toward
+  // an HDR panel's headroom instead of always toward display white. These
+  // guard the shader's copy in image_frag.slang, which cannot be tested.
+  {
+    // The REGRESSION PROOF for every SDR consumer: at ceiling == 1.0 this is
+    // the pre-HDR curve bit-for-bit -- equality, not a tolerance.
+    const float k = 0.8f;
+    for (float W : {1.0f, 1.5f, 2.0f, 4.0f, 10.0f, 100.0f}) {
+      for (float x = 0.0f; x <= 200.0f; x += 0.005f) {
+        float expect;
+        if (x <= k) {
+          expect = x;
+        } else {
+          float span = std::fmax(W - k, 1e-4f);
+          float a = (x - k) / span;
+          float d = span / (1.0f - k);
+          expect = k + (1.0f - k) * (a * (1.0f + a / d) / (1.0f + a));
+        }
+        assert(rolloffCurve(x, W, 1.0f) == expect);
+      }
+    }
+    for (float P : {1.0f, 2.0f, 4.0f, 8.0f}) {
+      for (float W : {1.5f, 4.0f, 10.0f}) {
+        // Below the knee: the identity at EVERY ceiling. An SDR photo's
+        // midtones stay numerically what the file says, HDR target or not.
+        for (float x = 0.0f; x <= 0.8f; x += 0.01f)
+          assert(rolloffCurve(x, W, P) == x);
+
+        // Monotone: brighter input always stays brighter output.
+        float prev = -1e9f;
+        for (float x = 0.0f; x <= 4.0f * W; x += 0.002f) {
+          float v = rolloffCurve(x, W, P);
+          assert(v >= prev - 1e-6f);
+          prev = v;
+        }
+
+        // The point of the parameter: more headroom compresses LESS, so
+        // highlights reach further up the panel instead of being crushed
+        // toward SDR white.
+        for (float x = 0.81f; x <= W; x += 0.01f)
+          assert(rolloffCurve(x, W, P) >= rolloffCurve(x, W, 1.0f) - 1e-6f);
+
+        // The curve does reach the ceiling. It is unbounded, so "reaches" is a
+        // crossing, analytically at a == sqrt(span / (ceiling - k)).
+        if (P > 1.0f) {
+          float span = W - k;
+          float xc = k + span * std::sqrt(span / (P - k));
+          assert(std::fabs(rolloffCurve(xc, W, P) - P) < 1e-3f);
+        }
+      }
+    }
+  }
+
   printf("output_target_test: OK\n");
   return 0;
 }

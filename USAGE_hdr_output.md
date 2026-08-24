@@ -194,9 +194,28 @@ a separate pass, deliberately out of scope here.
 
 ### What has NOT been verified
 
-No shader was compiled — `slangc` is not installed on the machine this landed
-from, so `output_encode.slang` and its four dependents are **unbuilt and
-unrun**. Nothing has been on a panel.
+Nothing has been on a panel.
+
+**Update — shaders now build.** On a machine with `slangc`, all six of
+vk_canvas's own shaders compile clean and pass `spirv-val`, and `SpecId 0`
+(`OUTPUT_ENCODE`) is present in `image_frag`, `shape_frag` and `overlay_frag`.
+The image push-constant block is byte-identical between `image_vert` and
+`image_frag`, checked rather than eyeballed. Compiling is not running: no
+fragment of this has executed on a GPU.
+
+**One real bug was found doing it.** `rolloff()` had its output ceiling
+hardcoded at 1.0, so under an HDR target the rolloff path — the tone mode a
+photograph actually uses — could never emit a value above display white. The
+swapchain would be requested, granted and then fed nothing but SDR-range
+pixels; the feature would have been inert in exactly the case it exists for.
+`rolloff()` now takes the ceiling, which is `outputClipThreshold(headroom)`.
+The curve moved to `rolloffCurve()` in `core/output_target.cc` as the C++
+authority (same arrangement as `pqEncode()`), and `output_target_test` now
+proves at `ceiling == 1.0` it is **bit-identical** to the old curve across
+2.4M samples — the regression proof for every SDR consumer — plus
+identity-below-knee, monotonicity, more-headroom-compresses-less, and the
+analytic ceiling crossing. The assertions were mutation-checked to confirm
+they are live.
 
 What *is* checked: the C++ all syntax-checks, and `output_target_test` passes,
 now including golden ST.2084 values against the PQ constants
