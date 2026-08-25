@@ -113,8 +113,24 @@ float4 main(float2 uv : TEXCOORD0, float4 fragPos : SV_Position) : SV_Target {
     // kRolloff. Scale by a ratio computed from LUMINANCE rather than curving
     // each channel on its own: per-channel compression desaturates saturated
     // highlights toward white, turning a bright red into a pink one.
-    float L = dot(lin, float3(0.2126, 0.7152, 0.0722));
-    float s = L > 1e-6 ? rolloff(L, max(white, 1.0), ceiling) / L : 0.0;
+    //
+    // The weights follow the PRIMARIES the pixels are in, which is decided by
+    // the same OUTPUT_ENCODE specialization constant the encode below uses --
+    // deliberately the same lever, so the two can never disagree. The PQ target
+    // is an HDR10/ST2084 surface, i.e. BT.2020 by definition, and its consumer
+    // decodes to BT.2020 primaries to match; the other targets are sRGB/BT.709.
+    // Using 709's weights on 2020 pixels overweights green by ~5%, which skews
+    // the ratio per hue and reappears as the same green cast the gamut mismatch
+    // produced, just more subtly.
+    float3 lumaW = (OUTPUT_ENCODE == kEncodePQ)
+                 ? float3(0.2627, 0.6780, 0.0593)   // BT.2020
+                 : float3(0.2126, 0.7152, 0.0722);  // BT.709
+    float L = dot(lin, lumaW);
+    // Below the threshold the curve is the identity, so pass the pixel through
+    // rather than zeroing it: returning 0.0 crushed every sub-threshold pixel to
+    // exact black, which turned the darkest parts of an image into flat voids
+    // with speckled edges instead of just very dark detail.
+    float s = L > 1e-6 ? rolloff(L, max(white, 1.0), ceiling) / L : 1.0;
     t = lin * s;
   }
 
