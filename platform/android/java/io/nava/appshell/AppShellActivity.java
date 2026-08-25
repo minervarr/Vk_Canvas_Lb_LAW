@@ -3,11 +3,15 @@ package io.nava.appshell;
 import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
+import android.provider.MediaStore;
+import android.media.MediaScannerConnection;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -394,6 +398,87 @@ public class AppShellActivity extends NativeActivity {
     @SuppressWarnings("unused")
     public String externalStorageRoot() {
         return android.os.Environment.getExternalStorageDirectory().getAbsolutePath();
+    }
+
+    /**
+     * Publish an image into the user's shared Pictures collection, and return
+     * the {@code content://} URI it landed at (or {@code null} on failure).
+     *
+     * <p>This exists because under scoped storage there is NO path-based way to
+     * do it. From API 29 an app may not create files in a shared collection with
+     * ordinary filesystem calls, however correct the path looks: the write fails
+     * and the only supported route is a {@link android.content.ContentResolver}
+     * insert into {@link MediaStore}. That is Java-only, which is why a native
+     * app that merely wants to save a picture has to come up here to do it.
+     *
+     * <p>The consequence of getting this wrong is not a crash — it is a file
+     * written somewhere the user will never look for it.
+     *
+     * <p>{@code relativeDir} is a sub-path under Pictures, e.g. "ViewMage".
+     * IS_PENDING hides the row until the bytes are all written, so a gallery
+     * scanning mid-write never shows a torn image.
+     *
+     * <p>Below API 29 there is no RELATIVE_PATH and no IS_PENDING; the file is
+     * written directly (legal there, with WRITE_EXTERNAL_STORAGE) and the media
+     * scanner is told about it, which is what makes it appear in the gallery.
+     */
+    @SuppressWarnings("unused")
+    public String publishImage(String displayName, String mimeType,
+                               String relativeDir, byte[] data) {
+        if (displayName == null || data == null || data.length == 0) return null;
+        if (mimeType == null || mimeType.isEmpty()) mimeType = "image/png";
+        if (relativeDir == null) relativeDir = "";
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            final ContentResolver cr = getContentResolver();
+            final ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, displayName);
+            values.put(MediaStore.Images.Media.MIME_TYPE, mimeType);
+            values.put(MediaStore.Images.Media.RELATIVE_PATH,
+                       relativeDir.isEmpty() ? "Pictures" : "Pictures/" + relativeDir);
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+
+            Uri uri = null;
+            try {
+                uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) return null;
+                try (java.io.OutputStream out = cr.openOutputStream(uri)) {
+                    if (out == null) throw new java.io.IOException("no output stream");
+                    out.write(data);
+                }
+                values.clear();
+                values.put(MediaStore.Images.Media.IS_PENDING, 0);
+                cr.update(uri, values, null, null);
+                return uri.toString();
+            } catch (Exception e) {
+                Log.e(TAG, "publishImage failed", e);
+                // Leave no half-written pending row behind: it would be
+                // invisible to the gallery and invisible to the user, i.e.
+                // unreclaimable space.
+                if (uri != null) {
+                    try { cr.delete(uri, null, null); } catch (Exception ignored) {}
+                }
+                return null;
+            }
+        }
+
+        try {
+            final java.io.File dir = new java.io.File(
+                android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_PICTURES),
+                relativeDir);
+            if (!dir.exists() && !dir.mkdirs()) return null;
+            final java.io.File file = new java.io.File(dir, displayName);
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                out.write(data);
+            }
+            MediaScannerConnection.scanFile(this, new String[]{file.getAbsolutePath()},
+                                            new String[]{mimeType}, null);
+            return Uri.fromFile(file).toString();
+        } catch (Exception e) {
+            Log.e(TAG, "publishImage (legacy) failed", e);
+            return null;
+        }
     }
 
     /**

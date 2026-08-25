@@ -2,6 +2,7 @@
 #include <android_native_app_glue.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 // ── Talking to AppShellActivity ──────────────────────────────────────────────
@@ -75,6 +76,20 @@ float display_hdr_headroom();
 // uninstall — the right place for a cache and the wrong place for a library
 // the user believes is theirs.
 std::string external_storage_root();
+
+// Publish an image into the user's shared Pictures collection. Returns the
+// content:// URI it landed at, or "" on failure.
+//
+// The ONLY supported way to put a picture where the gallery will find it from
+// API 29 on: scoped storage forbids creating files in a shared collection by
+// path, so a filesystem write to /sdcard/Pictures fails no matter how correct
+// the path looks. This goes through MediaStore, which needs a ContentResolver,
+// which only Java has. `relativeDir` is a sub-path under Pictures ("" for
+// Pictures itself).
+std::string publish_image(const std::string& display_name,
+                          const std::string& mime_type,
+                          const std::string& relative_dir,
+                          const uint8_t* data, size_t bytes);
 
 // ── Down-calls, collected ───────────────────────────────────────────────────
 

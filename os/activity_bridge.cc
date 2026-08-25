@@ -170,6 +170,62 @@ bool open_url(const std::string& url) { return call_with_string("openUrl", url);
 
 std::string external_storage_root() { return call_string("externalStorageRoot"); }
 
+std::string publish_image(const std::string& display_name,
+                          const std::string& mime_type,
+                          const std::string& relative_dir,
+                          const uint8_t* data, size_t bytes) {
+    if (!g_app || !data || bytes == 0) return {};
+    JNIEnv* env = env_for(g_app);
+    if (!env) return {};
+
+    jbyteArray arr = env->NewByteArray((jsize)bytes);
+    if (!arr) {
+        // A failed allocation leaves a pending exception that would abort the
+        // next JNI call made anywhere, not just here.
+        env->ExceptionClear();
+        return {};
+    }
+    env->SetByteArrayRegion(arr, 0, (jsize)bytes,
+                            reinterpret_cast<const jbyte*>(data));
+
+    jstring jname = to_jstring(env, display_name);
+    jstring jmime = to_jstring(env, mime_type);
+    jstring jdir  = to_jstring(env, relative_dir);
+
+    std::string out;
+    jobject act = g_app->activity->clazz;
+    {
+        jclass cls = env->GetObjectClass(act);
+        jmethodID mid = env->GetMethodID(
+            cls, "publishImage",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)"
+            "Ljava/lang/String;");
+        if (mid) {
+            jstring res = (jstring)env->CallObjectMethod(act, mid, jname, jmime,
+                                                         jdir, arr);
+            if (!check_exc(env, "publishImage") && res) {
+                // GetStringChars, NOT GetStringUTFChars -- the latter is
+                // modified UTF-8 and mangles anything outside the BMP.
+                const jchar* u = env->GetStringChars(res, nullptr);
+                jsize len = env->GetStringLength(res);
+                out = utf16::to_utf8(reinterpret_cast<const uint16_t*>(u),
+                                     (size_t)len);
+                env->ReleaseStringChars(res, u);
+            }
+            if (res) env->DeleteLocalRef(res);
+        } else {
+            env->ExceptionClear();
+        }
+        env->DeleteLocalRef(cls);
+    }
+
+    env->DeleteLocalRef(jdir);
+    env->DeleteLocalRef(jmime);
+    env->DeleteLocalRef(jname);
+    env->DeleteLocalRef(arr);
+    return out;
+}
+
 float display_hdr_headroom() { return call_float("displayHdrHeadroom", 1.0f); }
 
 bool drain(Update& out) {
