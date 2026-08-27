@@ -53,6 +53,17 @@ bool ComputeContext::init() {
     }
     if (!found) { LOGE("no compute queue family"); return false; }
 
+    // Timestamp capability for the chosen family. Both conditions matter: a
+    // device can advertise a non-zero timestampPeriod while the specific queue
+    // family reports timestampValidBits == 0, in which case vkCmdWriteTimestamp
+    // records nothing useful. Left at 0 -> callers skip profiling silently.
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(phys_, &props);
+        if (qprops[queue_family_].timestampValidBits > 0 && props.limits.timestampPeriod > 0.0f)
+            timestamp_period_ns_ = props.limits.timestampPeriod;
+    }
+
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{};
     qci.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;

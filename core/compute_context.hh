@@ -72,6 +72,12 @@ public:
     // the Float16 capability will load. Callers that ship an fp16 kernel must
     // check this and keep an fp32 variant for devices without it.
     bool fp16_supported() const { return fp16_supported_; }
+
+    // GPU timestamp support, for measuring real per-pass compute time with
+    // vkCmdWriteTimestamp. Nanoseconds per tick, or 0 when this queue family
+    // cannot timestamp (timestampValidBits == 0) — callers must treat 0 as
+    // "profiling unavailable" and carry on, never as an error.
+    float timestamp_period_ns() const { return timestamp_period_ns_; }
     // Queue family the gralloc/producer "owns" imported buffers as, for
     // ownership-transfer barriers: FOREIGN if that extension is enabled, else
     // EXTERNAL.
@@ -96,6 +102,7 @@ private:
     // AHB-import (zero-copy input) capability, resolved at init.
     bool ahb_supported_     = false;
     bool fp16_supported_    = false;
+    float timestamp_period_ns_ = 0.0f;
     bool foreign_queue_ext_ = false;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID pfn_ahb_props_ = nullptr;
 };
