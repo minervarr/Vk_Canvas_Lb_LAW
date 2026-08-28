@@ -249,6 +249,15 @@ private:
         VkDescriptorSet desc_set = VK_NULL_HANDLE;
     };
     std::unordered_map<AHardwareBuffer*, HwbCache> hwb_cache_;
+    // Bind order, oldest first — the eviction queue for the above. A plain
+    // vector: it holds at most kMaxCachedHwb entries and is walked, not
+    // searched, so a map would cost more than it saved.
+    std::vector<AHardwareBuffer*> hwb_lru_;
+    // How many external images may be cached at once, and therefore the size
+    // of the descriptor pool backing them. A camera needs a handful; a video
+    // decoder's AImageReader was measured handing out 10 distinct buffers in
+    // the first second, so this is sized for a stream and bounded by eviction.
+    static constexpr size_t kMaxCachedHwb = 32;
 
     AHardwareBuffer* current_hwb_ = nullptr;
     VkSamplerYcbcrConversion ycbcr_conversion_ = VK_NULL_HANDLE;
@@ -275,6 +284,7 @@ private:
     void setup_hwb_resources(AHardwareBuffer* hwb);
     void cleanup_hwb_resources();
     void bind_hwb(AHardwareBuffer* hwb);
+    void touch_hwb(AHardwareBuffer* hwb);
 #endif
 
     // UI overlay (canvas curve records rasterised + composited over the camera).

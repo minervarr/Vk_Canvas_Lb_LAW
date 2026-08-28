@@ -135,6 +135,7 @@ void Renderer::clear_camera_frames() {
             if (kv.second.memory) vkFreeMemory(device_, kv.second.memory, nullptr);
         }
         hwb_cache_.clear();
+    hwb_lru_.clear();
         if (desc_pool_) vkResetDescriptorPool(device_, desc_pool_, 0);
     }
 }
@@ -211,12 +212,25 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 10;
+    // Sized for a VIDEO stream, not a camera preview.
+    //
+    // 10 was right for a camera: its producer recycles a handful of gralloc
+    // buffers and the working set never grows. A decoder's does — an
+    // AImageReader feeding a player handed out 10 distinct AHardwareBuffers
+    // within one second, at which point allocation failed, bind_hwb() left the
+    // buffer uncached, draw()'s lookup missed, and the screen went black at a
+    // perfectly healthy frame rate.
+    //
+    // FREE_DESCRIPTOR_SET_BIT is what makes the eviction in bind_hwb()
+    // possible at all: without it a set can only be reclaimed by resetting the
+    // whole pool.
+    poolSize.descriptorCount = kMaxCachedHwb;
     VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 10;
+    poolInfo.maxSets = kMaxCachedHwb;
     vkCreateDescriptorPool(device_, &poolInfo, nullptr, &desc_pool_);
 
     
@@ -323,7 +337,36 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
 }
 
 void Renderer::bind_hwb(AHardwareBuffer* hwb) {
-    if (hwb_cache_.find(hwb) != hwb_cache_.end()) return;
+    if (hwb_cache_.find(hwb) != hwb_cache_.end()) {
+        touch_hwb(hwb);
+        return;
+    }
+
+    // Make room first, so allocation below cannot be the thing that fails.
+    // Least-recently-bound goes, and never the buffer currently on screen.
+    //
+    // vkDeviceWaitIdle before destroying: an evicted image may still be
+    // referenced by a frame in flight, and this happens rarely enough (only
+    // once the working set exceeds the pool) that the stall is cheaper than
+    // tracking per-image fences.
+    while (hwb_cache_.size() >= kMaxCachedHwb && !hwb_lru_.empty()) {
+        AHardwareBuffer* victim = nullptr;
+        for (auto it = hwb_lru_.begin(); it != hwb_lru_.end(); ++it) {
+            if (*it == current_hwb_) continue;
+            victim = *it;
+            hwb_lru_.erase(it);
+            break;
+        }
+        if (!victim) break;   // everything is the current buffer; nothing to give
+        auto vit = hwb_cache_.find(victim);
+        if (vit == hwb_cache_.end()) continue;
+        vkDeviceWaitIdle(device_);
+        vkFreeDescriptorSets(device_, desc_pool_, 1, &vit->second.desc_set);
+        vkDestroyImageView(device_, vit->second.view, nullptr);
+        vkDestroyImage(device_, vit->second.image, nullptr);
+        vkFreeMemory(device_, vit->second.memory, nullptr);
+        hwb_cache_.erase(vit);
+    }
 
     AHardwareBuffer_Desc desc;
     AHardwareBuffer_describe(hwb, &desc);
@@ -354,7 +397,15 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     
     HwbCache cache;
-    if (vkCreateImage(device_, &image_info, nullptr, &cache.image) != VK_SUCCESS) return;
+    // Every failure below used to return in silence, which presents as a black
+    // screen with a healthy-looking frame rate and nothing in any log — the
+    // frames arrive, the cache lookup in draw() misses, and nothing is
+    // composited. Each one says so now, once.
+    if (vkCreateImage(device_, &image_info, nullptr, &cache.image) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkCreateImage failed (externalFormat %llu, %ux%u)",
+             (unsigned long long)last_external_format_, desc.width, desc.height);
+        return;
+    }
 
     VkImportAndroidHardwareBufferInfoANDROID import_info{};
     import_info.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
@@ -375,7 +426,12 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     alloc_info.allocationSize = hwb_props.allocationSize;
     alloc_info.memoryTypeIndex = find_memory_type(hwb_props.memoryTypeBits, 0);
 
-    if (vkAllocateMemory(device_, &alloc_info, nullptr, &cache.memory) != VK_SUCCESS) return;
+    if (vkAllocateMemory(device_, &alloc_info, nullptr, &cache.memory) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkAllocateMemory failed (%llu bytes, typeBits 0x%x)",
+             (unsigned long long)hwb_props.allocationSize, hwb_props.memoryTypeBits);
+        vkDestroyImage(device_, cache.image, nullptr);
+        return;
+    }
 
     vkBindImageMemory(device_, cache.image, cache.memory, 0);
 
@@ -399,7 +455,12 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(device_, &view_info, nullptr, &cache.view) != VK_SUCCESS) return;
+    if (vkCreateImageView(device_, &view_info, nullptr, &cache.view) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkCreateImageView failed");
+        vkDestroyImage(device_, cache.image, nullptr);
+        vkFreeMemory(device_, cache.memory, nullptr);
+        return;
+    }
 
     VkDescriptorSetAllocateInfo alloc_info_desc{};
     alloc_info_desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -411,6 +472,8 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
         // Pool exhausted (or other failure) — don't write to a null set (would
         // crash in the driver). Drop this frame's resources and skip binding;
         // the next clear_camera_frames() resets the pool.
+        LOGI("bind_hwb: descriptor set allocation failed (%zu buffers cached, pool holds 10)",
+             hwb_cache_.size());
         vkDestroyImageView(device_, cache.view, nullptr);
         vkDestroyImage(device_, cache.image, nullptr);
         vkFreeMemory(device_, cache.memory, nullptr);
@@ -433,6 +496,15 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     vkUpdateDescriptorSets(device_, 1, &descriptorWrite, 0, nullptr);
 
     hwb_cache_[hwb] = cache;
+    hwb_lru_.push_back(hwb);
+}
+
+// Most-recently-bound moves to the back; the front is the eviction candidate.
+void Renderer::touch_hwb(AHardwareBuffer* hwb) {
+    for (auto it = hwb_lru_.begin(); it != hwb_lru_.end(); ++it) {
+        if (*it == hwb) { hwb_lru_.erase(it); break; }
+    }
+    hwb_lru_.push_back(hwb);
 }
 #endif  // __ANDROID__
 
@@ -532,10 +604,16 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
             setup_hwb_resources(hwb_to_bind);
         }
         bind_hwb(hwb_to_bind);
-        if (current_hwb_) {
-            AHardwareBuffer_release(current_hwb_);
+        if (hwb_cache_.find(hwb_to_bind) != hwb_cache_.end()) {
+            if (current_hwb_) AHardwareBuffer_release(current_hwb_);
+            current_hwb_ = hwb_to_bind;
+        } else {
+            // Binding failed and this buffer has no image to sample. Keeping
+            // the previous frame on screen is strictly better than pointing
+            // current_hwb_ at something draw() cannot find, which composites
+            // nothing at all and reads as a dead player.
+            AHardwareBuffer_release(hwb_to_bind);
         }
-        current_hwb_ = hwb_to_bind;
     }
 #endif  // __ANDROID__
     int64_t t_afterbind = now_ns();
@@ -1253,6 +1331,7 @@ void Renderer::cleanup_hwb_resources() {
         vkFreeMemory(device_, pair.second.memory, nullptr);
     }
     hwb_cache_.clear();
+    hwb_lru_.clear();
 
     if (desc_pool_) { vkDestroyDescriptorPool(device_, desc_pool_, nullptr); desc_pool_ = VK_NULL_HANDLE; }
     if (desc_layout_) { vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr); desc_layout_ = VK_NULL_HANDLE; }
