@@ -371,6 +371,10 @@ void AndroidHost::onGainedFocus() {
     // every APP_CMD_GAINED_FOCUS, not just at startup.
     if (state_->window)
         vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
+
+    // The app is told, because this is the first moment the input system will
+    // accept anything from it — see AppView::onHostFocusGained().
+    if (owner_) owner_->onHostFocusGained();
 }
 
 void AndroidHost::onResume() {
@@ -539,6 +543,27 @@ void AndroidHost::onTouchDown(float x, float y) {
     // the only hover a touch screen has, and it is honest: the desktop's
     // hover means "the pointer is here", and here it is.
     owner_->onMouseMove((int)x, (int)y);
+
+    // The press goes out at CONTACT, as it does on every desktop host. It used
+    // to be synthesised at release instead, which reads as harmless until an
+    // app wants the two edges apart: a press-and-hold cannot be recognised
+    // while the finger is down if the app is only told about the finger after
+    // it has left, and an app that acts on the release is never told at all.
+    // A stroke that turns into a scroll is retracted by onDragEnd() below,
+    // which is the signal that already means "that was a gesture, not a press".
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    const bool isDouble =
+        lastTapValid_ &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTapTime_).count() < 400 &&
+        std::fabs(x - lastTapX_) < kTouchSlopPx && std::fabs(y - lastTapY_) < kTouchSlopPx;
+
+    if (isDouble) {
+        owner_->onLButtonDblClk((int)x, (int)y);
+        lastTapValid_ = false;   // don't chain a third tap into another double
+    } else {
+        owner_->onLButtonDown((int)x, (int)y);
+    }
 }
 
 void AndroidHost::onTouchMove(float x, float y) {
@@ -558,7 +583,7 @@ void AndroidHost::onTouchMove(float x, float y) {
 
 void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
     const bool wasTap  = touchDown_ && !touchDragging_ && !cancelled;
-    const bool wasDrag = touchDown_ &&  touchDragging_ && !cancelled;
+    const bool wasDrag = touchDown_ && (touchDragging_ || cancelled);
     const float dx = x - touchStartX_, dy = y - touchStartY_;
     touchDown_     = false;
     touchDragging_ = false;
@@ -568,30 +593,26 @@ void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
     // about the WHOLE stroke rather than its increments (the artwork's swipe);
     // the slop that decided this was a drag at all stays here, because it is a
     // property of a touch screen and not of the app.
+    //
+    // A CANCELLED stroke goes down this path too. The system took the gesture
+    // away — a notification shade, a back gesture, another window — and the
+    // press that went out at contact has to be retracted before the release
+    // below arrives, or the app would treat the interruption as a choice.
     if (wasDrag) owner_->onDragEnd((int)dx, (int)dy);
+
+    // The release, always: a tap, a drag and a cancellation all end with the
+    // finger off the glass, and an app holding a pressed state has no other
+    // way to learn that. What the release MEANS is the app's question; the
+    // ordering above is what lets it answer.
+    owner_->onLButtonUp((int)x, (int)y);
+
     if (!wasTap) return;
 
-    // A press is delivered at RELEASE, not at contact. That is what makes a
-    // drag able to change its mind: the finger has to come off in the same
-    // place for anything to be pressed at all.
-    using Clock = std::chrono::steady_clock;
-    const auto now = Clock::now();
-    const bool isDouble =
-        lastTapValid_ &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTapTime_).count() < 400 &&
-        std::fabs(x - lastTapX_) < kTouchSlopPx && std::fabs(y - lastTapY_) < kTouchSlopPx;
-
-    lastTapTime_ = now;
+    // Only a real tap seeds the double-tap window, measured release to
+    // contact — onTouchDown() is where the second one is recognised.
+    lastTapTime_  = std::chrono::steady_clock::now();
     lastTapX_ = x; lastTapY_ = y;
     lastTapValid_ = true;
-
-    owner_->onMouseMove((int)x, (int)y);
-    if (isDouble) {
-        owner_->onLButtonDblClk((int)x, (int)y);
-        lastTapValid_ = false;   // don't chain a third tap into another double
-    } else {
-        owner_->onLButtonDown((int)x, (int)y);
-    }
 }
 
 // ── Cross-thread events and the seek timer ───────────────────────────────────

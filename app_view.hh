@@ -42,6 +42,22 @@ public:
     // frame on screen is stale.
     virtual void onHostExposed() {}
 
+    // The window now HAS INPUT FOCUS — a stronger statement than being visible,
+    // and the two are not the same moment: Android hands an app its surface,
+    // lets it draw a frame, and only then gives the window focus.
+    //
+    // It exists because anything an app asks of the input system before that
+    // point is discarded. A launcher that raises the IME from onHostReady()
+    // gets "Ignoring showSoftInput() ... is not served" from
+    // InputMethodManager and a home screen with no keyboard, which is not a
+    // bug the app can fix on its own side: the moment it needs to wait for is
+    // one only the host can see. Fires on every focus gain, so an app doing
+    // one-time work here must guard it itself.
+    //
+    // Wayland and Win32 do not report it today; an app that only runs there
+    // never sees it and must not depend on it as its sole trigger.
+    virtual void onHostFocusGained() {}
+
     // Keyboard, in the portable key::* space (vk_canvas's keys.hh), never in
     // the platform's own keycodes.
     virtual void onKeyDownPortable(int keyCode) {}
