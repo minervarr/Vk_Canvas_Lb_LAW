@@ -162,5 +162,5 @@ It forces author/committer to `nava <nava@noreply.com>`, strips `Co-Authored-By:
 - **App ID**: `io.nava.vkcanvas`
 - **Native library**: `vk_canvas` (loaded by `NativeActivity`)
 - **Min SDK**: 26 (Android 8.0); **Compile SDK**: 37
-- **ABIs**: `arm64-v8a`, `x86_64`
+- **ABIs**: `armeabi-v7a`, `arm64-v8a`, `x86_64`
 - **C++ standard**: C++17, `-O2`
