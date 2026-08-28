@@ -164,6 +164,22 @@ public:
     enum class ExternalTransfer : int { Sdr = 0, Hlg = 1, Pq = 2 };
     void set_external_colour(VkSamplerYcbcrModelConversion model,
                              VkSamplerYcbcrRange range);
+    // How much of a decoder's buffer is actually picture.
+    //
+    // Hardware decoders allocate aligned up to what their hardware wants: a
+    // 2040x1530 video arrives in a 2048x1536 AHardwareBuffer, and the extra 8
+    // columns and 6 rows hold whatever was already in memory. Sampling the
+    // whole buffer smears that across the right and bottom edges — a band a
+    // millimetre wide, which is exactly what it looks like on a phone.
+    //
+    // The producer knows the real size (AImage_getWidth/Height, or the codec's
+    // crop rectangle) and states it here. 0 means "the whole buffer", which is
+    // what a camera wants and what every existing consumer gets by default.
+    void set_external_visible_size(uint32_t w, uint32_t h) {
+        external_visible_w_ = w;
+        external_visible_h_ = h;
+    }
+
     void set_external_transfer(ExternalTransfer t, float displayPeakNits = 1000.0f) {
         external_transfer_ = t;
         external_peak_nits_ = displayPeakNits;
@@ -267,6 +283,8 @@ private:
     VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
     ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
     float                           external_peak_nits_ = 1000.0f;
+    uint32_t                        external_visible_w_ = 0;
+    uint32_t                        external_visible_h_ = 0;
     VkSampler hwb_sampler_ = VK_NULL_HANDLE;
     VkImage hwb_image_ = VK_NULL_HANDLE;
     VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;

@@ -313,7 +313,7 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
-    pcRange.size       = 16;
+    pcRange.size       = 32;   // must match composite_frag.slang's PC block
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -686,9 +686,16 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         AHardwareBuffer_Desc desc;
         AHardwareBuffer_describe(current_hwb_, &desc);
         
-        // Android camera frames are typically 90 degrees rotated.
-        float raw_w = desc.height;
-        float raw_h = desc.width;
+        // Android camera frames are typically 90 degrees rotated, which is why
+        // these are swapped; composite_vert rotates the uv to match.
+        //
+        // The VISIBLE size, not the allocated one: letterboxing a 2048x1536
+        // buffer that holds a 2040x1530 picture gets the aspect ratio slightly
+        // wrong on top of showing the padding.
+        const uint32_t vis_w = external_visible_w_ > 0 ? external_visible_w_ : desc.width;
+        const uint32_t vis_h = external_visible_h_ > 0 ? external_visible_h_ : desc.height;
+        float raw_w = static_cast<float>(vis_h);
+        float raw_h = static_cast<float>(vis_w);
         float scale = std::min((float)width_ / raw_w, (float)height_ / raw_h);
         float draw_w = raw_w * scale;
         float draw_h = raw_h * scale;
@@ -715,9 +722,20 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         // { float hlg; int transfer; float peakNits; float _pad; }. `hlg`
         // stays first and keeps its meaning so the camera consumer, which
         // only ever set that one float, is untouched.
-        struct { float hlg; int transfer; float peakNits; float pad; } pc{
-            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_, 0.0f };
-        static_assert(sizeof(pc) == 16, "composite_frag push block is 16 bytes");
+        // The visible fraction of the decoder's buffer. desc is the ALLOCATED
+        // size, aligned up by the hardware; external_visible_* is what the
+        // producer said is actually picture. Equal, or unset, means 1.0.
+        float uScale = 1.0f, vScale = 1.0f;
+        if (external_visible_w_ > 0 && external_visible_w_ < desc.width)
+            uScale = static_cast<float>(external_visible_w_) / static_cast<float>(desc.width);
+        if (external_visible_h_ > 0 && external_visible_h_ < desc.height)
+            vScale = static_cast<float>(external_visible_h_) / static_cast<float>(desc.height);
+
+        struct { float hlg; int transfer; float peakNits; float pad0;
+                 float uScale; float vScale; float pad1; float pad2; } pc{
+            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_, 0.0f,
+            uScale, vScale, 0.0f, 0.0f };
+        static_assert(sizeof(pc) == 32, "composite_frag push block is 32 bytes");
         vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
     }
