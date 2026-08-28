@@ -175,6 +175,17 @@ public:
     // The producer knows the real size (AImage_getWidth/Height, or the codec's
     // crop rectangle) and states it here. 0 means "the whole buffer", which is
     // what a camera wants and what every existing consumer gets by default.
+    // Quarter turns CLOCKWISE applied to the external image, given in degrees
+    // and snapped to a quadrant. Defaults to 90 because that is what the
+    // Android camera preview has always needed and what this path used to do
+    // unconditionally; a video consumer sets it from its container, where 0 is
+    // the common answer.
+    void set_external_rotation(int degrees) {
+        int q = (degrees / 90) % 4;
+        if (q < 0) q += 4;
+        external_rotation_quadrant_ = q;
+    }
+
     void set_external_visible_size(uint32_t w, uint32_t h) {
         external_visible_w_ = w;
         external_visible_h_ = h;
@@ -283,6 +294,7 @@ private:
     VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
     ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
     float                           external_peak_nits_ = 1000.0f;
+    int                             external_rotation_quadrant_ = 1;
     uint32_t                        external_visible_w_ = 0;
     uint32_t                        external_visible_h_ = 0;
     VkSampler hwb_sampler_ = VK_NULL_HANDLE;

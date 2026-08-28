@@ -686,16 +686,20 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         AHardwareBuffer_Desc desc;
         AHardwareBuffer_describe(current_hwb_, &desc);
         
-        // Android camera frames are typically 90 degrees rotated, which is why
-        // these are swapped; composite_vert rotates the uv to match.
-        //
         // The VISIBLE size, not the allocated one: letterboxing a 2048x1536
         // buffer that holds a 2040x1530 picture gets the aspect ratio slightly
         // wrong on top of showing the padding.
         const uint32_t vis_w = external_visible_w_ > 0 ? external_visible_w_ : desc.width;
         const uint32_t vis_h = external_visible_h_ > 0 ? external_visible_h_ : desc.height;
-        float raw_w = static_cast<float>(vis_h);
-        float raw_h = static_cast<float>(vis_w);
+
+        // A quarter turn exchanges the picture's width and height, so the
+        // letterbox must be computed on the ROTATED extent. These were
+        // unconditionally swapped, which is right for the camera preview this
+        // path was written for and wrong for a video that needs no rotation at
+        // all: it letterboxed a landscape file into a portrait box.
+        const bool quarter_turn = (external_rotation_quadrant_ & 1) != 0;
+        float raw_w = static_cast<float>(quarter_turn ? vis_h : vis_w);
+        float raw_h = static_cast<float>(quarter_turn ? vis_w : vis_h);
         float scale = std::min((float)width_ / raw_w, (float)height_ / raw_h);
         float draw_w = raw_w * scale;
         float draw_h = raw_h * scale;
@@ -719,7 +723,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         vkCmdBindPipeline(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &hwb_it->second.desc_set, 0, nullptr);
         // Layout must match composite_frag.slang's PC block exactly:
-        // { float hlg; int transfer; float peakNits; float _pad; }. `hlg`
+        // { float hlg; int transfer; float peakNits; int rotQuadrant; ... }. `hlg`
         // stays first and keeps its meaning so the camera consumer, which
         // only ever set that one float, is untouched.
         // The visible fraction of the decoder's buffer. desc is the ALLOCATED
@@ -731,9 +735,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         if (external_visible_h_ > 0 && external_visible_h_ < desc.height)
             vScale = static_cast<float>(external_visible_h_) / static_cast<float>(desc.height);
 
-        struct { float hlg; int transfer; float peakNits; float pad0;
+        struct { float hlg; int transfer; float peakNits; int rotQuadrant;
                  float uScale; float vScale; float pad1; float pad2; } pc{
-            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_, 0.0f,
+            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_,
+            external_rotation_quadrant_,
             uScale, vScale, 0.0f, 0.0f };
         static_assert(sizeof(pc) == 32, "composite_frag push block is 32 bytes");
         vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
