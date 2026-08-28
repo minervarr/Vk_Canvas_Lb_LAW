@@ -251,6 +251,12 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     VkShaderModule vert = loadShader("shaders/composite_vert.spv");
     VkShaderModule frag = loadShader("shaders/composite_frag.spv");
 
+    // Bake the swapchain's output encoding into the COMPOSITE pipeline too.
+    // It was the only fragment stage that never got this, which was invisible
+    // while its only consumer was a camera on an SDR swapchain and fatal the
+    // moment one presented into HDR10 — see composite_frag.slang.
+    OutputEncodeSpec compositeEncodeSpec(output_.encode);
+
     VkPipelineShaderStageCreateInfo shaderStages[2]{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -260,6 +266,7 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].module = frag;
     shaderStages[1].pName = "main";
+    shaderStages[1].pSpecializationInfo = compositeEncodeSpec.get();
     // NOTE: composite_frag.slang lives in the font-engine submodule and does
     // not yet declare OUTPUT_ENCODE, so this pipeline is NOT specialized. It
     // only carries the Android camera composite, which is SDR by definition —
