@@ -101,6 +101,15 @@ public:
 
     void showErrorMessage(const std::string& title, const std::string& msg) override;
 
+    // The NativeActivity handle this host was built on.
+    //
+    // Exposed because the launch-intent helpers (launch_intent.hh) are free
+    // functions that need it, and an app that wants to read its OWN intent —
+    // a viewer opened on a document, say — otherwise has to thread that
+    // pointer down from android_main() in parallel with the Host it already
+    // owns. Read-only: nothing outside this class may drive the looper.
+    android_app* androidApp() const { return state_; }
+
 private:
     struct Event { int id; intptr_t p1, p2; };
 

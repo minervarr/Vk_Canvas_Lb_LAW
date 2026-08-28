@@ -88,3 +88,47 @@ std::vector<uint8_t> read_intent_data_bytes(android_app* app) {
     env->DeleteLocalRef(bytes);
     return out;
 }
+
+int open_intent_data_fd(android_app* app) {
+    JNIEnv* env = env_for(app);
+    if (!env) return -1;
+
+    jobject activity = app->activity->clazz;
+    jclass  act_cls  = env->GetObjectClass(activity);
+
+    jmethodID open = env->GetMethodID(act_cls, "openIntentDataFd", "()I");
+    if (check_exc(env, "GetMethodID(openIntentDataFd)") || !open) {
+        env->DeleteLocalRef(act_cls);
+        return -1;
+    }
+
+    const jint fd = env->CallIntMethod(activity, open);
+    const bool exc = check_exc(env, "openIntentDataFd");
+    env->DeleteLocalRef(act_cls);
+    return exc ? -1 : static_cast<int>(fd);
+}
+
+std::string intent_data_path(android_app* app) {
+    JNIEnv* env = env_for(app);
+    if (!env) return {};
+
+    jobject activity = app->activity->clazz;
+    jclass  act_cls  = env->GetObjectClass(activity);
+
+    jmethodID get = env->GetMethodID(act_cls, "getIntentDataPath", "()Ljava/lang/String;");
+    if (check_exc(env, "GetMethodID(getIntentDataPath)") || !get) {
+        env->DeleteLocalRef(act_cls);
+        return {};
+    }
+
+    auto js = static_cast<jstring>(env->CallObjectMethod(activity, get));
+    const bool exc = check_exc(env, "getIntentDataPath");
+    env->DeleteLocalRef(act_cls);
+    if (exc || !js) return {};
+
+    const char* utf = env->GetStringUTFChars(js, nullptr);
+    std::string out = utf ? utf : "";
+    if (utf) env->ReleaseStringUTFChars(js, utf);
+    env->DeleteLocalRef(js);
+    return out;
+}

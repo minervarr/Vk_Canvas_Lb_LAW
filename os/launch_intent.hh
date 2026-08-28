@@ -36,3 +36,21 @@ std::string read_string_extra(android_app* app, const char* key,
 // to open", not an error code: what that MEANS is the app's to decide, exactly
 // as it is for launchArgument().
 std::vector<uint8_t> read_intent_data_bytes(android_app* app);
+
+// The intent's data URI as an open file DESCRIPTOR, or -1.
+//
+// The streaming answer to read_intent_data_bytes()'s whole-file one, and the
+// method its own documentation points at for a consumer whose files are too
+// large to hold in memory. Ownership passes to the caller: close() it.
+//
+// Returns -1 for every failure, including "the consumer's activity does not
+// extend AppShellActivity" — the same quiet degradation as everything else
+// here.
+int open_intent_data_fd(android_app* app);
+
+// The intent's data URI as a filesystem path, or empty.
+//
+// Only for a file:// URI. A content:// URI has no path behind it and is never
+// guessed at; open_intent_data_fd() is the answer for those. Preferred when
+// available, because a path can be reopened and a detached descriptor cannot.
+std::string intent_data_path(android_app* app);

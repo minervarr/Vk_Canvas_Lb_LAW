@@ -534,6 +534,64 @@ public class AppShellActivity extends NativeActivity {
         }
     }
 
+    /**
+     * The intent's data URI as an open file DESCRIPTOR, or -1.
+     *
+     * <p>The method {@link #readIntentData()}'s documentation points at: a
+     * consumer opening a file too large to hold in memory asks for this
+     * instead. A video player is exactly that consumer — the recordings that
+     * motivated this are hundreds of megabytes to several gigabytes, and
+     * reading one into a byte[] to parse its header is not a trade, it is an
+     * OutOfMemoryError.
+     *
+     * <p>The descriptor is DETACHED: ownership passes to the caller, which
+     * must close() it. Left attached, the ParcelFileDescriptor's finalizer
+     * would close it out from under native code at an unpredictable moment.
+     *
+     * <p>"r" rather than "rw": a viewer opened on someone's document has no
+     * business asking for write access, and many providers refuse it outright.
+     *
+     * <p>Returns -1, never throws, for every failure — no data URI, a provider
+     * that has gone away, a revoked grant, a URI that names no openable file.
+     */
+    @SuppressWarnings("unused")
+    public int openIntentDataFd() {
+        final Intent intent = getIntent();
+        if (intent == null) return -1;
+        final Uri uri = intent.getData();
+        if (uri == null) return -1;
+        try {
+            android.os.ParcelFileDescriptor pfd =
+                    getContentResolver().openFileDescriptor(uri, "r");
+            if (pfd == null) return -1;
+            return pfd.detachFd();
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * The intent's data URI as a real filesystem PATH, or null.
+     *
+     * <p>Only for a {@code file://} URI, which is what a few file managers
+     * still send and what {@code adb shell am start -d file://...} produces.
+     * A {@code content://} URI has no path behind it and is never guessed at
+     * here — {@link #openIntentDataFd()} is the answer for those.
+     *
+     * <p>Preferred over the descriptor when it is available: a path can be
+     * reopened, which a detached fd cannot, and an app that wants to seek
+     * around a file across a lifecycle bounce needs that.
+     */
+    @SuppressWarnings("unused")
+    public String getIntentDataPath() {
+        final Intent intent = getIntent();
+        if (intent == null) return null;
+        final Uri uri = intent.getData();
+        if (uri == null) return null;
+        if (!"file".equals(uri.getScheme())) return null;
+        return uri.getPath();
+    }
+
     @SuppressWarnings("unused")
     public void openUrl(final String url) {
         // The native side has already rejected anything that is not plainly an
