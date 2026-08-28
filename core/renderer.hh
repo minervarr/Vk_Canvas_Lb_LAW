@@ -142,6 +142,32 @@ public:
     // While recording the camera delivers HLG frames; this enables the shader's
     // HLG->SDR tone-map so the preview isn't washed out.
     void set_camera_hlg(bool hlg) { camera_hlg_ = hlg ? 1.0f : 0.0f; }
+
+    // ── Telling the engine what colour an external image actually is ────────
+    //
+    // The Y'CbCr conversion built for an imported AHardwareBuffer takes the
+    // driver's suggestedYcbcrModel/Range by default, and for a camera buffer
+    // that is right: the producer and the gralloc format agree.
+    //
+    // For a VIDEO frame it is wrong. A P010 buffer out of a decoder carries no
+    // colourspace, so the driver suggests BT.709 for content that is BT.2020 —
+    // and the resulting matrix error is a consistent hue shift, which reads as
+    // a grading choice rather than as a bug. The consumer knows the truth (it
+    // came out of the container) and states it here.
+    //
+    // Must be called BEFORE the first update_camera_frame(), because the
+    // conversion object is created on the first buffer and every cached image
+    // view references it. Calling it later is ignored, loudly.
+    //
+    // ExternalTransfer selects the fragment stage's transfer function, which a
+    // sampler cannot apply. Sdr is what every existing consumer already got.
+    enum class ExternalTransfer : int { Sdr = 0, Hlg = 1, Pq = 2 };
+    void set_external_colour(VkSamplerYcbcrModelConversion model,
+                             VkSamplerYcbcrRange range);
+    void set_external_transfer(ExternalTransfer t, float displayPeakNits = 1000.0f) {
+        external_transfer_ = t;
+        external_peak_nits_ = displayPeakNits;
+    }
 #endif
 
 private:
@@ -226,6 +252,12 @@ private:
 
     AHardwareBuffer* current_hwb_ = nullptr;
     VkSamplerYcbcrConversion ycbcr_conversion_ = VK_NULL_HANDLE;
+    // Empty until set_external_colour() overrides the driver's suggestion.
+    bool                            external_colour_set_ = false;
+    VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
+    VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+    ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
+    float                           external_peak_nits_ = 1000.0f;
     VkSampler hwb_sampler_ = VK_NULL_HANDLE;
     VkImage hwb_image_ = VK_NULL_HANDLE;
     VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;

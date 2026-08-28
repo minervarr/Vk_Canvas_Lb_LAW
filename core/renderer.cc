@@ -48,6 +48,21 @@ Renderer::~Renderer() {
 }
 
 #if defined(__ANDROID__)
+void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
+                                   VkSamplerYcbcrRange range) {
+    if (ycbcr_conversion_ != VK_NULL_HANDLE) {
+        // The conversion is created on the first imported buffer and every
+        // cached image view references it, so it cannot be swapped underneath
+        // them. Saying so is better than silently keeping the old colour.
+        LOGI("set_external_colour() ignored: the YCbCr conversion already exists. "
+             "Call it before the first frame.");
+        return;
+    }
+    external_colour_set_ = true;
+    external_model_ = model;
+    external_range_ = range;
+}
+
 void Renderer::update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb) {
     // ── Instrumentation: rate camera frames ARRIVE at the renderer ──────────
     {
@@ -144,8 +159,17 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     ycbcr_ci.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
     ycbcr_ci.pNext = &ext_fmt;
     ycbcr_ci.format = VK_FORMAT_UNDEFINED;
-    ycbcr_ci.ycbcrModel = hwb_format_props.suggestedYcbcrModel;
-    ycbcr_ci.ycbcrRange = hwb_format_props.suggestedYcbcrRange;
+    // The driver's suggestion is right for a camera buffer, whose producer and
+    // gralloc format agree. It is wrong for a decoded VIDEO frame: a P010
+    // buffer carries no colourspace, so the driver suggests BT.709 for BT.2020
+    // content and the matrix error reads as a grading choice rather than a
+    // bug. set_external_colour() is how a consumer that KNOWS says so.
+    ycbcr_ci.ycbcrModel = external_colour_set_ ? external_model_
+                                               : hwb_format_props.suggestedYcbcrModel;
+    ycbcr_ci.ycbcrRange = external_colour_set_ ? external_range_
+                                               : hwb_format_props.suggestedYcbcrRange;
+    LOGI("HWB ycbcr: model %d range %d (%s)", (int)ycbcr_ci.ycbcrModel,
+         (int)ycbcr_ci.ycbcrRange, external_colour_set_ ? "consumer" : "driver-suggested");
     ycbcr_ci.components = hwb_format_props.samplerYcbcrConversionComponents;
     ycbcr_ci.xChromaOffset = hwb_format_props.suggestedXChromaOffset;
     ycbcr_ci.yChromaOffset = hwb_format_props.suggestedYChromaOffset;
@@ -602,8 +626,14 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
         vkCmdBindPipeline(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &hwb_it->second.desc_set, 0, nullptr);
-        float pc[4] = { camera_hlg_, 0, 0, 0 };
-        vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+        // Layout must match composite_frag.slang's PC block exactly:
+        // { float hlg; int transfer; float peakNits; float _pad; }. `hlg`
+        // stays first and keeps its meaning so the camera consumer, which
+        // only ever set that one float, is untouched.
+        struct { float hlg; int transfer; float peakNits; float pad; } pc{
+            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_, 0.0f };
+        static_assert(sizeof(pc) == 16, "composite_frag push block is 16 bytes");
+        vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
     }
 #endif  // __ANDROID__
