@@ -67,6 +67,32 @@ bool open_url(const std::string& url);
 // system may refuse without saying so.
 float display_hdr_headroom();
 
+// ── Orientation ─────────────────────────────────────────────────────────────
+//
+// android.content.pm.ActivityInfo's SCREEN_ORIENTATION_* constants, named here
+// so callers do not scatter the integers. Only the three an app with a genuine
+// opinion about its content needs; the full table has eighteen.
+//
+// The SENSOR variants deliberately, not the plain ones: they pin the AXIS and
+// leave the user free to flip the device end for end within it. LANDSCAPE
+// alone picks one of the two landscapes and refuses the other, which reads as
+// a bug to anyone holding the phone the other way round.
+enum Orientation : int {
+    OrientationUnspecified    = -1,  // SCREEN_ORIENTATION_UNSPECIFIED
+    OrientationSensorLandscape = 6,  // SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    OrientationSensorPortrait  = 7,  // SCREEN_ORIENTATION_SENSOR_PORTRAIT
+};
+
+// Ask to be held at `mode`. A REQUEST: the system may decline it, and a
+// foldable's outer display, a split-screen window or a device policy all can.
+// Nothing may depend on it having taken effect — the answer arrives later as a
+// configuration change, which reaches the app as an ordinary resize.
+//
+// Unspecified hands control back to the user's rotation setting, which is the
+// right thing to ask for whenever the app has no opinion. Overriding somebody's
+// rotation lock to no benefit is worse than a letterbox.
+void request_orientation(int mode);
+
 // Root of SHARED storage as a real path, e.g. "/storage/emulated/0". Empty if
 // the activity does not answer (which is what a consumer whose Activity does
 // not extend AppShellActivity gets); callers should fall back rather than

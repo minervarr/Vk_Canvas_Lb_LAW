@@ -58,6 +58,20 @@ public:
     // never sees it and must not depend on it as its sole trigger.
     virtual void onHostFocusGained() {}
 
+    // The window has LOST input focus: a notification shade pulled down, a
+    // permission dialog, a phone call, the recents switcher, or the user simply
+    // leaving. The counterpart to onHostFocusGained(), and the earliest moment
+    // an app is told it is no longer the thing being looked at.
+    //
+    // Earlier than losing the surface, which is the distinction that matters.
+    // onSurfaceLost() fires when the window is actually torn down, which for a
+    // backgrounded app can be seconds later or not at all; anything that should
+    // stop the moment the user's attention leaves — playback above all — has to
+    // hang off this instead.
+    //
+    // Wayland and Win32 do not report it today, exactly as with the gain.
+    virtual void onHostFocusLost() {}
+
     // Keyboard, in the portable key::* space (vk_canvas's keys.hh), never in
     // the platform's own keycodes.
     virtual void onKeyDownPortable(int keyCode) {}

@@ -228,6 +228,16 @@ std::string publish_image(const std::string& display_name,
 
 float display_hdr_headroom() { return call_float("displayHdrHeadroom", 1.0f); }
 
+void request_orientation(int mode) {
+    jvalue v;
+    v.i = (jint)mode;
+    // Failure is silent by design. A consumer whose Activity does not extend
+    // AppShellActivity has no such method, which call_void() reports by
+    // clearing the exception and returning false — and the correct behaviour
+    // there is exactly what happens anyway: the device keeps deciding.
+    call_void("requestOrientation", "(I)V", &v);
+}
+
 bool drain(Update& out) {
     std::lock_guard<std::mutex> lock(g_pending.mu);
     if (!g_pending.hasText && !g_pending.committed &&

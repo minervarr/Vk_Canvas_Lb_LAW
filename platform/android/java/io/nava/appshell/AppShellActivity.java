@@ -382,6 +382,46 @@ public class AppShellActivity extends NativeActivity {
     }
 
     /**
+     * Ask the system to hold this activity at a particular orientation.
+     *
+     * <p>{@code mode} is an {@link ActivityInfo} {@code SCREEN_ORIENTATION_*}
+     * constant, passed through unchanged — the caller is native code that
+     * already knows which one it wants, and translating an enum here would
+     * only mean maintaining the same table twice.
+     * {@code SCREEN_ORIENTATION_UNSPECIFIED} (-1) hands control back to the
+     * user's own rotation setting, which is what an app should do when it has
+     * no opinion.
+     *
+     * <p>A REQUEST. The system may decline it — a foldable's outer display, a
+     * freeform or split-screen window, or a device policy can all override
+     * what an activity asks for — so nothing may depend on it having taken
+     * effect. It is also why this returns nothing: the honest answer arrives
+     * later, as a configuration change, and the caller sees it as a resize
+     * like any other.
+     *
+     * <p>Marshalled to the UI thread. {@code setRequestedOrientation} is not
+     * safe to call from the native app thread, and the caller here is a native
+     * up-call that always is on it.
+     */
+    @SuppressWarnings("unused")
+    public void requestOrientation(final int mode) {
+        try {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        setRequestedOrientation(mode);
+                    } catch (Exception e) {
+                        Log.w(TAG, "setRequestedOrientation(" + mode + ") refused", e);
+                    }
+                }
+            });
+        } catch (Exception e) {
+            // An activity already finishing has no live UI thread to post to.
+            Log.w(TAG, "requestOrientation(" + mode + ") could not be posted", e);
+        }
+    }
+
+    /**
      * Root of SHARED storage, e.g. {@code /storage/emulated/0} — a real
      * filesystem path, not a SAF tree URI.
      *

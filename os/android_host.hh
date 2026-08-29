@@ -119,6 +119,7 @@ private:
     void onWindowInit();
     void onWindowTerm();
     void onGainedFocus();
+    void onLostFocus();
     void onResume();
 
     void dispatchAppEvent(const Event& e);

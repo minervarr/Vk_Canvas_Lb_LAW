@@ -305,6 +305,7 @@ void AndroidHost::handleAppCmd(android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:   if (app->window) self->onWindowInit(); break;
         case APP_CMD_TERM_WINDOW:   self->onWindowTerm();  break;
         case APP_CMD_GAINED_FOCUS:  self->onGainedFocus(); break;
+        case APP_CMD_LOST_FOCUS:    self->onLostFocus();   break;
         case APP_CMD_RESUME:        self->onResume();      break;
         case APP_CMD_WINDOW_RESIZED:
         case APP_CMD_CONFIG_CHANGED:
@@ -375,6 +376,14 @@ void AndroidHost::onGainedFocus() {
     // The app is told, because this is the first moment the input system will
     // accept anything from it — see AppView::onHostFocusGained().
     if (owner_) owner_->onHostFocusGained();
+}
+
+void AndroidHost::onLostFocus() {
+    // No immersive flags to re-apply and nothing to re-query: this exists
+    // purely to tell the app, because losing focus is the earliest and most
+    // reliable signal that the user has looked away. APP_CMD_PAUSE follows it
+    // and APP_CMD_TERM_WINDOW may follow that, seconds later or never.
+    if (owner_) owner_->onHostFocusLost();
 }
 
 void AndroidHost::onResume() {
