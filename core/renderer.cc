@@ -196,8 +196,16 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     LOGI("HWB ycbcr: model %d range %d (%s)", (int)ycbcr_ci.ycbcrModel,
          (int)ycbcr_ci.ycbcrRange, external_colour_set_ ? "consumer" : "driver-suggested");
     ycbcr_ci.components = hwb_format_props.samplerYcbcrConversionComponents;
-    ycbcr_ci.xChromaOffset = hwb_format_props.suggestedXChromaOffset;
-    ycbcr_ci.yChromaOffset = hwb_format_props.suggestedYChromaOffset;
+    // The same argument as the model above, one step further in: the driver's
+    // suggestion describes the BUFFER, and where the chroma samples sit is a
+    // property of the ENCODE. Half a chroma sample of error puts a colour
+    // fringe on one side of every hard saturated edge.
+    ycbcr_ci.xChromaOffset = external_siting_set_ ? external_x_siting_
+                                                  : hwb_format_props.suggestedXChromaOffset;
+    ycbcr_ci.yChromaOffset = external_siting_set_ ? external_y_siting_
+                                                  : hwb_format_props.suggestedYChromaOffset;
+    LOGI("HWB chroma siting: x %d y %d (%s)", (int)ycbcr_ci.xChromaOffset,
+         (int)ycbcr_ci.yChromaOffset, external_siting_set_ ? "container" : "driver-suggested");
     ycbcr_ci.chromaFilter = VK_FILTER_LINEAR;
     ycbcr_ci.forceExplicitReconstruction = VK_FALSE;
 
@@ -542,7 +550,9 @@ void Renderer::touch_hwb(AHardwareBuffer* hwb) {
 #endif  // __ANDROID__
 
 void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
-                                   VkSamplerYcbcrRange range) {
+                                   VkSamplerYcbcrRange range,
+                                   const VkChromaLocation* xChromaOffset,
+                                   const VkChromaLocation* yChromaOffset) {
     if (ycbcr_conversion_ != VK_NULL_HANDLE) {
         // The conversion is created on the first imported buffer and every
         // cached image view references it, so it cannot be swapped underneath
@@ -554,6 +564,14 @@ void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
     external_colour_set_ = true;
     external_model_ = model;
     external_range_ = range;
+    // Both or neither: a container that states one siting and not the other is
+    // describing an encode nobody makes, and mixing a stated axis with a
+    // suggested one is a worse answer than taking the driver's pair.
+    if (xChromaOffset && yChromaOffset) {
+        external_siting_set_ = true;
+        external_x_siting_ = *xChromaOffset;
+        external_y_siting_ = *yChromaOffset;
+    }
 }
 
 // The platform-neutral entry point. See renderer.hh for why it exists.

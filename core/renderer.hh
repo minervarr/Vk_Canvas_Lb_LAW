@@ -186,8 +186,18 @@ public:
     // ExternalTransfer selects the fragment stage's transfer function, which a
     // sampler cannot apply. Sdr is what every existing consumer already got.
     enum class ExternalTransfer : int { Sdr = 0, Hlg = 1, Pq = 2 };
+    //
+    // The chroma LOCATIONS are the same argument one step further in. 4:2:0
+    // has one chroma sample per four luma, and where it sits in that quad is a
+    // property of the encode that only the container states. The driver
+    // suggests here too, and its suggestion is about the gralloc buffer's
+    // layout rather than about the video — so a consumer that knows says so,
+    // exactly as with the matrix. Both default to the driver's suggestion,
+    // which is what every existing consumer already gets.
     void set_external_colour(VkSamplerYcbcrModelConversion model,
-                             VkSamplerYcbcrRange range);
+                             VkSamplerYcbcrRange range,
+                             const VkChromaLocation* xChromaOffset = nullptr,
+                             const VkChromaLocation* yChromaOffset = nullptr);
     // How much of a decoder's buffer is actually picture.
     //
     // Hardware decoders allocate aligned up to what their hardware wants: a
@@ -315,6 +325,12 @@ private:
     bool                            external_colour_set_ = false;
     VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
     VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+    // Unset means "the driver's suggestion stands", which is why these are
+    // flags beside the values rather than a sentinel inside them: every
+    // VkChromaLocation is a legitimate answer.
+    bool                            external_siting_set_ = false;
+    VkChromaLocation                external_x_siting_ = VK_CHROMA_LOCATION_COSITED_EVEN;
+    VkChromaLocation                external_y_siting_ = VK_CHROMA_LOCATION_MIDPOINT;
     ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
     float                           external_peak_nits_ = 1000.0f;
     int                             external_rotation_quadrant_ = 1;
