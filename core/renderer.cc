@@ -86,20 +86,6 @@ Renderer::~Renderer() {
 }
 
 #if defined(__ANDROID__)
-void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
-                                   VkSamplerYcbcrRange range) {
-    if (ycbcr_conversion_ != VK_NULL_HANDLE) {
-        // The conversion is created on the first imported buffer and every
-        // cached image view references it, so it cannot be swapped underneath
-        // them. Saying so is better than silently keeping the old colour.
-        LOGI("set_external_colour() ignored: the YCbCr conversion already exists. "
-             "Call it before the first frame.");
-        return;
-    }
-    external_colour_set_ = true;
-    external_model_ = model;
-    external_range_ = range;
-}
 
 void Renderer::update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb) {
     // ── Instrumentation: rate camera frames ARRIVE at the renderer ──────────
@@ -554,6 +540,34 @@ void Renderer::touch_hwb(AHardwareBuffer* hwb) {
     hwb_lru_.push_back(hwb);
 }
 #endif  // __ANDROID__
+
+void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
+                                   VkSamplerYcbcrRange range) {
+    if (ycbcr_conversion_ != VK_NULL_HANDLE) {
+        // The conversion is created on the first imported buffer and every
+        // cached image view references it, so it cannot be swapped underneath
+        // them. Saying so is better than silently keeping the old colour.
+        LOGI("set_external_colour() ignored: the YCbCr conversion already exists. "
+             "Call it before the first frame.");
+        return;
+    }
+    external_colour_set_ = true;
+    external_model_ = model;
+    external_range_ = range;
+}
+
+// The platform-neutral entry point. See renderer.hh for why it exists.
+void Renderer::update_external_frame(void* handle, std::function<void()> release_cb) {
+#if defined(__ANDROID__)
+    update_camera_frame(static_cast<AHardwareBuffer*>(handle), std::move(release_cb));
+#else
+    // No desktop external-image path yet. Release immediately rather than
+    // silently holding the producer's buffer forever — a decoder's output pool
+    // is small and stalls the moment one is not returned.
+    (void)handle;
+    if (release_cb) release_cb();
+#endif
+}
 
 void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
                     const std::vector<ImageDraw>& images,

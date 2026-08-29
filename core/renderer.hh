@@ -138,6 +138,20 @@ public:
 
     const DeviceCaps& caps() const { return caps_; }
 
+    // ── The platform-neutral way in for a decoded frame ────────────────────
+    //
+    // Same thing as update_camera_frame() below, with the platform's type
+    // erased. A consumer that carries frames around as opaque handles — a
+    // video player whose decode/render seam is a void* on purpose — can hand
+    // one straight over without naming AHardwareBuffer, which on a portable
+    // source file it has no way to name.
+    //
+    // The identity of `handle` is the platform's business and stays inside the
+    // engine: AHardwareBuffer* on Android, and on a desktop host it will be
+    // the decoder's VkImage, which needs no import at all. That asymmetry is
+    // exactly the sort of thing an engine should absorb rather than export.
+    void update_external_frame(void* handle, std::function<void()> release_cb = nullptr);
+
 #if defined(__ANDROID__)
     void update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb = nullptr);
     void clear_camera_frames();
@@ -145,8 +159,15 @@ public:
     // While recording the camera delivers HLG frames; this enables the shader's
     // HLG->SDR tone-map so the preview isn't washed out.
     void set_camera_hlg(bool hlg) { camera_hlg_ = hlg ? 1.0f : 0.0f; }
+#endif
 
     // ── Telling the engine what colour an external image actually is ────────
+    //
+    // Not Android-only, though it lived inside that guard until a second host
+    // needed it. Every one of these describes the CONTENT — its matrix, its
+    // transfer, its orientation, how much of the buffer is picture — and the
+    // content is the same wherever it is decoded. The platform-specific part
+    // is the import, which is update_external_frame() above.
     //
     // The Y'CbCr conversion built for an imported AHardwareBuffer takes the
     // driver's suggestedYcbcrModel/Range by default, and for a camera buffer
@@ -198,7 +219,6 @@ public:
         external_transfer_ = t;
         external_peak_nits_ = displayPeakNits;
     }
-#endif
 
 private:
     SurfaceProvider&  surface_provider_;
@@ -209,7 +229,6 @@ private:
     uint32_t width_  = 0;
     uint32_t height_ = 0;
     uint32_t desired_swapchain_images_ = 4;  // constructor arg; see create_swapchain()
-    float          camera_hlg_ = 0.0f;
 
     DeviceCaps caps_{};
 
@@ -262,6 +281,30 @@ private:
     // readbackLastFrame(). UINT32_MAX until the first draw().
     uint32_t    last_drawn_image_index_ = UINT32_MAX;
 
+    // The sampler conversion built for the external image. A plain Vulkan
+    // object, and the thing set_external_colour() guards against being created
+    // before it is told the truth — so it belongs with the description above
+    // rather than with the Android import below.
+    VkSamplerYcbcrConversion        ycbcr_conversion_ = VK_NULL_HANDLE;
+
+    // ── What the external image IS ─────────────────────────────────────────
+    //
+    // Outside the platform guard below, because every one of these describes
+    // the CONTENT rather than how it got here: its Y'CbCr matrix and range,
+    // its transfer function, its orientation, and how much of the buffer is
+    // actually picture. All of that is the same fact on any host. Only the
+    // import beneath it is per-platform.
+    float                           camera_hlg_ = 0.0f;
+    // Empty until set_external_colour() overrides the driver's suggestion.
+    bool                            external_colour_set_ = false;
+    VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
+    VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+    ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
+    float                           external_peak_nits_ = 1000.0f;
+    int                             external_rotation_quadrant_ = 1;
+    uint32_t                        external_visible_w_ = 0;
+    uint32_t                        external_visible_h_ = 0;
+
 #if defined(__ANDROID__)
     // AHardwareBuffer camera import (Android-only external images).
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID_ = nullptr;
@@ -291,16 +334,6 @@ private:
     static constexpr size_t kMaxCachedHwb = 32;
 
     AHardwareBuffer* current_hwb_ = nullptr;
-    VkSamplerYcbcrConversion ycbcr_conversion_ = VK_NULL_HANDLE;
-    // Empty until set_external_colour() overrides the driver's suggestion.
-    bool                            external_colour_set_ = false;
-    VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
-    VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
-    ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
-    float                           external_peak_nits_ = 1000.0f;
-    int                             external_rotation_quadrant_ = 1;
-    uint32_t                        external_visible_w_ = 0;
-    uint32_t                        external_visible_h_ = 0;
     VkSampler hwb_sampler_ = VK_NULL_HANDLE;
     VkImage hwb_image_ = VK_NULL_HANDLE;
     VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;
