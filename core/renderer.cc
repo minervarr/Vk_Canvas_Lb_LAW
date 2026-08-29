@@ -11,6 +11,42 @@ static inline int64_t now_ns() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// ── composite_frag.slang's push block, mirrored ────────────────────────────
+//
+// COMPOSITE_PC_BEGIN
+struct CompositePush {
+    float hlg;          // legacy: HLG when > 0.5, the camera's original field
+    int   transfer;     // 0 SDR, 1 HLG, 2 PQ
+    float peakNits;     // display peak for the PQ tone map
+    int   rotQuadrant;  // clockwise quarter-turns: 0..3
+    float uvScaleX;     // the picture's fraction of the allocated buffer
+    float uvScaleY;
+    float zoom;         // camera loupe; <= 1 is off
+    float cx;
+    float cy;
+    float peak;         // camera focus peaking; <= 0 is off
+    float texelX;
+    float texelY;
+    float peakColor;
+};
+// COMPOSITE_PC_END
+//
+// The field names and their ORDER must match the cbuffer in
+// first_party/vulkan_font_engine/shaders_src/composite_frag.slang. Nothing at
+// runtime checks this — a push block is a memcpy into a struct no validation
+// layer inspects — so cmake/check_composite_pc.cmake compares the two lists
+// between the COMPOSITE_PC_BEGIN/END markers here and the shader's own, and
+// fails the build when they drift.
+//
+// They did drift once, and the result was a video player that rotated every
+// frame the wrong way, skipped its PQ decode entirely, and ran the camera's
+// focus-peaking filter over the picture, all without one line of diagnostic.
+//
+// std430: every member is 4 bytes and the shader's float2 uvScale is 8-byte
+// aligned at offset 16, which this flat layout already satisfies. Append at
+// the end; never reorder.
+static_assert(sizeof(CompositePush) == 52, "composite_frag PC block is 52 bytes");
+
 #define LOG_TAG "vk_canvas"
 #define LOGI(...) VCE_LOGI(LOG_TAG, __VA_ARGS__)
 #define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
@@ -309,11 +345,13 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamic_states;
 
-    // Fragment push constant: the HLG tone-map flag (1 float, padded to 16).
+    // Fragment push constant: the composite block above. Sized from the struct
+    // rather than from a literal, which is how it came to say 32 while the
+    // shader had grown past it.
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
-    pcRange.size       = 32;   // must match composite_frag.slang's PC block
+    pcRange.size       = sizeof(CompositePush);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -722,10 +760,6 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
         vkCmdBindPipeline(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &hwb_it->second.desc_set, 0, nullptr);
-        // Layout must match composite_frag.slang's PC block exactly:
-        // { float hlg; int transfer; float peakNits; int rotQuadrant; ... }. `hlg`
-        // stays first and keeps its meaning so the camera consumer, which
-        // only ever set that one float, is untouched.
         // The visible fraction of the decoder's buffer. desc is the ALLOCATED
         // size, aligned up by the hardware; external_visible_* is what the
         // producer said is actually picture. Equal, or unset, means 1.0.
@@ -735,12 +769,17 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         if (external_visible_h_ > 0 && external_visible_h_ < desc.height)
             vScale = static_cast<float>(external_visible_h_) / static_cast<float>(desc.height);
 
-        struct { float hlg; int transfer; float peakNits; int rotQuadrant;
-                 float uScale; float vScale; float pad1; float pad2; } pc{
-            camera_hlg_, static_cast<int>(external_transfer_), external_peak_nits_,
-            external_rotation_quadrant_,
-            uScale, vScale, 0.0f, 0.0f };
-        static_assert(sizeof(pc) == 32, "composite_frag push block is 32 bytes");
+        // Zero-initialized first, so every field this renderer does not drive
+        // is definitively OFF rather than whatever was on the stack. The
+        // camera's loupe and focus peaking are pushed by a different consumer;
+        // zoom <= 1 and peak <= 0 are what "not in use" means for both.
+        CompositePush pc{};
+        pc.hlg         = camera_hlg_;
+        pc.transfer    = static_cast<int>(external_transfer_);
+        pc.peakNits    = external_peak_nits_;
+        pc.rotQuadrant = external_rotation_quadrant_;
+        pc.uvScaleX    = uScale;
+        pc.uvScaleY    = vScale;
         vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
     }
