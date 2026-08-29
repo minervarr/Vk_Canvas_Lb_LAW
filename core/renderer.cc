@@ -751,9 +751,16 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         // unconditionally swapped, which is right for the camera preview this
         // path was written for and wrong for a video that needs no rotation at
         // all: it letterboxed a landscape file into a portrait box.
+        //
+        // The pixel aspect is applied to the picture's own width FIRST, and the
+        // rotation swaps the axes afterwards. The other order stretches a
+        // portrait video along the wrong axis, which is the same bug the
+        // unconditional swap above was.
         const bool quarter_turn = (external_rotation_quadrant_ & 1) != 0;
-        float raw_w = static_cast<float>(quarter_turn ? vis_h : vis_w);
-        float raw_h = static_cast<float>(quarter_turn ? vis_w : vis_h);
+        const float pic_w = static_cast<float>(vis_w) * external_pixel_aspect_;
+        const float pic_h = static_cast<float>(vis_h);
+        float raw_w = quarter_turn ? pic_h : pic_w;
+        float raw_h = quarter_turn ? pic_w : pic_h;
         float scale = std::min((float)width_ / raw_w, (float)height_ / raw_h);
         float draw_w = raw_w * scale;
         float draw_h = raw_h * scale;

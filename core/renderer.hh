@@ -220,6 +220,22 @@ public:
         external_peak_nits_ = displayPeakNits;
     }
 
+    // Pixel aspect ratio: how wide a pixel is relative to its height.
+    //
+    // 1.0 for everything a camera produces and for most video, which is why
+    // the letterbox assumed it. Not everything: a container can say its pixels
+    // are not square (Matroska's DisplayWidth/DisplayHeight against
+    // PixelWidth/PixelHeight), and such a file is stored narrow and meant to
+    // be shown wide. Drawn at its pixel aspect it is simply the wrong shape —
+    // visibly so, and in a way that looks like a bad encode rather than a bad
+    // player.
+    //
+    // Applied to the picture's own width, before any rotation quadrant swaps
+    // the axes. Ignored unless positive.
+    void set_external_pixel_aspect(float par) {
+        if (par > 0.0f) external_pixel_aspect_ = par;
+    }
+
 private:
     SurfaceProvider&  surface_provider_;
     AssetReader&      assets_;
@@ -304,6 +320,7 @@ private:
     int                             external_rotation_quadrant_ = 1;
     uint32_t                        external_visible_w_ = 0;
     uint32_t                        external_visible_h_ = 0;
+    float                           external_pixel_aspect_ = 1.0f;
 
 #if defined(__ANDROID__)
     // AHardwareBuffer camera import (Android-only external images).
