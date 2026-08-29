@@ -53,10 +53,12 @@ static_assert(sizeof(CompositePush) == 52, "composite_frag PC block is 52 bytes"
 
 Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
                    uint32_t desiredSwapchainImages,
-                   OutputTarget requestedOutput)
+                   OutputTarget requestedOutput,
+                   PresentPolicy presentPolicy)
     : surface_provider_(surface), assets_(assets),
       desired_swapchain_images_(desiredSwapchainImages),
-      requested_output_(requestedOutput) {
+      requested_output_(requestedOutput),
+      present_policy_(presentPolicy) {
     VkExtent2D ext = surface_provider_.extent();
     width_  = ext.width;
     height_ = ext.height;
@@ -1197,8 +1199,14 @@ void Renderer::create_swapchain() {
     // free image to render into and the newest frame replaces the queued one, so a
     // transient compositor hold no longer stalls us. FIFO is the guaranteed
     // fallback if MAILBOX is unsupported.
+    //
+    // ...for a consumer that asked for Latency. A consumer that asked for Vsync
+    // is presenting frames a clock scheduled, not "whatever is newest", so
+    // there is nothing for MAILBOX to prefer and nothing gained by never
+    // blocking — while the cost, a render loop free-running at hundreds of fps
+    // over identical content, is entirely real. FIFO is always available.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    {
+    if (present_policy_ == PresentPolicy::Latency) {
         uint32_t pm_count = 0;
         vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, nullptr);
         std::vector<VkPresentModeKHR> modes(pm_count);
@@ -1219,7 +1227,9 @@ void Renderer::create_swapchain() {
     if (desired_images < 2) desired_images = 2;
     if (desired_images < caps.minImageCount) desired_images = caps.minImageCount;
     if (caps.maxImageCount > 0 && desired_images > caps.maxImageCount) desired_images = caps.maxImageCount;
-    LOGI("Swapchain present mode=%d, images=%u", present_mode, desired_images);
+    LOGI("Swapchain present mode=%d (%s), images=%u", present_mode,
+         present_policy_ == PresentPolicy::Vsync ? "vsync-paced" : "low-latency",
+         desired_images);
 
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & composite_alpha)) {

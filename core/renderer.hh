@@ -36,9 +36,12 @@ public:
     // contract there: Android needs Window.setColorMode(COLOR_MODE_HDR) from
     // the app's Activity, desktop needs OS HDR enabled, or the HDR formats
     // are never advertised in the first place.
+    // `presentPolicy` — Latency (MAILBOX) for a live preview, Vsync (FIFO) for
+    // content presented on a schedule. See PresentPolicy in output_target.hh.
     Renderer(SurfaceProvider& surface, AssetReader& assets,
              uint32_t desiredSwapchainImages = 4,
-             OutputTarget requestedOutput = OutputTarget::SdrSrgb);
+             OutputTarget requestedOutput = OutputTarget::SdrSrgb,
+             PresentPolicy presentPolicy = PresentPolicy::Latency);
 
     // What we actually got, after capability resolution — not what was asked.
     bool         hdrActive()    const { return output_.hdr; }
@@ -228,6 +231,7 @@ private:
     // framebuffer views; output_.encode is also baked into every pipeline as
     // the OUTPUT_ENCODE specialization constant.
     OutputTarget     requested_output_ = OutputTarget::SdrSrgb;
+    PresentPolicy    present_policy_   = PresentPolicy::Latency;
     OutputSelection  output_{};
     bool             output_resolved_ = false;  // resolve_output_target() ran
     VkFormat         swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
