@@ -100,6 +100,16 @@ public:
     }
     void destroy_texture(TextureHandle handle) { image_layer_.destroy_texture(handle); }
 
+    // Capture seam: skip vkQueuePresentKHR entirely. A headless surface has
+    // no compositor to hand the image to, and on current Mesa a headless
+    // present recycles the image - readbackLastFrame() then copies recycled,
+    // empty memory even though the frame rendered fine. Suppressed present
+    // leaves the just-rendered image in its final layout (PRESENT_SRC), which
+    // is exactly what the readback's barrier expects. The swapchain-side
+    // recreate that a failed present would trigger is skipped with it.
+    // Off by default; capture hosts turn this on before the first draw().
+    void setPresentEnabled(bool on) { present_enabled_ = on; }
+
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
 
@@ -300,6 +310,7 @@ private:
     VkSemaphore render_finished_sems_[kFramesInFlight] = {};
     VkFence     in_flight_fences_[kFramesInFlight]     = {};
     uint32_t    frame_index_ = 0;
+    bool        present_enabled_ = true;   // capture seam, see setPresentEnabled
     // Which frame-fence last submitted to each swapchain image — guards
     // re-recording cmd_buffers_[image] while that image's prior frame runs.
     std::vector<VkFence> image_fences_;

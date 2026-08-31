@@ -878,9 +878,13 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     present_info.pSwapchains = swapchains;
     present_info.pImageIndices = &image_index;
 
-    VkResult present_result = vkQueuePresentKHR(queue_, &present_info);
-    if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
-        recreate_swapchain();
+    VkResult present_result = VK_SUCCESS;
+    if (present_enabled_) {
+        present_result = vkQueuePresentKHR(queue_, &present_info);
+        if (present_result == VK_ERROR_OUT_OF_DATE_KHR ||
+            present_result == VK_SUBOPTIMAL_KHR) {
+            recreate_swapchain();
+        }
     }
 
     // ── Instrumentation: per-frame phase breakdown on slow frames ───────────
