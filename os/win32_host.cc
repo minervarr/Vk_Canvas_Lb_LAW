@@ -507,6 +507,13 @@ private:
         // moved"; whether the stroke was long enough to MEAN something is the
         // app's question (PlayerWindow::onDragEnd), not this file's.
         case WM_LBUTTONUP:
+            // The plain release goes out FIRST and unconditionally, exactly as
+            // wayland_host does: an app that fires its actions on the release
+            // (PlayerWindow does, so that a drag can be a scroll rather than a
+            // click) has nothing at all without it, and the drag bookkeeping
+            // below is a separate question that may decide the stroke meant
+            // nothing. app_view.hh already promised every host delivers this.
+            owner_->onLButtonUp(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             if (dragValid_) {
                 const int dx = GET_X_LPARAM(lp) - dragStartX_;
                 const int dy = GET_Y_LPARAM(lp) - dragStartY_;
