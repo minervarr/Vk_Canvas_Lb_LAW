@@ -47,14 +47,17 @@ void splitTwoLines(Canvas& c, const std::string& s, float maxW,
     l2.clear();
     if (c.textWidthStyled(s, size, style) <= maxW) { l1 = s; return; }
 
-    // Longest prefix that fits, preferring a space break.
-    size_t fit = 0, lastSpace = std::string::npos;
-    for (size_t i = 1; i <= s.size(); i++) {
-        if (i < s.size() && (s[i] & 0xC0) == 0x80) continue;  // inside a codepoint
-        if (c.textWidthStyled(s.substr(0, i), size, style) > maxW) break;
-        fit = i;
-        if (i < s.size() && s[i] == ' ') lastSpace = i;
-    }
+    // Longest prefix that fits, preferring a space break — ONE pass.
+    //
+    // This used to measure every prefix separately:
+    //   for (i…) c.textWidthStyled(s.substr(0, i), …)
+    // which is a heap allocation and a full re-walk of the string per
+    // codepoint — O(n²) work and O(n) allocations, per album tile, on every
+    // frame the grid redrew. prefixFitStyled() answers the same question by
+    // accumulating the same advances once; see its comment for why the cut it
+    // returns is identical rather than merely close.
+    size_t lastSpace = std::string::npos;
+    size_t fit = c.prefixFitStyled(s, maxW, size, style, nullptr, &lastSpace);
     size_t breakAt = (lastSpace != std::string::npos) ? lastSpace : fit;
     if (breakAt == 0) { l1 = truncateToWidth(c, s, maxW, size, style); return; }
     l1 = s.substr(0, breakAt);

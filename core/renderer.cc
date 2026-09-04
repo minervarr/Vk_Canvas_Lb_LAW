@@ -1473,6 +1473,75 @@ void Renderer::destroy_swapchain_resources() {
     if (swapchain_) { vkDestroySwapchainKHR(device_, swapchain_, nullptr); swapchain_ = VK_NULL_HANDLE; }
 }
 
+bool Renderer::recreate_surface() {
+    // See the header for what this is for. The order matters twice over:
+    // everything using the old swapchain must be gone before the SURFACE it
+    // was made from is destroyed, and on Android the VkSurfaceKHR must be
+    // destroyed before the ANativeWindow behind it is released — which is what
+    // the caller does next.
+    vkDeviceWaitIdle(device_);
+    destroy_swapchain_resources();
+    if (surface_ != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+    }
+
+    // A window that has gone away and not yet come back. Not an error: the
+    // caller retries when the platform hands it a new one.
+    VkExtent2D ext = surface_provider_.extent();
+    if (ext.width == 0 || ext.height == 0) return true;
+
+    create_surface();
+    if (surface_ == VK_NULL_HANDLE) return false;
+
+    // The render pass and every pipeline were built against the OLD surface's
+    // format. If the new one cannot give us the same, none of them are valid
+    // and the honest answer is to say so rather than render into a mismatch.
+    // resolve_output_target() is deliberately not re-run — its own comment
+    // says it must not — so this only CHECKS.
+    {
+        uint32_t n = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, nullptr);
+        std::vector<VkSurfaceFormatKHR> formats(n);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, formats.data());
+        bool ok = false;
+        for (const VkSurfaceFormatKHR& f : formats)
+            if (f.format == swapchain_format_ && f.colorSpace == swapchain_colorspace_) {
+                ok = true;
+                break;
+            }
+        if (!ok) {
+            LOGI("recreate_surface: new surface lacks format=%d colorspace=%d — full rebuild needed",
+                 (int)swapchain_format_, (int)swapchain_colorspace_);
+            return false;
+        }
+    }
+
+    width_  = ext.width;
+    height_ = ext.height;
+    create_swapchain();
+    create_framebuffers();
+
+    // Same guard recreate_swapchain() carries, for the same reason: the image
+    // count is normally deterministic for a surface, but cmd_buffers_ is
+    // indexed by image and must not be short.
+    if (cmd_buffers_.size() != framebuffers_.size()) {
+        if (!cmd_buffers_.empty())
+            vkFreeCommandBuffers(device_, cmd_pool_, (uint32_t)cmd_buffers_.size(), cmd_buffers_.data());
+        cmd_buffers_.resize(framebuffers_.size());
+        VkCommandBufferAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = cmd_pool_;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
+        vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+    }
+
+    overlay_.resize(width_, height_);
+    LOGI("Surface recreated (%ux%u) — device, pipelines and atlas kept", width_, height_);
+    return true;
+}
+
 void Renderer::recreate_swapchain() {
     VkExtent2D ext = surface_provider_.extent();
     if (ext.width == 0 || ext.height == 0) return;  // minimized; retry next draw()

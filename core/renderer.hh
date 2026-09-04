@@ -68,6 +68,33 @@ public:
               const std::vector<float>& msdfQuads = {},
               const std::vector<float>& shapeVerts = {});
 
+    // ── Surface lost and regained, WITHOUT losing the device ─────────────────
+    //
+    // For a platform whose window can die and come back under a living process
+    // — Android's APP_CMD_TERM_WINDOW / APP_CMD_INIT_WINDOW. The old
+    // VkSurfaceKHR is destroyed and a new one made from whatever the
+    // SurfaceProvider now points at; everything that does NOT depend on the
+    // surface survives: the instance, the device, the render pass, every
+    // pipeline, the command pool, the glyph atlas, and every texture the
+    // caller has uploaded (album art included).
+    //
+    // This exists because the alternative was destroying the Renderer whole
+    // and building it again — instance, device, pipelines, atlas re-upload —
+    // measured at ~370 ms on a moto g06 between the window arriving and the
+    // first frame being presented, every time the listener came back from the
+    // notification. It is the same subset recreate_swapchain() already
+    // rebuilds, plus the surface itself; the split it draws is "the surface
+    // changed" versus "the device is gone", which are genuinely different
+    // events that were being treated as one.
+    //
+    // Returns FALSE when the new surface is not compatible with the pipelines
+    // already built for the old one — a different format or colour space, which
+    // the render pass is baked against. The caller must then fall back to
+    // destroying and recreating the Renderer. That is a real possibility (an
+    // HDR mode change, an external display) and not a theoretical one, which is
+    // why this reports rather than asserts.
+    bool recreate_surface();
+
     // Create the text pipeline, atlas texture and vertex buffer from a TextFont
     // (MTSDF or per-size raster — see text_font.hh).
     // Must be called once after the Renderer is constructed, before any draw()
