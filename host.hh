@@ -148,6 +148,20 @@ public:
 
     virtual MonitorInfo primaryMonitor() const = 0;
 
+    // How many pixels there are to an inch on the display this window is on,
+    // or 0 when the platform will not say.
+    //
+    // The distinction from every other size in this header is that this one is
+    // a MEASUREMENT rather than a preference. A compositor scale factor and a
+    // UiScale both answer "how big should things look"; neither answers "how
+    // big is a pixel", and a UI that wants a margin to be the same physical
+    // size on a phone and on a monitor needs the second question.
+    //
+    // Zero is a real answer — a nested or headless compositor has no physical
+    // output to report — so a caller must carry a fallback rather than treat
+    // it as an error.
+    virtual float displayDpi() const { return 0.0f; }
+
     // See SafeInsets. Defaulted rather than pure so the two desktop hosts and
     // the headless one need no implementation at all: a window they are given
     // is a window they own, and the honest answer is zero on every edge.

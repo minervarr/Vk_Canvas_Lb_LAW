@@ -227,6 +227,7 @@ std::string publish_image(const std::string& display_name,
 }
 
 float display_hdr_headroom() { return call_float("displayHdrHeadroom", 1.0f); }
+float display_dpi()            { return call_float("displayDpi", 0.0f); }
 
 void request_orientation(int mode) {
     jvalue v;

@@ -67,6 +67,10 @@ bool open_url(const std::string& url);
 // system may refuse without saying so.
 float display_hdr_headroom();
 
+// Pixels per inch of the activity's display, 0 when unknown. See
+// AppShellActivity.displayDpi() for why this is xdpi and not densityDpi.
+float display_dpi();
+
 // ── Orientation ─────────────────────────────────────────────────────────────
 //
 // android.content.pm.ActivityInfo's SCREEN_ORIENTATION_* constants, named here

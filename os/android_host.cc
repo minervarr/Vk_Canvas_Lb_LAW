@@ -218,6 +218,10 @@ bool AndroidHost::init(AppView* owner) {
     return surface_ != nullptr && assets_ != nullptr;
 }
 
+// xdpi via the activity bridge; see AppShellActivity.displayDpi() for why the
+// bucketed densityDpi is only the fallback.
+float AndroidHost::displayDpi() const { return activity::display_dpi(); }
+
 MonitorInfo AndroidHost::primaryMonitor() const {
     MonitorInfo mi{};
     if (state_->window) {
