@@ -42,10 +42,26 @@ add_library(vk_canvas_core STATIC
     animated_float.cc
     frame_input.cc
     output_target.cc
+    # Pure logic, no platform seam and no Vulkan: a gesture classifier, a
+    # swipe-pager, a gap buffer with its undo stack, and a plot view. They sat
+    # in the not-compiled list below with the genuinely unported files, so a
+    # consumer that included the headers got a clean compile and a wall of
+    # undefined references at link time — which is how the UI demo found them.
+    # Each one builds standalone with nothing but the C++ standard library and
+    # this directory's own headers.
+    gesture.cc
+    pager.cc
+    text_buffer.cc
+    undo_redo.cc
+    plotview.cc
 )
 # WIP — moved here but not yet ported to the platform seams, deliberately not
-# compiled: canvas_host vulkan_state compute_context text_editor text_buffer
-# undo_redo pager plotview gesture archive
+# compiled: canvas_host vulkan_state compute_context text_editor archive
+#
+# text_editor stays out on purpose and is not in the same position as the five
+# above: it takes AInputEvent* and a VulkanState*, so it is an Android widget
+# rather than portable logic. A consumer wanting an editor builds one on
+# text_buffer + undo_redo, which are portable and now compiled.
 
 add_dependencies(vk_canvas_core vk_canvas_check_composite_pc)
 
