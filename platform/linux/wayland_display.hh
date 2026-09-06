@@ -31,6 +31,14 @@ struct WaylandOutput {
     int32_t     x = 0, y = 0;      // position in the compositor's layout
     int32_t     width = 0, height = 0;  // current mode, physical px
     int32_t     scale = 1;
+    // The output's physical size in MILLIMETRES, as wl_output.geometry reports
+    // it. Both were being received and discarded, which left nothing anywhere
+    // in this engine that could answer "how big is a pixel" — so a margin could
+    // only ever be authored in pixels and came out a different physical size on
+    // every panel. Zero means the compositor did not say (it is entitled not
+    // to: a headless or nested output has no physical size), and a caller must
+    // treat that as unknown rather than as a very small screen.
+    int32_t     phys_mm_w = 0, phys_mm_h = 0;
     std::string name;              // connector name, e.g. "HDMI-A-1" (v4+)
 };
 
@@ -51,6 +59,12 @@ public:
     // Outputs in bind order (Wayland has no "primary"; index 0 by convention).
     const std::vector<WaylandOutput>& outputs() const { return outputs_; }
     const WaylandOutput* find_output(wl_output* o) const;
+
+    // Pixels per inch of the first output that reported a physical size, or 0
+    // when none did. Derived from the mode and the millimetres rather than
+    // from any compositor-side scale factor: the scale is a UI preference, and
+    // this is a measurement.
+    float primaryDpi() const;
 
     // Route input events from `surface` to `sink` (null unregisters).
     void set_sink(wl_surface* surface, InputSink* sink);
