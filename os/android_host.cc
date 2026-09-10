@@ -588,6 +588,7 @@ void AndroidHost::onTouchDown(float x, float y) {
     touchLastY_  = y;
     touchLastTime_ = std::chrono::steady_clock::now();
     flingVel_      = 0.0f;
+    dragRemainder_ = 0.0f;
     touchDragging_ = false;
     touchDown_     = true;
     // Hover follows the finger so the app can light what is under it. It is
@@ -632,6 +633,7 @@ void AndroidHost::onTouchMove(float x, float y) {
         // gesture was admitted, and 1:1 from there.
         touchLastY_    = y;
         touchLastTime_ = now;
+        dragRemainder_ = 0.0f;   // the slop is spent; start the carry clean
         return;
     }
     // Past the slop the gesture belongs to scrolling, for good. The wheel is
@@ -646,7 +648,23 @@ void AndroidHost::onTouchMove(float x, float y) {
         const float v = std::clamp(dy / dt, -kFlingMaxVel, kFlingMaxVel);
         flingVel_ = flingVel_ * (1.0f - kFlingVelSmooth) + v * kFlingVelSmooth;
     }
-    const int delta = (int)std::lround(dy * kWheelPerPixel);
+    // Sub-pixel travel is CARRIED, never rounded away -- the same rule
+    // stepFling() already follows, and for a sharper reason here.
+    //
+    // onMouseWheel takes an int, and a drag slower than one pixel per touch
+    // sample rounds to zero. On a 120 Hz screen that is an ordinary slow drag:
+    // every sample is discarded, the content does not move at all, and the
+    // list feels stuck exactly when it is being moved carefully. The finger
+    // has to be swept fast before anything happens, which is the opposite of
+    // direct manipulation and made "move it slowly and it scrolls slowly" the
+    // one thing kinetic scrolling did not deliver.
+    //
+    // Accumulating the fraction instead means a 0.4 px sample is not lost --
+    // it lands as a 1 px step every third sample, and the average speed is
+    // exactly the finger's.
+    dragRemainder_ += dy * kWheelPerPixel;
+    const int delta = (int)std::lround(dragRemainder_);
+    dragRemainder_ -= (float)delta;
     touchLastY_    = y;
     touchLastTime_ = now;
     if (delta != 0) owner_->onMouseWheel((int)x, (int)y, delta);

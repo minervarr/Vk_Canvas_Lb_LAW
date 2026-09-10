@@ -89,6 +89,7 @@ public:
     // why every helper there clears the pending exception.
     void showKeyboard(const std::string& text, size_t cursorByte) override;
     void hideKeyboard() override;
+    bool inputIsTouch() const override { return true; }
     int  keyboardInset() const override { return imeBottom_; }
 
     void setClipboardText(const std::string& utf8) override;
@@ -190,6 +191,10 @@ private:
     // Touch state (one finger; this app has no pinch or two-finger gesture).
     float touchStartX_ = 0.0f, touchStartY_ = 0.0f;
     float touchLastY_  = 0.0f;
+    // Sub-pixel carry for the DRAG, the twin of flingRemainder_ below. Without
+    // it a drag slower than one pixel per sample rounds to nothing and the
+    // content does not move -- see onTouchMove().
+    float dragRemainder_ = 0.0f;
     bool  touchDragging_ = false;
     bool  touchDown_     = false;
     std::chrono::steady_clock::time_point lastTapTime_;
