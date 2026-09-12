@@ -650,10 +650,23 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     // Upload SDF shape quads into this frame slot's VBO.
     {
         uint32_t verts = static_cast<uint32_t>(shapeVerts.size() / kShapeFloatsPerVert);
-        if (verts > kMaxShapeVerts) verts = kMaxShapeVerts;
-        if (shapePipeline_ != VK_NULL_HANDLE && shapeVboMapped_[frame] && verts > 0)
-            std::memcpy(shapeVboMapped_[frame], shapeVerts.data(),
-                        static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+        // Same contract as the text VBO: grow to fit, and if the allocation
+        // genuinely fails, fall back to whatever capacity survives — rounded
+        // down to a whole quad, so the tail is a missing shape and never
+        // half of one (a Terminus glyph cut mid-run looks like a sliced
+        // letter, which is how Settings lists used to die).
+        if (shapePipeline_ != VK_NULL_HANDLE && verts > 0) {
+            if (!ensureShapeVboCapacity(frame, verts))
+                verts = shapeVboVerts_[frame] -
+                        shapeVboVerts_[frame] % kShapeVertsPerQuad;
+            if (shapeVboMapped_[frame] && verts > 0)
+                std::memcpy(shapeVboMapped_[frame], shapeVerts.data(),
+                            static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+            else
+                verts = 0;
+        } else {
+            verts = 0;
+        }
         shapeVertCount_ = verts;
     }
 
@@ -1799,6 +1812,49 @@ bool Renderer::ensureMsdfVboCapacity(uint32_t frame, uint32_t verts) {
     return true;
 }
 
+bool Renderer::ensureShapeVboCapacity(uint32_t frame, uint32_t verts) {
+    if (verts <= shapeVboVerts_[frame] && shapeVboMapped_[frame]) return true;
+
+    uint32_t want = shapeVboVerts_[frame] ? shapeVboVerts_[frame] : kInitialShapeVerts;
+    while (want < verts) want *= 2;
+    want -= want % kShapeVertsPerQuad;
+
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(want) *
+                               kShapeFloatsPerVert * sizeof(float);
+
+    if (shapeVboMapped_[frame]) { vkUnmapMemory(device_, shapeVboMemory_[frame]); shapeVboMapped_[frame] = nullptr; }
+    if (shapeVbo_[frame])       { vkDestroyBuffer(device_, shapeVbo_[frame], nullptr); shapeVbo_[frame] = VK_NULL_HANDLE; }
+    if (shapeVboMemory_[frame]) { vkFreeMemory(device_, shapeVboMemory_[frame], nullptr); shapeVboMemory_[frame] = VK_NULL_HANDLE; }
+    shapeVboVerts_[frame] = 0;
+
+    VkBufferCreateInfo vb{};
+    vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vb.size  = bytes;
+    vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &vb, nullptr, &shapeVbo_[frame]) != VK_SUCCESS) {
+        LOGE("shape VBO: cannot create a buffer for %u vertices", want);
+        return false;
+    }
+    VkMemoryRequirements vr{};
+    vkGetBufferMemoryRequirements(device_, shapeVbo_[frame], &vr);
+    VkMemoryAllocateInfo va{};
+    va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    va.allocationSize = vr.size;
+    va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[frame]) != VK_SUCCESS) {
+        LOGE("shape VBO: cannot allocate %llu bytes for %u vertices",
+             (unsigned long long)bytes, want);
+        vkDestroyBuffer(device_, shapeVbo_[frame], nullptr);
+        shapeVbo_[frame] = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindBufferMemory(device_, shapeVbo_[frame], shapeVboMemory_[frame], 0);
+    vkMapMemory(device_, shapeVboMemory_[frame], 0, bytes, 0, &shapeVboMapped_[frame]);
+    shapeVboVerts_[frame] = want;
+    return true;
+}
+
 void Renderer::uploadMsdfAtlas(const uint8_t* rgba, uint32_t w, uint32_t h,
                                uint32_t layers,
                               float pxRange, uint32_t channels) {
@@ -2297,26 +2353,8 @@ void Renderer::initShapes() {
     vkDestroyShaderModule(device_, fs, nullptr);
     if (!shapePipeline_) return;
 
-    // Per-frame vertex buffers (host-visible, persistently mapped).
-    const VkDeviceSize vbBytes =
-        static_cast<VkDeviceSize>(kMaxShapeVerts) * kShapeFloatsPerVert * sizeof(float);
-    for (uint32_t f = 0; f < kFramesInFlight; f++) {
-        VkBufferCreateInfo vb{};
-        vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        vb.size  = vbBytes;
-        vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        vkCreateBuffer(device_, &vb, nullptr, &shapeVbo_[f]);
-        VkMemoryRequirements vr{};
-        vkGetBufferMemoryRequirements(device_, shapeVbo_[f], &vr);
-        VkMemoryAllocateInfo va{};
-        va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        va.allocationSize = vr.size;
-        va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[f]);
-        vkBindBufferMemory(device_, shapeVbo_[f], shapeVboMemory_[f], 0);
-        vkMapMemory(device_, shapeVboMemory_[f], 0, vbBytes, 0, &shapeVboMapped_[f]);
-    }
+    for (uint32_t f = 0; f < kFramesInFlight; f++)
+        ensureShapeVboCapacity(f, kInitialShapeVerts);
     LOGI("SDF shape pipeline ready");
 }
 
@@ -2342,6 +2380,7 @@ void Renderer::cleanupShapes() {
         if (shapeVboMapped_[f]) { vkUnmapMemory(device_, shapeVboMemory_[f]); shapeVboMapped_[f] = nullptr; }
         if (shapeVbo_[f])       { vkDestroyBuffer(device_, shapeVbo_[f], nullptr); shapeVbo_[f] = VK_NULL_HANDLE; }
         if (shapeVboMemory_[f]) { vkFreeMemory(device_, shapeVboMemory_[f], nullptr); shapeVboMemory_[f] = VK_NULL_HANDLE; }
+        shapeVboVerts_[f] = 0;
     }
     if (shapePipeline_)       { vkDestroyPipeline(device_, shapePipeline_, nullptr); shapePipeline_ = VK_NULL_HANDLE; }
     if (shapePipelineLayout_) { vkDestroyPipelineLayout(device_, shapePipelineLayout_, nullptr); shapePipelineLayout_ = VK_NULL_HANDLE; }

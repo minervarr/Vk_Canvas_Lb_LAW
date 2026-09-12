@@ -493,11 +493,18 @@ private:
     // its own pixels. Vertex layout (14 floats, see Canvas::useShapes()):
     //   pos.xy  rgba  data0.xyzw  data1.xyzw
     static constexpr uint32_t kShapeFloatsPerVert = 14;
-    static constexpr uint32_t kMaxShapeVerts = 6 * 2048;  // 2048 shapes
+    static constexpr uint32_t kShapeVertsPerQuad  = 6;
+    // Where the per-frame shape VBO STARTS. It used to be a hard ceiling
+    // (`if (verts > kMaxShapeVerts) verts = kMaxShapeVerts`), and that
+    // silent truncation is how a bitmap UI vanished mid-glyph: Terminus is
+    // one rect per pixel-run, so 2048 quads is a few dozen letters. The
+    // text VBO already grows; this one does too. See ensureShapeVboCapacity().
+    static constexpr uint32_t kInitialShapeVerts = kShapeVertsPerQuad * 2048;
 
     VkBuffer         shapeVbo_[kFramesInFlight]       = {};
     VkDeviceMemory   shapeVboMemory_[kFramesInFlight] = {};
     void*            shapeVboMapped_[kFramesInFlight] = {};
+    uint32_t         shapeVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
     uint32_t         shapeVertCount_ = 0;  // for the frame being recorded
     VkPipelineLayout shapePipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline       shapePipeline_       = VK_NULL_HANDLE;
@@ -505,6 +512,7 @@ private:
     void initShapes();
     void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame);
     void cleanupShapes();
+    bool ensureShapeVboCapacity(uint32_t frame, uint32_t verts);
 
     void create_instance();
     void create_surface();
