@@ -86,6 +86,10 @@ public:
         // is no separate "make visible" call the way Windows' ShowWindow is.
     }
 
+    float displayDpi() const override {
+        return display_ ? display_->primaryDpi() : 0.0f;
+    }
+
     MonitorInfo primaryMonitor() const override {
         MonitorInfo mi{};
         const auto& outputs = display_->outputs();

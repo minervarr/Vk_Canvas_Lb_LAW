@@ -345,6 +345,38 @@ public class AppShellActivity extends NativeActivity {
      * unconditionally, and never throws — an unknown display reports no
      * headroom rather than an error.
      */
+    /**
+     * Pixels per inch of the display this activity is on, or 0 when it cannot
+     * be determined.
+     *
+     * <p>{@code xdpi} is the panel's real horizontal density, which is the
+     * measurement wanted here — NOT {@code densityDpi}, which is quantised to
+     * a bucket (160/240/320/...) and is a scaling preference. A margin
+     * authored in millimetres against the bucket would come out a different
+     * size on two phones that round to the same one.
+     *
+     * <p>Never throws: an unknown display reports 0 rather than an error, and
+     * the native side has a fallback either way.
+     */
+    @SuppressWarnings("unused")
+    public float displayDpi() {
+        try {
+            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+            Display d = activityDisplay();
+            if (d == null) return 0.0f;
+            d.getMetrics(dm);
+            // xdpi is occasionally nonsense on cheap devices (0, or wildly
+            // large); fall back to the bucket rather than return a number that
+            // would put a 3 mm margin off the edge of the screen.
+            if (dm.xdpi > 40.0f && dm.xdpi < 1200.0f) return dm.xdpi;
+            if (dm.densityDpi > 0) return (float) dm.densityDpi;
+            return 0.0f;
+        } catch (Throwable t) {
+            Log.i(TAG, "displayDpi unavailable: " + t);
+            return 0.0f;
+        }
+    }
+
     @SuppressWarnings({"unused", "deprecation"})
     public float displayHdrHeadroom() {
         try {

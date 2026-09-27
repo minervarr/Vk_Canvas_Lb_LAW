@@ -68,6 +68,7 @@ public:
 
     void showWindow() override {}
     MonitorInfo primaryMonitor() const override;
+    float       displayDpi() const override;
     // The display cutout, and ONLY the cutout — see the definition. The system
     // bars are hidden rather than avoided, so they contribute nothing here.
     SafeInsets safeInsets() const override;
