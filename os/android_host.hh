@@ -131,16 +131,13 @@ private:
     //
     // A finger is not a mouse, and the difference is not cosmetic: a drag must
     // scroll and must NOT press whatever was under it when it started. Below
-    // the slop the gesture is a tap and arrives as onMouseMove + a click at
-    // release; past the slop it becomes wheel deltas and the click is
-    // cancelled for good, even if the finger comes back.
+    // the slop the gesture is a tap (press at contact, completes at release);
+    // past the slop it becomes wheel deltas 1:1 and the press is cancelled
+    // for good, even if the finger comes back. A lift is a stop; there is no
+    // fling.
     void onTouchDown(float x, float y);
     void onTouchMove(float x, float y);
     void onTouchUp(float x, float y, bool cancelled);
-    // Advances an in-flight fling by the time actually elapsed and emits the
-    // wheel delta for it. Called from pump(); a no-op when nothing is flying.
-    void stepFling();
-    void cancelFling();
 
     // Asks for "All files access" IF it is not already granted, and at most
     // once per process. Both halves matter — see the definition: the call it
@@ -191,28 +188,15 @@ private:
     // Touch state (one finger; this app has no pinch or two-finger gesture).
     float touchStartX_ = 0.0f, touchStartY_ = 0.0f;
     float touchLastY_  = 0.0f;
-    // Sub-pixel carry for the DRAG, the twin of flingRemainder_ below. Without
-    // it a drag slower than one pixel per sample rounds to nothing and the
-    // content does not move -- see onTouchMove().
+    // Sub-pixel carry for the drag. Without it a drag slower than one pixel
+    // per sample rounds to nothing and the content does not move -- see
+    // onTouchMove().
     float dragRemainder_ = 0.0f;
     bool  touchDragging_ = false;
     bool  touchDown_     = false;
     std::chrono::steady_clock::time_point lastTapTime_;
     float lastTapX_ = 0.0f, lastTapY_ = 0.0f;
     bool  lastTapValid_ = false;
-
-    // Kinetic scrolling. A finger that leaves the glass while still moving
-    // keeps the content moving, decaying to a stop — the behaviour every
-    // Android list has and the reason a long library used to need one drag
-    // per screenful. It lives HERE, in the one place a touch is translated
-    // into a wheel, so every scroll consumer in every app gets it without
-    // knowing a finger exists (see stepFling()).
-    std::chrono::steady_clock::time_point touchLastTime_;  // when touchLastY_ was sampled
-    float flingVel_      = 0.0f;   // px/s, signed like a wheel delta
-    float flingRemainder_= 0.0f;   // sub-pixel carry, so slow decay still moves
-    float flingX_ = 0.0f, flingY_ = 0.0f;   // where the finger left
-    bool  flingActive_   = false;
-    std::chrono::steady_clock::time_point flingLastStep_;
 
     bool storageAsked_ = false;
     bool hostReadySignalled_   = false;

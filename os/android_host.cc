@@ -6,7 +6,6 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <thread>
@@ -46,29 +45,9 @@ constexpr float kTouchSlopPx = 24.0f;
 // screen.
 constexpr float kWheelPerPixel = 1.0f;
 
-// ── Kinetic scrolling ────────────────────────────────────────────────────────
-// A phone list that stops dead the instant the finger leaves is the difference
-// between scrolling a library and dragging it: without this, crossing a few
-// hundred albums is one full-screen drag per screenful. The numbers are the
-// same shape as Android's own scroller.
-//
-// kFlingTau is the time constant of the exponential decay — velocity falls to
-// 1/e of itself every 0.33 s, so a throw runs for roughly a second and always
-// ends softly rather than at a wall. kFlingMinStart is the speed below which a
-// release is a lift, not a throw (a finger parked on the glass drifts a few
-// px/s and must not launch anything). kFlingStop ends it once a frame's worth
-// of travel is under a pixel — past that it is arithmetic nobody can see.
-// kFlingMaxVel caps a flick against the screen edge, where two samples a
-// millisecond apart can otherwise report an absurd speed.
-constexpr float kFlingTau      = 0.33f;      // seconds
-constexpr float kFlingMinStart = 120.0f;     // px/s
-constexpr float kFlingStop     = 60.0f;      // px/s
-constexpr float kFlingMaxVel   = 9000.0f;    // px/s
-// How much of each new sample's speed replaces the running estimate. Raw
-// per-event velocity is noisy — Android batches motion samples and the last
-// one before release is frequently the shortest — so the throw is aimed with a
-// smoothed value rather than whatever the final pair of points happened to say.
-constexpr float kFlingVelSmooth = 0.35f;
+// A lift is a stop. There is no coasting: the app snaps every list by whole
+// rows, and a throw that kept emitting wheel deltas after the finger left
+// would animate those steps. The drag itself is still 1:1 into wheel units.
 
 // The eventfd activity_bridge's waker writes to. A file-scope int rather than a
 // member because the waker is a plain function pointer with nowhere to keep a
@@ -578,16 +557,11 @@ int32_t AndroidHost::handleInputEvent(android_app* app, AInputEvent* event) {
 }
 
 void AndroidHost::onTouchDown(float x, float y) {
-    // A finger on the glass stops a fling, always and before anything else.
-    // Catching a moving list is how a listener aims at a row in it, and a
-    // scroll that kept running under the finger would make every tap a lottery.
-    cancelFling();
-
+    // A finger on the glass cancels leftover drag carry. There is no fling
+    // to stop: a lift already ended the scroll.
     touchStartX_ = x;
     touchStartY_ = y;
     touchLastY_  = y;
-    touchLastTime_ = std::chrono::steady_clock::now();
-    flingVel_      = 0.0f;
     dragRemainder_ = 0.0f;
     touchDragging_ = false;
     touchDown_     = true;
@@ -620,7 +594,6 @@ void AndroidHost::onTouchDown(float x, float y) {
 
 void AndroidHost::onTouchMove(float x, float y) {
     if (!touchDown_) return;
-    const auto now = std::chrono::steady_clock::now();
     if (!touchDragging_) {
         const float dx = x - touchStartX_, dy = y - touchStartY_;
         if (std::sqrt(dx * dx + dy * dy) <= kTouchSlopPx) return;   // still a tap
@@ -632,32 +605,20 @@ void AndroidHost::onTouchMove(float x, float y) {
         // the measurement here means the scroll begins exactly where the
         // gesture was admitted, and 1:1 from there.
         touchLastY_    = y;
-        touchLastTime_ = now;
         dragRemainder_ = 0.0f;   // the slop is spent; start the carry clean
         return;
     }
     // Past the slop the gesture belongs to scrolling, for good. The wheel is
     // fed the finger's own displacement since the last event, so content
-    // tracks the finger rather than stepping.
+    // tracks the finger rather than stepping. The app then snaps that travel
+    // onto whole rows; this host does not throw after a lift.
     const float dy = y - touchLastY_;
-    const float dt = std::chrono::duration<float>(now - touchLastTime_).count();
-    // A sample that arrives in the same millisecond as the last one says
-    // nothing about speed — dividing by it is where the absurd velocities come
-    // from — so it moves the content and leaves the estimate alone.
-    if (dt > 0.001f) {
-        const float v = std::clamp(dy / dt, -kFlingMaxVel, kFlingMaxVel);
-        flingVel_ = flingVel_ * (1.0f - kFlingVelSmooth) + v * kFlingVelSmooth;
-    }
-    // Sub-pixel travel is CARRIED, never rounded away -- the same rule
-    // stepFling() already follows, and for a sharper reason here.
+    // Sub-pixel travel is CARRIED, never rounded away.
     //
     // onMouseWheel takes an int, and a drag slower than one pixel per touch
     // sample rounds to zero. On a 120 Hz screen that is an ordinary slow drag:
     // every sample is discarded, the content does not move at all, and the
-    // list feels stuck exactly when it is being moved carefully. The finger
-    // has to be swept fast before anything happens, which is the opposite of
-    // direct manipulation and made "move it slowly and it scrolls slowly" the
-    // one thing kinetic scrolling did not deliver.
+    // list feels stuck exactly when it is being moved carefully.
     //
     // Accumulating the fraction instead means a 0.4 px sample is not lost --
     // it lands as a 1 px step every third sample, and the average speed is
@@ -666,7 +627,6 @@ void AndroidHost::onTouchMove(float x, float y) {
     const int delta = (int)std::lround(dragRemainder_);
     dragRemainder_ -= (float)delta;
     touchLastY_    = y;
-    touchLastTime_ = now;
     if (delta != 0) owner_->onMouseWheel((int)x, (int)y, delta);
 }
 
@@ -675,26 +635,8 @@ void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
     const bool wasDrag = touchDown_ && (touchDragging_ || cancelled);
     const float dx = x - touchStartX_, dy = y - touchStartY_;
 
-    // The throw. Only a real drag that was still moving when it ended, and
-    // never a cancellation: a stroke the system took away (a shade pulled
-    // down, a back gesture) was not a decision, and launching the content
-    // after it would leave the listener somewhere they never scrolled to.
-    if (touchDown_ && touchDragging_ && !cancelled &&
-        std::fabs(flingVel_) >= kFlingMinStart) {
-        // Staleness matters more than magnitude here: a finger that stopped
-        // and rested before lifting has a smoothed velocity that is still
-        // large but no longer TRUE, so the age of the last sample decides.
-        const float age = std::chrono::duration<float>(
-                              std::chrono::steady_clock::now() - touchLastTime_).count();
-        if (age < 0.06f) {
-            flingVel_       = std::clamp(flingVel_, -kFlingMaxVel, kFlingMaxVel);
-            flingX_         = x;
-            flingY_         = y;
-            flingRemainder_ = 0.0f;
-            flingActive_    = true;
-            flingLastStep_  = std::chrono::steady_clock::now();
-        }
-    }
+    // A lift is a lift. The drag already emitted its wheel deltas; nothing
+    // continues after the finger leaves.
 
     touchDown_     = false;
     touchDragging_ = false;
@@ -782,49 +724,6 @@ void AndroidHost::drainTimer() {
     if (read(timerFd_, &expirations, sizeof(expirations)) > 0) owner_->onTimer(timerId_);
 }
 
-// ── Kinetic scrolling ────────────────────────────────────────────────────────
-
-void AndroidHost::cancelFling() {
-    flingActive_    = false;
-    flingVel_       = 0.0f;
-    flingRemainder_ = 0.0f;
-}
-
-// One frame of a throw. The app is never told this is not a finger: it sees
-// the same wheel deltas a drag produces, from the point the finger left, so a
-// scroll that is clamped at the end of its content simply stops moving while
-// this decays — no end-of-list handshake for a consumer to implement.
-void AndroidHost::stepFling() {
-    if (!flingActive_ || !owner_) return;
-
-    const auto now = std::chrono::steady_clock::now();
-    float dt = std::chrono::duration<float>(now - flingLastStep_).count();
-    if (dt <= 0.0f) return;
-    // A stalled frame (a decode, a swapchain rebuild) must not be paid back as
-    // one enormous jump; the throw loses that time instead.
-    if (dt > 0.10f) dt = 0.10f;
-    flingLastStep_ = now;
-
-    // Velocity decays exponentially and the distance is its INTEGRAL over the
-    // frame, not its value sampled at one edge. That is what makes a throw
-    // travel the same distance whether the frames come at 60 Hz, at 120, or
-    // with one late one in the middle — sampling instead makes the same flick
-    // go further on a faster phone.
-    const float decay = std::exp(-dt / kFlingTau);
-    const float dist  = flingVel_ * kFlingTau * (1.0f - decay);
-    flingVel_ *= decay;
-
-    // Sub-pixel travel is carried rather than rounded away: at the tail of a
-    // throw a frame is worth less than a pixel, and dropping those would stop
-    // the scroll early and make the ending look clipped.
-    flingRemainder_ += dist * kWheelPerPixel;
-    const int delta  = (int)std::lround(flingRemainder_);
-    flingRemainder_ -= (float)delta;
-    if (delta != 0) owner_->onMouseWheel((int)flingX_, (int)flingY_, delta);
-
-    if (std::fabs(flingVel_) < kFlingStop) cancelFling();
-}
-
 // ── The pump ─────────────────────────────────────────────────────────────────
 
 void AndroidHost::pump(bool haveWork) {
@@ -838,13 +737,8 @@ void AndroidHost::pump(bool haveWork) {
     // Blocking when there is nothing to draw is what keeps a phone's battery
     // out of this: with no pending frame the process sleeps in the kernel
     // until a touch, a timer, or a background thread's eventfd wakes it.
-    // A fling is work too, and it is the one kind the app cannot know about:
-    // it asks for frames only after this host has told it the content moved.
-    // So a throw in flight replaces the infinite wait with a short one — long
-    // enough that an idle-but-flinging loop still sleeps between steps, short
-    // enough to be invisible. With a frame already pending the draw paces us
-    // and the wait stays zero, exactly as before.
-    const int timeout = haveWork ? 0 : (flingActive_ ? 8 : -1);
+    // With a frame already pending the draw paces us and the wait stays zero.
+    const int timeout = haveWork ? 0 : -1;
 
     int events;
     android_poll_source* source = nullptr;
@@ -865,10 +759,6 @@ void AndroidHost::pump(bool haveWork) {
     // UI thread and parks in a lock — so it is drained here every time rather
     // than in response to any descriptor.
     drainActivity();
-
-    // After the drains, so a finger that has just landed has already cancelled
-    // it: catching a moving list must win over the frame it was about to take.
-    stepFling();
 }
 
 bool AndroidHost::quitRequested() const {
