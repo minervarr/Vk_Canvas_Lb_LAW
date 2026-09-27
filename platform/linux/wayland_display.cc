@@ -248,11 +248,15 @@ struct WaylandListeners {
 
     // wl_output
     static void output_geometry(void* data, wl_output* o, int32_t x, int32_t y,
-                                int32_t, int32_t, int32_t, const char*,
-                                const char*, int32_t) {
+                                int32_t phys_w_mm, int32_t phys_h_mm, int32_t,
+                                const char*, const char*, int32_t) {
         auto* d = static_cast<WaylandDisplay*>(data);
         for (auto& out : d->outputs_)
-            if (out.output == o) { out.x = x; out.y = y; }
+            if (out.output == o) {
+                out.x = x; out.y = y;
+                out.phys_mm_w = phys_w_mm;
+                out.phys_mm_h = phys_h_mm;
+            }
     }
     static void output_mode(void* data, wl_output* o, uint32_t flags,
                             int32_t w, int32_t h, int32_t) {
@@ -906,4 +910,20 @@ bool WaylandDisplay::dispatch(int timeout_ms)
 void WaylandDisplay::roundtrip()
 {
     if (display_) wl_display_roundtrip(display_);
+}
+
+// Pixels per inch, from the mode size and the physical millimetres. Both come
+// from wl_output and neither is a preference, which is the point: a UI that
+// wants a margin to be the same SIZE on a phone and a monitor cannot get there
+// from pixels or from a compositor scale factor.
+//
+// Returns 0 when no output reported a physical size. That is a real answer and
+// not a failure — a nested or headless compositor has nothing to report — and
+// the caller has to have a fallback either way.
+float WaylandDisplay::primaryDpi() const {
+    for (const auto& o : outputs_) {
+        if (o.phys_mm_w <= 0 || o.width <= 0) continue;
+        return (float)o.width * 25.4f / (float)o.phys_mm_w;
+    }
+    return 0.0f;
 }

@@ -82,6 +82,56 @@ public:
   // in the order: background images -> vector overlay -> foreground images.
   void useImagesFg(std::vector<ImageDraw>* out) { imagesFg_ = out; }
 
+  // Tone controls applied to every subsequent image()/imageFg() draw.
+  //
+  // A state-setter rather than four more parameters on image(), which already
+  // carries four defaulted floats -- eight trailing defaults would make every
+  // call site a row of unlabelled numbers. This mirrors setClip()/clearClip(),
+  // the idiom this class already uses for "applies until changed".
+  //
+  // The default state is kPassthrough with unit exposure, which is exactly what
+  // this engine did before tone mapping existed, so a caller that never touches
+  // this sees no difference at all.
+  //
+  //   exposure : LINEAR gain, already exp2(EV). The shader does no pow().
+  //   mode     : see ToneMode. kClip and kRolloff treat the texture as linear
+  //              light and encode sRGB on output; kPassthrough does neither.
+  //   white    : kRolloff's knee white point, in linear units, >= 1. At 1.0 the
+  //              curve is an exact identity, which is what an SDR image wants.
+  //   clipWarn : stripe pixels that exceed the display range at this exposure.
+  void setImageTone(float exposure, ToneMode mode, float white, bool clipWarn) {
+    toneExposure_ = exposure;
+    toneMode_     = static_cast<float>(mode);
+    toneWhite_    = white;
+    toneClipWarn_ = clipWarn ? 1.0f : 0.0f;
+  }
+  // Resets the tone controls AND the HDR controls (whiteNits/headroom) to
+  // their defaults — the name says "tone", but this is the full reset for
+  // everything setImageTone()/setImageHdr() touch, so a later image() call
+  // cannot inherit either from an earlier one.
+  void clearImageTone() {
+    toneExposure_ = 1.0f; toneMode_ = 0.0f; toneWhite_ = 1.0f; toneClipWarn_ = 0.0f;
+    toneWhiteNits_ = 203.0f; toneHeadroom_ = 1.0f;
+  }
+
+  // HDR output controls for subsequent image() calls. Both are ignored on an
+  // SDR swapchain (the default), where these defaults are also the old
+  // behaviour exactly — an SDR consumer never needs to call this.
+  //
+  // whiteNits: what linear 1.0 means in absolute luminance; used only by the
+  //   PQ target. 203 is BT.2408 graphics white.
+  // headroom: how far above display white this target can actually reach, in
+  //   the same linear units the tone controls use. Only affects where clipWarn
+  //   starts striping, so an HDR consumer stops getting false clip warnings on
+  //   highlights the panel can genuinely show.
+  //
+  // Ask the Renderer what it actually got (hdrActive()/activeTarget()) before
+  // deciding these — an HDR request can silently fall back to SDR.
+  void setImageHdr(float whiteNits, float headroom) {
+    toneWhiteNits_ = whiteNits;
+    toneHeadroom_  = headroom;
+  }
+
   // Measure text width in pixels at the given cap-height size.
   float textWidth(std::string_view str, float size) const;
 
@@ -139,6 +189,27 @@ public:
   void textStyled(std::string_view str, float x, float y, float size, Color c, FontStyle style);
   // Width of `str` in `style` at `size` (matches textStyled's advance).
   float textWidthStyled(std::string_view str, float size, FontStyle style) const;
+
+  // The longest prefix of `str` that fits `maxW`, as a byte offset — in ONE
+  // pass, with no allocation.
+  //
+  // Callers that need this were computing it by measuring every prefix
+  // separately: `for (i…) textWidthStyled(s.substr(0, i))`, which is a heap
+  // allocation and a full re-walk per codepoint, so O(n²) work to answer a
+  // question a single walk answers. text_util's splitTwoLines() did exactly
+  // that, once per visible album tile, on every frame.
+  //
+  // The answer is IDENTICAL to the loop it replaces, not merely close:
+  // textWidthStyled() accumulates `kern(prev, cp) + advance(cp)` left to
+  // right from prevCp = 0, so the running total at a codepoint boundary IS
+  // that prefix's width. No kern pair spans the cut in either form.
+  //
+  // Returns the byte offset (always a codepoint boundary; 0 if nothing fits,
+  // str.size() if all of it does). `outWidth` receives that prefix's width.
+  // `outLastSpace` receives the byte offset of the last ' ' at or before the
+  // cut, or npos — what a word-wrap needs and would otherwise re-scan for.
+  size_t prefixFitStyled(std::string_view str, float maxW, float size, FontStyle style,
+                         float* outWidth = nullptr, size_t* outLastSpace = nullptr) const;
 
   // Draw text right-aligned: right edge of the text lands at rightX.
   void textRight(std::string_view str, float rightX, float y, float size, Color c);
@@ -218,6 +289,15 @@ private:
   std::vector<float>* shapes_ = nullptr;
   std::vector<ImageDraw>* images_ = nullptr;
   std::vector<ImageDraw>* imagesFg_ = nullptr;
+
+  // Defaults chosen so an untouched Canvas emits exactly the ImageDraw it
+  // always did. See setImageTone().
+  float toneExposure_ = 1.0f;
+  float toneMode_     = 0.0f;
+  float toneWhite_    = 1.0f;
+  float toneClipWarn_ = 0.0f;
+  float toneWhiteNits_ = 203.0f;
+  float toneHeadroom_  = 1.0f;
   float insetTop_, insetBottom_, insetLeft_, insetRight_;
   float contentW_, contentH_;
 

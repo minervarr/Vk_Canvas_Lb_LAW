@@ -25,13 +25,28 @@ endif()
 set(VCE_SLANGC "${_vce_slangc_default}"
     CACHE FILEPATH "Path to the Slang compiler (slangc) from the Vulkan SDK")
 
+# vk_canvas's own shaders_src, resolved HERE rather than inside the function
+# below. Inside a function CMAKE_CURRENT_LIST_DIR is the CALLER's directory, not
+# this file's — which silently produced <consumer>/shaders_src and an include
+# that could not be found.
+get_filename_component(VCE_SHARED_SHADER_INCLUDE
+                       "${CMAKE_CURRENT_LIST_DIR}/../shaders_src" ABSOLUTE)
+
 function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
     file(MAKE_DIRECTORY ${OUT_DIR})
+    # That directory is always on the include path, whichever shader directory
+    # is being compiled: output_encode.slang lives there and is included by
+    # composite_frag.slang, which lives in the FONT ENGINE's shaders_src — a
+    # different directory, and slangc resolves #include relative to the
+    # including file only.
+    set(_vce_shared_include ${VCE_SHARED_SHADER_INCLUDE})
     # Depend on every .slang in the directory, not just the entry point being
     # compiled: shaders that #include a shared source (e.g. an fp16 variant that
     # wraps the fp32 one) would otherwise go stale whenever the included file
     # changed, silently shipping a mismatched .spv.
     file(GLOB _slang_sources ${SHADER_SRC_DIR}/*.slang)
+    file(GLOB _vce_shared_sources ${_vce_shared_include}/*.slang)
+    list(APPEND _slang_sources ${_vce_shared_sources})
     set(_spv_outputs "")
     foreach(SHADER ${ARGN})
         add_custom_command(
@@ -39,6 +54,8 @@ function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
             COMMAND ${VCE_SLANGC} ${SHADER_SRC_DIR}/${SHADER}.slang
                               -o ${OUT_DIR}/${SHADER}.spv
                               -target spirv
+                              -I ${SHADER_SRC_DIR}
+                              -I ${_vce_shared_include}
             DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang ${_slang_sources}
             COMMENT "Compiling ${SHADER}.slang"
         )

@@ -14,6 +14,20 @@ add_subdirectory(${FONT_ENGINE_DIR}/core ${CMAKE_BINARY_DIR}/vk_font_core)
 set(IMG_DECODE_KIT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../first_party/img_decode_kit)
 add_subdirectory(${IMG_DECODE_KIT_DIR}/core ${CMAKE_BINARY_DIR}/img_decode_kit)
 
+# ── The composite push block, checked before anything compiles ─────────────
+#
+# renderer.cc's CompositePush and composite_frag.slang's cbuffer PC are written
+# to the same bytes and validated by nothing at runtime. They drifted apart
+# once and the only symptom was a wrong-looking picture. See
+# cmake/check_composite_pc.cmake for what that cost.
+add_custom_target(vk_canvas_check_composite_pc ALL
+    COMMAND ${CMAKE_COMMAND}
+            -DSHADER=${FONT_ENGINE_DIR}/shaders_src/composite_frag.slang
+            -DCPP=${CMAKE_CURRENT_SOURCE_DIR}/renderer.cc
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/check_composite_pc.cmake
+    BYPRODUCTS ""
+    COMMENT "Checking composite_frag.slang's push block against CompositePush")
+
 add_library(vk_canvas_core STATIC
     renderer.cc
     headless.cc
@@ -27,10 +41,29 @@ add_library(vk_canvas_core STATIC
     layout.cc
     animated_float.cc
     frame_input.cc
+    output_target.cc
+    # Pure logic, no platform seam and no Vulkan: a gesture classifier, a
+    # swipe-pager, a gap buffer with its undo stack, and a plot view. They sat
+    # in the not-compiled list below with the genuinely unported files, so a
+    # consumer that included the headers got a clean compile and a wall of
+    # undefined references at link time — which is how the UI demo found them.
+    # Each one builds standalone with nothing but the C++ standard library and
+    # this directory's own headers.
+    gesture.cc
+    pager.cc
+    text_buffer.cc
+    undo_redo.cc
+    plotview.cc
 )
 # WIP — moved here but not yet ported to the platform seams, deliberately not
-# compiled: canvas_host vulkan_state compute_context text_editor text_buffer
-# undo_redo pager plotview gesture archive
+# compiled: canvas_host vulkan_state compute_context text_editor archive
+#
+# text_editor stays out on purpose and is not in the same position as the five
+# above: it takes AInputEvent* and a VulkanState*, so it is an Android widget
+# rather than portable logic. A consumer wanting an editor builds one on
+# text_buffer + undo_redo, which are portable and now compiled.
+
+add_dependencies(vk_canvas_core vk_canvas_check_composite_pc)
 
 target_include_directories(vk_canvas_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

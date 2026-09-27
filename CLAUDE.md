@@ -106,6 +106,8 @@ When to add a new shape *kind* vs. reach for an atlas instead: if it's a **formu
 
 `Canvas::useShapes(nullptr)` (the default) falls back to the original compute-rasterized curve path — needed for rotated UI (shape params are screen-axis-aligned only; rotation isn't supported on this path) and for anything that must go through the winding-fill compute rasterizer.
 
+The shape VBO **grows** (`ensureShapeVboCapacity`, same doubling as the MSDF text VBO). It used to silently truncate at 2048 quads; a bitmap UI that emits one rect per pixel-run (Terminus in Matrix Player) died mid-glyph there — later letters, list rows, and anything drawn after (the transport bar) vanished. If an allocation genuinely fails, the fallback rounds down to a whole quad so the tail is a missing shape, never half of one.
+
 ### Frames in flight
 
 `Renderer` runs two frames in flight (`kFramesInFlight = 2`): separate fences/semaphores and per-frame copies of every CPU-written dynamic buffer (MSDF text VBO, shape VBO), so the CPU can build frame N+1 while the GPU executes frame N. **Exception:** the overlay's compute-rasterizer path (curve buffer, tile/row buffers, output image) is single-buffered — `draw()` detects a non-empty `overlay_curves` argument and serializes that frame against the other slot automatically, so curve-path hosts (Android's demo, any rotated UI) get the old fully-serial behavior for free with no extra code. A host that only ever uses the SDF shape path (empty curve buffer every frame) gets full double-buffered overlap.

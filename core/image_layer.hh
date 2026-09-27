@@ -5,6 +5,7 @@
 #include <vector>
 #include "platform.hh"
 #include "texture.hh"
+#include "output_target.hh"
 
 // ImageLayer: uploads app-supplied RGBA pixel buffers as sampled textures and
 // draws them as textured quads (album art, icons) — the raster counterpart to
@@ -19,7 +20,8 @@ public:
     // by the time this is called.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
-              VkCommandPool cmdPool, VkQueue queue);
+              VkCommandPool cmdPool, VkQueue queue,
+              OutputEncode encode = OutputEncode::Srgb);
     void cleanup();
 
     bool ready() const { return pipeline_ != VK_NULL_HANDLE; }
@@ -31,8 +33,15 @@ public:
     // mips=false skips the mip chain (−33% VRAM, no blit pass) — right for
     // textures drawn at (or above) their upload resolution, where mips would
     // never be sampled; keep true whenever the texture is minified.
-    TextureHandle create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                 bool mips = true);
+    // `fmt` selects the storage format; it defaults to the 8-bit path this
+    // has always used, so existing callers are unaffected. A float format is
+    // for LINEAR, unclipped image data whose range exceeds the display's --
+    // see TextureFormat in texture.hh. Returns kInvalidTexture if the device
+    // cannot sample the requested format, which lets a caller degrade rather
+    // than fail.
+    TextureHandle create_texture(const uint8_t* pixels, uint32_t w, uint32_t h,
+                                 bool mips = true,
+                                 TextureFormat fmt = TextureFormat::RGBA8_UNORM);
     void destroy_texture(TextureHandle handle);
 
     // Deferred GPU-safety reaper. create_texture() submits its upload with a

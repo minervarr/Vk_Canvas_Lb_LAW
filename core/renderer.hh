@@ -17,6 +17,7 @@
 #include "overlay.hh"
 #include "image_layer.hh"
 #include "texture.hh"
+#include "output_target.hh"
 
 class TextFont;
 
@@ -26,8 +27,26 @@ public:
     // to the surface's min/max). The default 4 exists for Android, where the
     // compositor can hold an image ~60ms mid-hitch (see create_swapchain());
     // desktop callers on MAILBOX can pass 3 and save one full-screen image.
+    //
+    // requestedOutput: what kind of surface to present into. The default
+    // SdrSrgb is bit-identical to the pre-HDR behavior. An HDR request is
+    // resolved against what the surface actually enumerates and silently
+    // degrades to the SDR pin when unsupported — ask hdrActive() what you
+    // got, never assume. See USAGE_hdr_output.md, and note the consumer-side
+    // contract there: Android needs Window.setColorMode(COLOR_MODE_HDR) from
+    // the app's Activity, desktop needs OS HDR enabled, or the HDR formats
+    // are never advertised in the first place.
+    // `presentPolicy` — Latency (MAILBOX) for a live preview, Vsync (FIFO) for
+    // content presented on a schedule. See PresentPolicy in output_target.hh.
     Renderer(SurfaceProvider& surface, AssetReader& assets,
-             uint32_t desiredSwapchainImages = 4);
+             uint32_t desiredSwapchainImages = 4,
+             OutputTarget requestedOutput = OutputTarget::SdrSrgb,
+             PresentPolicy presentPolicy = PresentPolicy::Latency);
+
+    // What we actually got, after capability resolution — not what was asked.
+    bool         hdrActive()    const { return output_.hdr; }
+    OutputTarget activeTarget() const { return output_.target; }
+    OutputEncode activeEncode() const { return output_.encode; }
     ~Renderer();
 
     // Composite, in order: the camera frame (if any); background textured
@@ -47,7 +66,37 @@ public:
               const std::vector<ImageDraw>& images = {},
               const std::vector<ImageDraw>& foregroundImages = {},
               const std::vector<float>& msdfQuads = {},
-              const std::vector<float>& shapeVerts = {});
+              const std::vector<float>& shapeVerts = {},
+              // Drawn after foreground images, so marks sit on top of a photo
+              // that would otherwise cover the shape pass.
+              const std::vector<float>& frontShapeVerts = {});
+
+    // ── Surface lost and regained, WITHOUT losing the device ─────────────────
+    //
+    // For a platform whose window can die and come back under a living process
+    // — Android's APP_CMD_TERM_WINDOW / APP_CMD_INIT_WINDOW. The old
+    // VkSurfaceKHR is destroyed and a new one made from whatever the
+    // SurfaceProvider now points at; everything that does NOT depend on the
+    // surface survives: the instance, the device, the render pass, every
+    // pipeline, the command pool, the glyph atlas, and every texture the
+    // caller has uploaded (album art included).
+    //
+    // This exists because the alternative was destroying the Renderer whole
+    // and building it again — instance, device, pipelines, atlas re-upload —
+    // measured at ~370 ms on a moto g06 between the window arriving and the
+    // first frame being presented, every time the listener came back from the
+    // notification. It is the same subset recreate_swapchain() already
+    // rebuilds, plus the surface itself; the split it draws is "the surface
+    // changed" versus "the device is gone", which are genuinely different
+    // events that were being treated as one.
+    //
+    // Returns FALSE when the new surface is not compatible with the pipelines
+    // already built for the old one — a different format or colour space, which
+    // the render pass is baked against. The caller must then fall back to
+    // destroying and recreating the Renderer. That is a real possibility (an
+    // HDR mode change, an external display) and not a theoretical one, which is
+    // why this reports rather than asserts.
+    bool recreate_surface();
 
     // Create the text pipeline, atlas texture and vertex buffer from a TextFont
     // (MTSDF or per-size raster — see text_font.hh).
@@ -75,10 +124,21 @@ public:
     // Canvas::image() draws. See ImageLayer::create_texture for details
     // (incl. the mips flag — pass false for textures never minified).
     TextureHandle create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                 bool mips = true) {
-        return image_layer_.create_texture(rgba, w, h, mips);
+                                 bool mips = true,
+                                 TextureFormat fmt = TextureFormat::RGBA8_UNORM) {
+        return image_layer_.create_texture(rgba, w, h, mips, fmt);
     }
     void destroy_texture(TextureHandle handle) { image_layer_.destroy_texture(handle); }
+
+    // Capture seam: skip vkQueuePresentKHR entirely. A headless surface has
+    // no compositor to hand the image to, and on current Mesa a headless
+    // present recycles the image - readbackLastFrame() then copies recycled,
+    // empty memory even though the frame rendered fine. Suppressed present
+    // leaves the just-rendered image in its final layout (PRESENT_SRC), which
+    // is exactly what the readback's barrier expects. The swapchain-side
+    // recreate that a failed present would trigger is skipped with it.
+    // Off by default; capture hosts turn this on before the first draw().
+    void setPresentEnabled(bool on) { present_enabled_ = on; }
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
@@ -118,6 +178,20 @@ public:
 
     const DeviceCaps& caps() const { return caps_; }
 
+    // ── The platform-neutral way in for a decoded frame ────────────────────
+    //
+    // Same thing as update_camera_frame() below, with the platform's type
+    // erased. A consumer that carries frames around as opaque handles — a
+    // video player whose decode/render seam is a void* on purpose — can hand
+    // one straight over without naming AHardwareBuffer, which on a portable
+    // source file it has no way to name.
+    //
+    // The identity of `handle` is the platform's business and stays inside the
+    // engine: AHardwareBuffer* on Android, and on a desktop host it will be
+    // the decoder's VkImage, which needs no import at all. That asymmetry is
+    // exactly the sort of thing an engine should absorb rather than export.
+    void update_external_frame(void* handle, std::function<void()> release_cb = nullptr);
+
 #if defined(__ANDROID__)
     void update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb = nullptr);
     void clear_camera_frames();
@@ -154,6 +228,91 @@ public:
     }
 #endif
 
+    // ── Telling the engine what colour an external image actually is ────────
+    //
+    // Not Android-only, though it lived inside that guard until a second host
+    // needed it. Every one of these describes the CONTENT — its matrix, its
+    // transfer, its orientation, how much of the buffer is picture — and the
+    // content is the same wherever it is decoded. The platform-specific part
+    // is the import, which is update_external_frame() above.
+    //
+    // The Y'CbCr conversion built for an imported AHardwareBuffer takes the
+    // driver's suggestedYcbcrModel/Range by default, and for a camera buffer
+    // that is right: the producer and the gralloc format agree.
+    //
+    // For a VIDEO frame it is wrong. A P010 buffer out of a decoder carries no
+    // colourspace, so the driver suggests BT.709 for content that is BT.2020 —
+    // and the resulting matrix error is a consistent hue shift, which reads as
+    // a grading choice rather than as a bug. The consumer knows the truth (it
+    // came out of the container) and states it here.
+    //
+    // Must be called BEFORE the first update_camera_frame(), because the
+    // conversion object is created on the first buffer and every cached image
+    // view references it. Calling it later is ignored, loudly.
+    //
+    // ExternalTransfer selects the fragment stage's transfer function, which a
+    // sampler cannot apply. Sdr is what every existing consumer already got.
+    enum class ExternalTransfer : int { Sdr = 0, Hlg = 1, Pq = 2 };
+    //
+    // The chroma LOCATIONS are the same argument one step further in. 4:2:0
+    // has one chroma sample per four luma, and where it sits in that quad is a
+    // property of the encode that only the container states. The driver
+    // suggests here too, and its suggestion is about the gralloc buffer's
+    // layout rather than about the video — so a consumer that knows says so,
+    // exactly as with the matrix. Both default to the driver's suggestion,
+    // which is what every existing consumer already gets.
+    void set_external_colour(VkSamplerYcbcrModelConversion model,
+                             VkSamplerYcbcrRange range,
+                             const VkChromaLocation* xChromaOffset = nullptr,
+                             const VkChromaLocation* yChromaOffset = nullptr);
+    // How much of a decoder's buffer is actually picture.
+    //
+    // Hardware decoders allocate aligned up to what their hardware wants: a
+    // 2040x1530 video arrives in a 2048x1536 AHardwareBuffer, and the extra 8
+    // columns and 6 rows hold whatever was already in memory. Sampling the
+    // whole buffer smears that across the right and bottom edges — a band a
+    // millimetre wide, which is exactly what it looks like on a phone.
+    //
+    // The producer knows the real size (AImage_getWidth/Height, or the codec's
+    // crop rectangle) and states it here. 0 means "the whole buffer", which is
+    // what a camera wants and what every existing consumer gets by default.
+    // Quarter turns CLOCKWISE applied to the external image, given in degrees
+    // and snapped to a quadrant. Defaults to 90 because that is what the
+    // Android camera preview has always needed and what this path used to do
+    // unconditionally; a video consumer sets it from its container, where 0 is
+    // the common answer.
+    void set_external_rotation(int degrees) {
+        int q = (degrees / 90) % 4;
+        if (q < 0) q += 4;
+        external_rotation_quadrant_ = q;
+    }
+
+    void set_external_visible_size(uint32_t w, uint32_t h) {
+        external_visible_w_ = w;
+        external_visible_h_ = h;
+    }
+
+    void set_external_transfer(ExternalTransfer t, float displayPeakNits = 1000.0f) {
+        external_transfer_ = t;
+        external_peak_nits_ = displayPeakNits;
+    }
+
+    // Pixel aspect ratio: how wide a pixel is relative to its height.
+    //
+    // 1.0 for everything a camera produces and for most video, which is why
+    // the letterbox assumed it. Not everything: a container can say its pixels
+    // are not square (Matroska's DisplayWidth/DisplayHeight against
+    // PixelWidth/PixelHeight), and such a file is stored narrow and meant to
+    // be shown wide. Drawn at its pixel aspect it is simply the wrong shape —
+    // visibly so, and in a way that looks like a bad encode rather than a bad
+    // player.
+    //
+    // Applied to the picture's own width, before any rotation quadrant swaps
+    // the axes. Ignored unless positive.
+    void set_external_pixel_aspect(float par) {
+        if (par > 0.0f) external_pixel_aspect_ = par;
+    }
+
 private:
     SurfaceProvider&  surface_provider_;
     AssetReader&      assets_;
@@ -182,12 +341,18 @@ private:
     VkQueue          queue_          = VK_NULL_HANDLE;
     VkSwapchainKHR   swapchain_      = VK_NULL_HANDLE;
 
-    // Swapchain pixel format/colorspace — resolved at create_swapchain(): 10-bit
-    // HDR (A2B10G10R10 + an HDR colorspace) when the surface supports it, else
-    // the 8-bit SDR default. Shared by the render pass and framebuffer views.
+    // Swapchain pixel format/colorspace — resolved at create_swapchain() by
+    // pickTarget() (output_target.hh) from the ctor's requested target and the
+    // surface's own format enumeration. Falls back to the 8-bit SDR pin
+    // whenever the request can't be honored. Shared by the render pass and
+    // framebuffer views; output_.encode is also baked into every pipeline as
+    // the OUTPUT_ENCODE specialization constant.
+    OutputTarget     requested_output_ = OutputTarget::SdrSrgb;
+    PresentPolicy    present_policy_   = PresentPolicy::Latency;
+    OutputSelection  output_{};
+    bool             output_resolved_ = false;  // resolve_output_target() ran
     VkFormat         swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
     VkColorSpaceKHR  swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    bool             swapchain_hdr_        = false;
     bool             ext_swapchain_colorspace_ = false;  // instance ext enabled
 
     VkRenderPass                 render_pass_ = VK_NULL_HANDLE;
@@ -207,12 +372,45 @@ private:
     VkSemaphore render_finished_sems_[kFramesInFlight] = {};
     VkFence     in_flight_fences_[kFramesInFlight]     = {};
     uint32_t    frame_index_ = 0;
+    bool        present_enabled_ = true;   // capture seam, see setPresentEnabled
     // Which frame-fence last submitted to each swapchain image — guards
     // re-recording cmd_buffers_[image] while that image's prior frame runs.
     std::vector<VkFence> image_fences_;
     // The swapchain image index that draw() last rendered into, for
     // readbackLastFrame(). UINT32_MAX until the first draw().
     uint32_t    last_drawn_image_index_ = UINT32_MAX;
+
+    // The sampler conversion built for the external image. A plain Vulkan
+    // object, and the thing set_external_colour() guards against being created
+    // before it is told the truth — so it belongs with the description above
+    // rather than with the Android import below.
+    VkSamplerYcbcrConversion        ycbcr_conversion_ = VK_NULL_HANDLE;
+
+    // ── What the external image IS ─────────────────────────────────────────
+    //
+    // Outside the platform guard below, because every one of these describes
+    // the CONTENT rather than how it got here: its Y'CbCr matrix and range,
+    // its transfer function, its orientation, and how much of the buffer is
+    // actually picture. All of that is the same fact on any host. Only the
+    // import beneath it is per-platform.
+    // camera_hlg_ lives with the loupe state above: it is the preview's HLG
+    // flag, not a property of an imported video frame.
+    // Empty until set_external_colour() overrides the driver's suggestion.
+    bool                            external_colour_set_ = false;
+    VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
+    VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+    // Unset means "the driver's suggestion stands", which is why these are
+    // flags beside the values rather than a sentinel inside them: every
+    // VkChromaLocation is a legitimate answer.
+    bool                            external_siting_set_ = false;
+    VkChromaLocation                external_x_siting_ = VK_CHROMA_LOCATION_COSITED_EVEN;
+    VkChromaLocation                external_y_siting_ = VK_CHROMA_LOCATION_MIDPOINT;
+    ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
+    float                           external_peak_nits_ = 1000.0f;
+    int                             external_rotation_quadrant_ = 1;
+    uint32_t                        external_visible_w_ = 0;
+    uint32_t                        external_visible_h_ = 0;
+    float                           external_pixel_aspect_ = 1.0f;
 
 #if defined(__ANDROID__)
     // AHardwareBuffer camera import (Android-only external images).
@@ -232,9 +430,17 @@ private:
         VkDescriptorSet desc_set = VK_NULL_HANDLE;
     };
     std::unordered_map<AHardwareBuffer*, HwbCache> hwb_cache_;
+    // Bind order, oldest first — the eviction queue for the above. A plain
+    // vector: it holds at most kMaxCachedHwb entries and is walked, not
+    // searched, so a map would cost more than it saved.
+    std::vector<AHardwareBuffer*> hwb_lru_;
+    // How many external images may be cached at once, and therefore the size
+    // of the descriptor pool backing them. A camera needs a handful; a video
+    // decoder's AImageReader was measured handing out 10 distinct buffers in
+    // the first second, so this is sized for a stream and bounded by eviction.
+    static constexpr size_t kMaxCachedHwb = 32;
 
     AHardwareBuffer* current_hwb_ = nullptr;
-    VkSamplerYcbcrConversion ycbcr_conversion_ = VK_NULL_HANDLE;
     VkSampler hwb_sampler_ = VK_NULL_HANDLE;
     VkImage hwb_image_ = VK_NULL_HANDLE;
     VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;
@@ -252,6 +458,7 @@ private:
     void setup_hwb_resources(AHardwareBuffer* hwb);
     void cleanup_hwb_resources();
     void bind_hwb(AHardwareBuffer* hwb);
+    void touch_hwb(AHardwareBuffer* hwb);
 #endif
 
     // UI overlay (canvas curve records rasterised + composited over the camera).
@@ -322,23 +529,37 @@ private:
     // its own pixels. Vertex layout (14 floats, see Canvas::useShapes()):
     //   pos.xy  rgba  data0.xyzw  data1.xyzw
     static constexpr uint32_t kShapeFloatsPerVert = 14;
-    static constexpr uint32_t kMaxShapeVerts = 6 * 2048;  // 2048 shapes
+    static constexpr uint32_t kShapeVertsPerQuad  = 6;
+    // Where the per-frame shape VBO STARTS. It used to be a hard ceiling
+    // (`if (verts > kMaxShapeVerts) verts = kMaxShapeVerts`), and that
+    // silent truncation is how a bitmap UI vanished mid-glyph: Terminus is
+    // one rect per pixel-run, so 2048 quads is a few dozen letters. The
+    // text VBO already grows; this one does too. See ensureShapeVboCapacity().
+    static constexpr uint32_t kInitialShapeVerts = kShapeVertsPerQuad * 2048;
 
     VkBuffer         shapeVbo_[kFramesInFlight]       = {};
     VkDeviceMemory   shapeVboMemory_[kFramesInFlight] = {};
     void*            shapeVboMapped_[kFramesInFlight] = {};
+    uint32_t         shapeVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
     uint32_t         shapeVertCount_ = 0;  // for the frame being recorded
+    uint32_t         shapeFrontFirst_ = 0;
+    uint32_t         shapeFrontCount_ = 0;
     VkPipelineLayout shapePipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline       shapePipeline_       = VK_NULL_HANDLE;
 
     void initShapes();
-    void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame);
+    void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame,
+                         uint32_t firstVert, uint32_t vertCount);
     void cleanupShapes();
+    bool ensureShapeVboCapacity(uint32_t frame, uint32_t verts);
 
     void create_instance();
     void create_surface();
     void pick_physical_device();
     void create_logical_device();
+    // Resolves the output target once, from the constructor, before the first
+    // create_swapchain(). See the definition for why it must not re-run.
+    void resolve_output_target();
     void create_swapchain();
     void create_render_pass();
     void create_framebuffers();

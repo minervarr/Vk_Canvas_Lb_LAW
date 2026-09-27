@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include "platform.hh"
+#include "output_target.hh"
 
 // ---------------------------------------------------------------------------
 // OverlayRasterizer: renders a Canvas's curve records (20-float Bézier records,
@@ -18,14 +19,16 @@
 // ---------------------------------------------------------------------------
 class OverlayRasterizer {
 public:
-    static constexpr uint32_t MAX_CURVES           = 8192;
+    static constexpr uint32_t MAX_CURVES           = 32768;
     static constexpr uint32_t CURVE_FLOATS         = 20;
     static constexpr uint32_t TILE_SIZE            = 16;
     // Per-tile capacity. Overflow drops a RANDOM subset (the tiling pass grabs
     // slots with atomics in parallel), so headroom matters more than memory:
     // dense plot scenes (curves coiled into a few tiles at far zoom-out) plus
-    // panels must fit or later-drawn UI vanishes in those tiles.
-    static constexpr uint32_t MAX_CURVES_PER_TILE  = 96;
+    // bitmap UI (Terminus is one curve per pixel-run) must fit or later-drawn
+    // UI vanishes in those tiles. Must match tiling.slang / coverage.slang
+    // MAX_PER_TILE and TILE_STRIDE.
+    static constexpr uint32_t MAX_CURVES_PER_TILE  = 256;
     static constexpr uint32_t TILE_STRIDE_U32      = MAX_CURVES_PER_TILE + 1;
     // See shaders_src/coverage.slang's MAX_PER_WIND_TILE comment: raised from
     // 64 after tools/coverage_test (vulkan_font_engine) proved silent
@@ -42,7 +45,8 @@ public:
     // records) pay nothing for the compute rasterizer they don't use.
     void init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
-              uint32_t width, uint32_t height);
+              uint32_t width, uint32_t height,
+              OutputEncode encode = OutputEncode::Srgb);
     void cleanup();
 
     // Recreates the size-dependent resources (output image, tile/row buffers)
@@ -70,6 +74,11 @@ public:
     void recordComposite(VkCommandBuffer cmd, int rotation_deg);
 
 private:
+    // The swapchain's output encoding, baked into the overlay pipeline as the
+    // OUTPUT_ENCODE specialization constant at init(). Implementation detail:
+    // callers ask the Renderer (activeEncode()), not this.
+    OutputEncode encode_ = OutputEncode::Srgb;
+
     VkDevice         device_         = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     AssetReader*     assets_         = nullptr;

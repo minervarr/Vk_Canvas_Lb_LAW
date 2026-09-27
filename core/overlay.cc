@@ -41,7 +41,9 @@ VkShaderModule OverlayRasterizer::loadShader(const char* path) {
 
 void OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                              AssetReader& assets, VkRenderPass renderPass,
-                             uint32_t width, uint32_t height) {
+                             uint32_t width, uint32_t height,
+                             OutputEncode encode) {
+    encode_         = encode;
     device_         = device;
     physicalDevice_ = physicalDevice;
     assets_         = &assets;
@@ -318,6 +320,10 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;   stages[0].module = vm; stages[0].pName = "main";
     stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fm; stages[1].pName = "main";
+    // Bake the swapchain's output encoding in (OUTPUT_ENCODE, see
+    // shaders_src/output_encode.slang). Must outlive the create call below.
+    OutputEncodeSpec encodeSpec(encode_);
+    stages[1].pSpecializationInfo = encodeSpec.get();
 
     VkPipelineVertexInputStateCreateInfo   vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;

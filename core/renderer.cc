@@ -11,14 +11,54 @@ static inline int64_t now_ns() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// ── composite_frag.slang's push block, mirrored ────────────────────────────
+//
+// COMPOSITE_PC_BEGIN
+struct CompositePush {
+    float hlg;          // legacy: HLG when > 0.5, the camera's original field
+    int   transfer;     // 0 SDR, 1 HLG, 2 PQ
+    float peakNits;     // display peak for the PQ tone map
+    int   rotQuadrant;  // clockwise quarter-turns: 0..3
+    float uvScaleX;     // the picture's fraction of the allocated buffer
+    float uvScaleY;
+    float zoom;         // camera loupe; <= 1 is off
+    float cx;
+    float cy;
+    float peak;         // camera focus peaking; <= 0 is off
+    float texelX;
+    float texelY;
+    float peakColor;
+};
+// COMPOSITE_PC_END
+//
+// The field names and their ORDER must match the cbuffer in
+// first_party/vulkan_font_engine/shaders_src/composite_frag.slang. Nothing at
+// runtime checks this — a push block is a memcpy into a struct no validation
+// layer inspects — so cmake/check_composite_pc.cmake compares the two lists
+// between the COMPOSITE_PC_BEGIN/END markers here and the shader's own, and
+// fails the build when they drift.
+//
+// They did drift once, and the result was a video player that rotated every
+// frame the wrong way, skipped its PQ decode entirely, and ran the camera's
+// focus-peaking filter over the picture, all without one line of diagnostic.
+//
+// std430: every member is 4 bytes and the shader's float2 uvScale is 8-byte
+// aligned at offset 16, which this flat layout already satisfies. Append at
+// the end; never reorder.
+static_assert(sizeof(CompositePush) == 52, "composite_frag PC block is 52 bytes");
+
 #define LOG_TAG "vk_canvas"
 #define LOGI(...) VCE_LOGI(LOG_TAG, __VA_ARGS__)
 #define LOGE(...) VCE_LOGE(LOG_TAG, __VA_ARGS__)
 
 Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
-                   uint32_t desiredSwapchainImages)
+                   uint32_t desiredSwapchainImages,
+                   OutputTarget requestedOutput,
+                   PresentPolicy presentPolicy)
     : surface_provider_(surface), assets_(assets),
-      desired_swapchain_images_(desiredSwapchainImages) {
+      desired_swapchain_images_(desiredSwapchainImages),
+      requested_output_(requestedOutput),
+      present_policy_(presentPolicy) {
     VkExtent2D ext = surface_provider_.extent();
     width_  = ext.width;
     height_ = ext.height;
@@ -26,13 +66,16 @@ Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
     create_surface();
     pick_physical_device();
     create_logical_device();
+    resolve_output_target();
     create_swapchain();
     create_render_pass();
     create_framebuffers();
     create_command_buffers();
     create_sync_objects();
-    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_);
-    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_);
+    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_,
+                  output_.encode);
+    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_,
+                      output_.encode);
     initShapes();
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
@@ -43,6 +86,7 @@ Renderer::~Renderer() {
 }
 
 #if defined(__ANDROID__)
+
 void Renderer::update_camera_frame(AHardwareBuffer* hwb, std::function<void()> release_cb) {
     // ── Instrumentation: rate camera frames ARRIVE at the renderer ──────────
     {
@@ -115,6 +159,7 @@ void Renderer::clear_camera_frames() {
             if (kv.second.memory) vkFreeMemory(device_, kv.second.memory, nullptr);
         }
         hwb_cache_.clear();
+    hwb_lru_.clear();
         if (desc_pool_) vkResetDescriptorPool(device_, desc_pool_, 0);
     }
 }
@@ -139,11 +184,28 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     ycbcr_ci.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
     ycbcr_ci.pNext = &ext_fmt;
     ycbcr_ci.format = VK_FORMAT_UNDEFINED;
-    ycbcr_ci.ycbcrModel = hwb_format_props.suggestedYcbcrModel;
-    ycbcr_ci.ycbcrRange = hwb_format_props.suggestedYcbcrRange;
+    // The driver's suggestion is right for a camera buffer, whose producer and
+    // gralloc format agree. It is wrong for a decoded VIDEO frame: a P010
+    // buffer carries no colourspace, so the driver suggests BT.709 for BT.2020
+    // content and the matrix error reads as a grading choice rather than a
+    // bug. set_external_colour() is how a consumer that KNOWS says so.
+    ycbcr_ci.ycbcrModel = external_colour_set_ ? external_model_
+                                               : hwb_format_props.suggestedYcbcrModel;
+    ycbcr_ci.ycbcrRange = external_colour_set_ ? external_range_
+                                               : hwb_format_props.suggestedYcbcrRange;
+    LOGI("HWB ycbcr: model %d range %d (%s)", (int)ycbcr_ci.ycbcrModel,
+         (int)ycbcr_ci.ycbcrRange, external_colour_set_ ? "consumer" : "driver-suggested");
     ycbcr_ci.components = hwb_format_props.samplerYcbcrConversionComponents;
-    ycbcr_ci.xChromaOffset = hwb_format_props.suggestedXChromaOffset;
-    ycbcr_ci.yChromaOffset = hwb_format_props.suggestedYChromaOffset;
+    // The same argument as the model above, one step further in: the driver's
+    // suggestion describes the BUFFER, and where the chroma samples sit is a
+    // property of the ENCODE. Half a chroma sample of error puts a colour
+    // fringe on one side of every hard saturated edge.
+    ycbcr_ci.xChromaOffset = external_siting_set_ ? external_x_siting_
+                                                  : hwb_format_props.suggestedXChromaOffset;
+    ycbcr_ci.yChromaOffset = external_siting_set_ ? external_y_siting_
+                                                  : hwb_format_props.suggestedYChromaOffset;
+    LOGI("HWB chroma siting: x %d y %d (%s)", (int)ycbcr_ci.xChromaOffset,
+         (int)ycbcr_ci.yChromaOffset, external_siting_set_ ? "container" : "driver-suggested");
     ycbcr_ci.chromaFilter = VK_FILTER_LINEAR;
     ycbcr_ci.forceExplicitReconstruction = VK_FALSE;
 
@@ -182,12 +244,25 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 10;
+    // Sized for a VIDEO stream, not a camera preview.
+    //
+    // 10 was right for a camera: its producer recycles a handful of gralloc
+    // buffers and the working set never grows. A decoder's does — an
+    // AImageReader feeding a player handed out 10 distinct AHardwareBuffers
+    // within one second, at which point allocation failed, bind_hwb() left the
+    // buffer uncached, draw()'s lookup missed, and the screen went black at a
+    // perfectly healthy frame rate.
+    //
+    // FREE_DESCRIPTOR_SET_BIT is what makes the eviction in bind_hwb()
+    // possible at all: without it a set can only be reclaimed by resetting the
+    // whole pool.
+    poolSize.descriptorCount = kMaxCachedHwb;
     VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 10;
+    poolInfo.maxSets = kMaxCachedHwb;
     vkCreateDescriptorPool(device_, &poolInfo, nullptr, &desc_pool_);
 
     
@@ -208,6 +283,12 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     VkShaderModule vert = loadShader("shaders/composite_vert.spv");
     VkShaderModule frag = loadShader("shaders/composite_frag.spv");
 
+    // Bake the swapchain's output encoding into the COMPOSITE pipeline too.
+    // It was the only fragment stage that never got this, which was invisible
+    // while its only consumer was a camera on an SDR swapchain and fatal the
+    // moment one presented into HDR10 — see composite_frag.slang.
+    OutputEncodeSpec compositeEncodeSpec(output_.encode);
+
     VkPipelineShaderStageCreateInfo shaderStages[2]{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -217,6 +298,12 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].module = frag;
     shaderStages[1].pName = "main";
+    shaderStages[1].pSpecializationInfo = compositeEncodeSpec.get();
+    // NOTE: composite_frag.slang lives in the font-engine submodule and does
+    // not yet declare OUTPUT_ENCODE, so this pipeline is NOT specialized. It
+    // only carries the Android camera composite, which is SDR by definition —
+    // but see USAGE_hdr_output.md's remaining-work note before using it under
+    // an HDR target.
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -254,12 +341,13 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamic_states;
 
-    // Fragment push constant: the HLG tone-map flag (1 float, padded to 16).
+    // Fragment push constant: the composite block above. Sized from the struct
+    // rather than from a literal, which is how it came to say 32 while the
+    // shader had grown past it.
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
-    // hlg, zoom, cx, cy, peak, texelX, texelY, peakColor — see composite_frag.
-    pcRange.size       = 32;
+    pcRange.size       = sizeof(CompositePush);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -290,7 +378,36 @@ void Renderer::setup_hwb_resources(AHardwareBuffer* hwb) {
 }
 
 void Renderer::bind_hwb(AHardwareBuffer* hwb) {
-    if (hwb_cache_.find(hwb) != hwb_cache_.end()) return;
+    if (hwb_cache_.find(hwb) != hwb_cache_.end()) {
+        touch_hwb(hwb);
+        return;
+    }
+
+    // Make room first, so allocation below cannot be the thing that fails.
+    // Least-recently-bound goes, and never the buffer currently on screen.
+    //
+    // vkDeviceWaitIdle before destroying: an evicted image may still be
+    // referenced by a frame in flight, and this happens rarely enough (only
+    // once the working set exceeds the pool) that the stall is cheaper than
+    // tracking per-image fences.
+    while (hwb_cache_.size() >= kMaxCachedHwb && !hwb_lru_.empty()) {
+        AHardwareBuffer* victim = nullptr;
+        for (auto it = hwb_lru_.begin(); it != hwb_lru_.end(); ++it) {
+            if (*it == current_hwb_) continue;
+            victim = *it;
+            hwb_lru_.erase(it);
+            break;
+        }
+        if (!victim) break;   // everything is the current buffer; nothing to give
+        auto vit = hwb_cache_.find(victim);
+        if (vit == hwb_cache_.end()) continue;
+        vkDeviceWaitIdle(device_);
+        vkFreeDescriptorSets(device_, desc_pool_, 1, &vit->second.desc_set);
+        vkDestroyImageView(device_, vit->second.view, nullptr);
+        vkDestroyImage(device_, vit->second.image, nullptr);
+        vkFreeMemory(device_, vit->second.memory, nullptr);
+        hwb_cache_.erase(vit);
+    }
 
     AHardwareBuffer_Desc desc;
     AHardwareBuffer_describe(hwb, &desc);
@@ -321,7 +438,15 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     
     HwbCache cache;
-    if (vkCreateImage(device_, &image_info, nullptr, &cache.image) != VK_SUCCESS) return;
+    // Every failure below used to return in silence, which presents as a black
+    // screen with a healthy-looking frame rate and nothing in any log — the
+    // frames arrive, the cache lookup in draw() misses, and nothing is
+    // composited. Each one says so now, once.
+    if (vkCreateImage(device_, &image_info, nullptr, &cache.image) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkCreateImage failed (externalFormat %llu, %ux%u)",
+             (unsigned long long)last_external_format_, desc.width, desc.height);
+        return;
+    }
 
     VkImportAndroidHardwareBufferInfoANDROID import_info{};
     import_info.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
@@ -342,7 +467,12 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     alloc_info.allocationSize = hwb_props.allocationSize;
     alloc_info.memoryTypeIndex = find_memory_type(hwb_props.memoryTypeBits, 0);
 
-    if (vkAllocateMemory(device_, &alloc_info, nullptr, &cache.memory) != VK_SUCCESS) return;
+    if (vkAllocateMemory(device_, &alloc_info, nullptr, &cache.memory) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkAllocateMemory failed (%llu bytes, typeBits 0x%x)",
+             (unsigned long long)hwb_props.allocationSize, hwb_props.memoryTypeBits);
+        vkDestroyImage(device_, cache.image, nullptr);
+        return;
+    }
 
     vkBindImageMemory(device_, cache.image, cache.memory, 0);
 
@@ -366,7 +496,12 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(device_, &view_info, nullptr, &cache.view) != VK_SUCCESS) return;
+    if (vkCreateImageView(device_, &view_info, nullptr, &cache.view) != VK_SUCCESS) {
+        LOGI("bind_hwb: vkCreateImageView failed");
+        vkDestroyImage(device_, cache.image, nullptr);
+        vkFreeMemory(device_, cache.memory, nullptr);
+        return;
+    }
 
     VkDescriptorSetAllocateInfo alloc_info_desc{};
     alloc_info_desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -378,6 +513,8 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
         // Pool exhausted (or other failure) — don't write to a null set (would
         // crash in the driver). Drop this frame's resources and skip binding;
         // the next clear_camera_frames() resets the pool.
+        LOGI("bind_hwb: descriptor set allocation failed (%zu buffers cached, pool holds 10)",
+             hwb_cache_.size());
         vkDestroyImageView(device_, cache.view, nullptr);
         vkDestroyImage(device_, cache.image, nullptr);
         vkFreeMemory(device_, cache.memory, nullptr);
@@ -400,14 +537,62 @@ void Renderer::bind_hwb(AHardwareBuffer* hwb) {
     vkUpdateDescriptorSets(device_, 1, &descriptorWrite, 0, nullptr);
 
     hwb_cache_[hwb] = cache;
+    hwb_lru_.push_back(hwb);
+}
+
+// Most-recently-bound moves to the back; the front is the eviction candidate.
+void Renderer::touch_hwb(AHardwareBuffer* hwb) {
+    for (auto it = hwb_lru_.begin(); it != hwb_lru_.end(); ++it) {
+        if (*it == hwb) { hwb_lru_.erase(it); break; }
+    }
+    hwb_lru_.push_back(hwb);
 }
 #endif  // __ANDROID__
+
+void Renderer::set_external_colour(VkSamplerYcbcrModelConversion model,
+                                   VkSamplerYcbcrRange range,
+                                   const VkChromaLocation* xChromaOffset,
+                                   const VkChromaLocation* yChromaOffset) {
+    if (ycbcr_conversion_ != VK_NULL_HANDLE) {
+        // The conversion is created on the first imported buffer and every
+        // cached image view references it, so it cannot be swapped underneath
+        // them. Saying so is better than silently keeping the old colour.
+        LOGI("set_external_colour() ignored: the YCbCr conversion already exists. "
+             "Call it before the first frame.");
+        return;
+    }
+    external_colour_set_ = true;
+    external_model_ = model;
+    external_range_ = range;
+    // Both or neither: a container that states one siting and not the other is
+    // describing an encode nobody makes, and mixing a stated axis with a
+    // suggested one is a worse answer than taking the driver's pair.
+    if (xChromaOffset && yChromaOffset) {
+        external_siting_set_ = true;
+        external_x_siting_ = *xChromaOffset;
+        external_y_siting_ = *yChromaOffset;
+    }
+}
+
+// The platform-neutral entry point. See renderer.hh for why it exists.
+void Renderer::update_external_frame(void* handle, std::function<void()> release_cb) {
+#if defined(__ANDROID__)
+    update_camera_frame(static_cast<AHardwareBuffer*>(handle), std::move(release_cb));
+#else
+    // No desktop external-image path yet. Release immediately rather than
+    // silently holding the producer's buffer forever — a decoder's output pool
+    // is small and stalls the moment one is not returned.
+    (void)handle;
+    if (release_cb) release_cb();
+#endif
+}
 
 void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotation_deg,
                     const std::vector<ImageDraw>& images,
                     const std::vector<ImageDraw>& foregroundImages,
                     const std::vector<float>& msdfQuads,
-                    const std::vector<float>& shapeVerts) {
+                    const std::vector<float>& shapeVerts,
+                    const std::vector<float>& frontShapeVerts) {
     if (!device_) return;
     int64_t draw_t0 = now_ns();
 
@@ -463,14 +648,48 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         msdfVertCount_ = verts;
     }
 
-    // Upload SDF shape quads into this frame slot's VBO.
+    // Upload SDF shape quads into this frame slot's VBO. Foreground shapes
+    // share the buffer and are drawn after images, so a photo cannot cover them.
     {
         uint32_t verts = static_cast<uint32_t>(shapeVerts.size() / kShapeFloatsPerVert);
-        if (verts > kMaxShapeVerts) verts = kMaxShapeVerts;
-        if (shapePipeline_ != VK_NULL_HANDLE && shapeVboMapped_[frame] && verts > 0)
-            std::memcpy(shapeVboMapped_[frame], shapeVerts.data(),
-                        static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+        uint32_t front = static_cast<uint32_t>(frontShapeVerts.size() / kShapeFloatsPerVert);
+        uint32_t total = verts + front;
+        // Same contract as the text VBO: grow to fit, and if the allocation
+        // genuinely fails, fall back to whatever capacity survives — rounded
+        // down to a whole quad, so the tail is a missing shape and never
+        // half of one (a Terminus glyph cut mid-run looks like a sliced
+        // letter, which is how Settings lists used to die).
+        if (shapePipeline_ != VK_NULL_HANDLE && total > 0) {
+            if (!ensureShapeVboCapacity(frame, total)) {
+                uint32_t cap = shapeVboVerts_[frame] -
+                               shapeVboVerts_[frame] % kShapeVertsPerQuad;
+                if (verts > cap) {
+                    verts = cap;
+                    front = 0;
+                } else if (verts + front > cap) {
+                    front = cap - verts;
+                }
+            }
+            if (shapeVboMapped_[frame]) {
+                auto* dst = static_cast<float*>(shapeVboMapped_[frame]);
+                if (verts > 0)
+                    std::memcpy(dst, shapeVerts.data(),
+                                static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+                if (front > 0)
+                    std::memcpy(dst + static_cast<size_t>(verts) * kShapeFloatsPerVert,
+                                frontShapeVerts.data(),
+                                static_cast<size_t>(front) * kShapeFloatsPerVert * sizeof(float));
+            } else {
+                verts = 0;
+                front = 0;
+            }
+        } else {
+            verts = 0;
+            front = 0;
+        }
         shapeVertCount_ = verts;
+        shapeFrontFirst_ = verts;
+        shapeFrontCount_ = front;
     }
 
     int64_t t_afterupload = now_ns();
@@ -499,10 +718,16 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
             setup_hwb_resources(hwb_to_bind);
         }
         bind_hwb(hwb_to_bind);
-        if (current_hwb_) {
-            AHardwareBuffer_release(current_hwb_);
+        if (hwb_cache_.find(hwb_to_bind) != hwb_cache_.end()) {
+            if (current_hwb_) AHardwareBuffer_release(current_hwb_);
+            current_hwb_ = hwb_to_bind;
+        } else {
+            // Binding failed and this buffer has no image to sample. Keeping
+            // the previous frame on screen is strictly better than pointing
+            // current_hwb_ at something draw() cannot find, which composites
+            // nothing at all and reads as a dead player.
+            AHardwareBuffer_release(hwb_to_bind);
         }
-        current_hwb_ = hwb_to_bind;
     }
 #endif  // __ANDROID__
     int64_t t_afterbind = now_ns();
@@ -520,7 +745,13 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         recreate_swapchain();
         result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                        image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) return;
+    }
+    // SURFACE_LOST and DEVICE_LOST leave image_index undefined. Submitting
+    // that index paints a black frame and does not come back. Skip the
+    // frame; a new window rebuilds the swapchain.
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        LOGI("acquire skipped (VkResult %d)", (int)result);
+        return;
     }
     // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
     // render and present it, and let the present side's SUBOPTIMAL trigger
@@ -568,9 +799,27 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         AHardwareBuffer_Desc desc;
         AHardwareBuffer_describe(current_hwb_, &desc);
         
-        // Android camera frames are typically 90 degrees rotated.
-        float raw_w = desc.height;
-        float raw_h = desc.width;
+        // The VISIBLE size, not the allocated one: letterboxing a 2048x1536
+        // buffer that holds a 2040x1530 picture gets the aspect ratio slightly
+        // wrong on top of showing the padding.
+        const uint32_t vis_w = external_visible_w_ > 0 ? external_visible_w_ : desc.width;
+        const uint32_t vis_h = external_visible_h_ > 0 ? external_visible_h_ : desc.height;
+
+        // A quarter turn exchanges the picture's width and height, so the
+        // letterbox must be computed on the ROTATED extent. These were
+        // unconditionally swapped, which is right for the camera preview this
+        // path was written for and wrong for a video that needs no rotation at
+        // all: it letterboxed a landscape file into a portrait box.
+        //
+        // The pixel aspect is applied to the picture's own width FIRST, and the
+        // rotation swaps the axes afterwards. The other order stretches a
+        // portrait video along the wrong axis, which is the same bug the
+        // unconditional swap above was.
+        const bool quarter_turn = (external_rotation_quadrant_ & 1) != 0;
+        const float pic_w = static_cast<float>(vis_w) * external_pixel_aspect_;
+        const float pic_h = static_cast<float>(vis_h);
+        float raw_w = quarter_turn ? pic_h : pic_w;
+        float raw_h = quarter_turn ? pic_w : pic_h;
         float scale = std::min((float)width_ / raw_w, (float)height_ / raw_h);
         float draw_w = raw_w * scale;
         float draw_h = raw_h * scale;
@@ -598,9 +847,33 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         const float tx = desc.width  > 0 ? 1.0f / (float)desc.width  : 0.0f;
         const float ty = desc.height > 0 ? 1.0f / (float)desc.height : 0.0f;
 
-        float pc[8] = { camera_hlg_, 1.0f, 0.5f, 0.5f,
-                        camera_peak_, tx, ty, camera_peak_color_ };
-        vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+        // The visible fraction of the decoder's buffer. desc is the ALLOCATED
+        // size, aligned up by the hardware; external_visible_* is what the
+        // producer said is actually picture. Equal, or unset, means 1.0.
+        float uScale = 1.0f, vScale = 1.0f;
+        if (external_visible_w_ > 0 && external_visible_w_ < desc.width)
+            uScale = static_cast<float>(external_visible_w_) / static_cast<float>(desc.width);
+        if (external_visible_h_ > 0 && external_visible_h_ < desc.height)
+            vScale = static_cast<float>(external_visible_h_) / static_cast<float>(desc.height);
+
+        // Zero-initialized first, so every field this renderer does not drive
+        // is definitively OFF rather than whatever was on the stack.
+        // zoom <= 1 is the wide view; peaking still runs on it.
+        CompositePush pc{};
+        pc.hlg         = camera_hlg_;
+        pc.transfer    = static_cast<int>(external_transfer_);
+        pc.peakNits    = external_peak_nits_;
+        pc.rotQuadrant = external_rotation_quadrant_;
+        pc.uvScaleX    = uScale;
+        pc.uvScaleY    = vScale;
+        pc.zoom        = 1.0f;
+        pc.cx          = 0.5f;
+        pc.cy          = 0.5f;
+        pc.peak        = camera_peak_;
+        pc.texelX      = tx;
+        pc.texelY      = ty;
+        pc.peakColor   = camera_peak_color_;
+        vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
 
         // The loupe: the same frame again, magnified about its centre, into a
@@ -642,9 +915,11 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
             loupe_rect_[2] = iw; loupe_rect_[3] = ih;
 
             const float uv_zoom = camera_loupe_zoom_ * (draw_w / iw);
-            float lpc[8] = { camera_hlg_, uv_zoom, 0.5f, 0.5f,
-                             camera_peak_, tx, ty, camera_peak_color_ };
-            vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lpc), lpc);
+            CompositePush lpc = pc;
+            lpc.zoom = uv_zoom;
+            lpc.cx = 0.5f;
+            lpc.cy = 0.5f;
+            vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lpc), &lpc);
             vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
 
             // Hand the scissor back to the full surface: every later layer
@@ -665,7 +940,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     // SDF shape quads — the vector UI layer's fast path; same layer slot as
     // the overlay composite below (a host uses one or the other per frame).
     if (shapeVertCount_ > 0) {
-        recordShapeDraw(cmd_buffers_[image_index], frame);
+        recordShapeDraw(cmd_buffers_[image_index], frame, 0, shapeVertCount_);
     }
 
     if (!overlay_curves.empty()) {
@@ -674,6 +949,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     if (!foregroundImages.empty()) {
         image_layer_.recordComposite(cmd_buffers_[image_index], foregroundImages, width_, height_);
+    }
+
+    if (shapeFrontCount_ > 0) {
+        recordShapeDraw(cmd_buffers_[image_index], frame, shapeFrontFirst_, shapeFrontCount_);
     }
 
     if (msdfVertCount_ > 0) {
@@ -710,9 +989,13 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     present_info.pSwapchains = swapchains;
     present_info.pImageIndices = &image_index;
 
-    VkResult present_result = vkQueuePresentKHR(queue_, &present_info);
-    if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
-        recreate_swapchain();
+    VkResult present_result = VK_SUCCESS;
+    if (present_enabled_) {
+        present_result = vkQueuePresentKHR(queue_, &present_info);
+        if (present_result == VK_ERROR_OUT_OF_DATE_KHR ||
+            present_result == VK_SUBOPTIMAL_KHR) {
+            recreate_swapchain();
+        }
     }
 
     // ── Instrumentation: per-frame phase breakdown on slow frames ───────────
@@ -741,6 +1024,18 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 bool Renderer::readbackLastFrame(std::vector<uint8_t>& rgba_out,
                                  uint32_t& out_w, uint32_t& out_h) {
     if (last_drawn_image_index_ >= swapchain_images_.size()) return false;
+
+    // The contract is tightly packed RGBA8, PNG-ready with no swizzle, which
+    // only holds for the SDR 8-bit target. Under an HDR swapchain the source
+    // is FP16 or 10-bit-packed and the copy below would produce garbage — and
+    // a PNG could not represent the luminance anyway. Capture pins SDR.
+    if (output_.hdr) {
+        LOGE("readbackLastFrame: unsupported under an HDR swapchain (target=%s, fmt=%d) — "
+             "the PNG path requires the SDR 8-bit target",
+             outputTargetName(output_.target), swapchain_format_);
+        return false;
+    }
+
     VkImage image = swapchain_images_[last_drawn_image_index_];
 
     // All draw/present work must be finished before we touch the image.
@@ -993,16 +1288,61 @@ void Renderer::create_logical_device() {
 #endif
 }
 
+void Renderer::resolve_output_target() {
+    // Output target: what surface we present into. SDR (the default) pins
+    // 8-bit sRGB, which is what an SDR consumer must have — a camera preview
+    // stream is SDR, and presenting its HLG-encoded pixels into the only
+    // 10-bit colorspace one phone exposed (BT2020 *linear*) made the preview
+    // wash out, because the display read non-linear data as linear. HDR is
+    // opt-in per consumer and resolved against what this surface actually
+    // advertises; see output_target.hh and USAGE_hdr_output.md.
+    //
+    // Resolved EXACTLY ONCE, from the constructor, before the first
+    // create_swapchain(). The design is deliberately "one target per process":
+    // the render pass and every graphics pipeline bake this in (the render
+    // pass from swapchain_format_, the pipelines from output_.encode as the
+    // OUTPUT_ENCODE specialization constant), and recreate_swapchain() rebuilds
+    // neither. Re-resolving on resize would therefore leave the pipelines
+    // encoding for a target the swapchain no longer uses — silently wrong
+    // colour, not a validation error. If a runtime target switch is ever
+    // wanted, it has to tear down and rebuild the render pass and all
+    // pipelines, and this guard is where that decision starts.
+    if (output_resolved_) return;
+    output_resolved_ = true;
+
+    uint32_t fmt_count = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(fmt_count);
+    if (fmt_count)
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, formats.data());
+
+    // Log the FULL enumeration, once per process. We do not yet know what real
+    // drivers expose (Samsung/Pixel/Windows ICDs all differ) and this log is
+    // how we find out — do not trim it without a device session to replace it.
+    LOGI("Swapchain: surface advertises %u format/colorspace pairs%s", fmt_count,
+         ext_swapchain_colorspace_ ? "" : " (VK_EXT_swapchain_colorspace ABSENT)");
+    for (uint32_t i = 0; i < fmt_count; ++i)
+        LOGI("  [%u] format=%d colorspace=%d", i, formats[i].format, formats[i].colorSpace);
+
+    output_ = pickTarget(formats, ext_swapchain_colorspace_, requested_output_);
+    swapchain_format_     = output_.format;
+    swapchain_colorspace_ = output_.colorspace;
+
+    if (output_.fellBack)
+        LOGE("Swapchain: %s requested but unsupported here — falling back to SDR 8-bit sRGB",
+             outputTargetName(requested_output_));
+    if (output_.degraded)
+        LOGE("Swapchain: %s resolved to a PASSTHROUGH colorspace — the compositor will NOT "
+             "interpret our encoding; correct output depends on the panel already being in "
+             "that mode", outputTargetName(output_.target));
+    LOGI("Swapchain: target=%s encode=%s fmt=%d colorspace=%d hdr=%d",
+         outputTargetName(output_.target), outputEncodeName(output_.encode),
+         swapchain_format_, swapchain_colorspace_, output_.hdr ? 1 : 0);
+}
+
 void Renderer::create_swapchain() {
-    // Preview is presented in SDR. The camera's preview stream is an SDR output
-    // (the HLG/10-bit path is used only for the video encoder), so an 8-bit sRGB
-    // swapchain shows correct, un-washed colors. Presenting HLG-encoded pixels to
-    // the only 10-bit colorspace this panel exposes (BT2020 *linear*) made the
-    // preview look washed out — the display read non-linear data as linear.
-    swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
-    swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    swapchain_hdr_        = false;
-    LOGI("Swapchain: SDR 8-bit (fmt=%d)", swapchain_format_);
+    // swapchain_format_/_colorspace_ were fixed by resolve_output_target() in
+    // the constructor and deliberately do not move across a resize — see there.
 
     // Present mode: prefer MAILBOX over FIFO. With FIFO the present queue is a
     // hard line — vkQueuePresentKHR/acquire block until the compositor releases an
@@ -1013,8 +1353,14 @@ void Renderer::create_swapchain() {
     // free image to render into and the newest frame replaces the queued one, so a
     // transient compositor hold no longer stalls us. FIFO is the guaranteed
     // fallback if MAILBOX is unsupported.
+    //
+    // ...for a consumer that asked for Latency. A consumer that asked for Vsync
+    // is presenting frames a clock scheduled, not "whatever is newest", so
+    // there is nothing for MAILBOX to prefer and nothing gained by never
+    // blocking — while the cost, a render loop free-running at hundreds of fps
+    // over identical content, is entirely real. FIFO is always available.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    {
+    if (present_policy_ == PresentPolicy::Latency) {
         uint32_t pm_count = 0;
         vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, nullptr);
         std::vector<VkPresentModeKHR> modes(pm_count);
@@ -1035,7 +1381,9 @@ void Renderer::create_swapchain() {
     if (desired_images < 2) desired_images = 2;
     if (desired_images < caps.minImageCount) desired_images = caps.minImageCount;
     if (caps.maxImageCount > 0 && desired_images > caps.maxImageCount) desired_images = caps.maxImageCount;
-    LOGI("Swapchain present mode=%d, images=%u", present_mode, desired_images);
+    LOGI("Swapchain present mode=%d (%s), images=%u", present_mode,
+         present_policy_ == PresentPolicy::Vsync ? "vsync-paced" : "low-latency",
+         desired_images);
 
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & composite_alpha)) {
@@ -1216,6 +1564,7 @@ void Renderer::cleanup_hwb_resources() {
         vkFreeMemory(device_, pair.second.memory, nullptr);
     }
     hwb_cache_.clear();
+    hwb_lru_.clear();
 
     if (desc_pool_) { vkDestroyDescriptorPool(device_, desc_pool_, nullptr); desc_pool_ = VK_NULL_HANDLE; }
     if (desc_layout_) { vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr); desc_layout_ = VK_NULL_HANDLE; }
@@ -1233,6 +1582,75 @@ void Renderer::destroy_swapchain_resources() {
     swapchain_image_views_.clear();
     swapchain_images_.clear();
     if (swapchain_) { vkDestroySwapchainKHR(device_, swapchain_, nullptr); swapchain_ = VK_NULL_HANDLE; }
+}
+
+bool Renderer::recreate_surface() {
+    // See the header for what this is for. The order matters twice over:
+    // everything using the old swapchain must be gone before the SURFACE it
+    // was made from is destroyed, and on Android the VkSurfaceKHR must be
+    // destroyed before the ANativeWindow behind it is released — which is what
+    // the caller does next.
+    vkDeviceWaitIdle(device_);
+    destroy_swapchain_resources();
+    if (surface_ != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+    }
+
+    // A window that has gone away and not yet come back. Not an error: the
+    // caller retries when the platform hands it a new one.
+    VkExtent2D ext = surface_provider_.extent();
+    if (ext.width == 0 || ext.height == 0) return true;
+
+    create_surface();
+    if (surface_ == VK_NULL_HANDLE) return false;
+
+    // The render pass and every pipeline were built against the OLD surface's
+    // format. If the new one cannot give us the same, none of them are valid
+    // and the honest answer is to say so rather than render into a mismatch.
+    // resolve_output_target() is deliberately not re-run — its own comment
+    // says it must not — so this only CHECKS.
+    {
+        uint32_t n = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, nullptr);
+        std::vector<VkSurfaceFormatKHR> formats(n);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, formats.data());
+        bool ok = false;
+        for (const VkSurfaceFormatKHR& f : formats)
+            if (f.format == swapchain_format_ && f.colorSpace == swapchain_colorspace_) {
+                ok = true;
+                break;
+            }
+        if (!ok) {
+            LOGI("recreate_surface: new surface lacks format=%d colorspace=%d — full rebuild needed",
+                 (int)swapchain_format_, (int)swapchain_colorspace_);
+            return false;
+        }
+    }
+
+    width_  = ext.width;
+    height_ = ext.height;
+    create_swapchain();
+    create_framebuffers();
+
+    // Same guard recreate_swapchain() carries, for the same reason: the image
+    // count is normally deterministic for a surface, but cmd_buffers_ is
+    // indexed by image and must not be short.
+    if (cmd_buffers_.size() != framebuffers_.size()) {
+        if (!cmd_buffers_.empty())
+            vkFreeCommandBuffers(device_, cmd_pool_, (uint32_t)cmd_buffers_.size(), cmd_buffers_.data());
+        cmd_buffers_.resize(framebuffers_.size());
+        VkCommandBufferAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = cmd_pool_;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
+        vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+    }
+
+    overlay_.resize(width_, height_);
+    LOGI("Surface recreated (%ux%u) — device, pipelines and atlas kept", width_, height_);
+    return true;
 }
 
 void Renderer::recreate_swapchain() {
@@ -1489,6 +1907,49 @@ bool Renderer::ensureMsdfVboCapacity(uint32_t frame, uint32_t verts) {
     vkBindBufferMemory(device_, msdfVbo_[frame], msdfVboMemory_[frame], 0);
     vkMapMemory(device_, msdfVboMemory_[frame], 0, bytes, 0, &msdfVboMapped_[frame]);
     msdfVboVerts_[frame] = want;
+    return true;
+}
+
+bool Renderer::ensureShapeVboCapacity(uint32_t frame, uint32_t verts) {
+    if (verts <= shapeVboVerts_[frame] && shapeVboMapped_[frame]) return true;
+
+    uint32_t want = shapeVboVerts_[frame] ? shapeVboVerts_[frame] : kInitialShapeVerts;
+    while (want < verts) want *= 2;
+    want -= want % kShapeVertsPerQuad;
+
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(want) *
+                               kShapeFloatsPerVert * sizeof(float);
+
+    if (shapeVboMapped_[frame]) { vkUnmapMemory(device_, shapeVboMemory_[frame]); shapeVboMapped_[frame] = nullptr; }
+    if (shapeVbo_[frame])       { vkDestroyBuffer(device_, shapeVbo_[frame], nullptr); shapeVbo_[frame] = VK_NULL_HANDLE; }
+    if (shapeVboMemory_[frame]) { vkFreeMemory(device_, shapeVboMemory_[frame], nullptr); shapeVboMemory_[frame] = VK_NULL_HANDLE; }
+    shapeVboVerts_[frame] = 0;
+
+    VkBufferCreateInfo vb{};
+    vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vb.size  = bytes;
+    vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &vb, nullptr, &shapeVbo_[frame]) != VK_SUCCESS) {
+        LOGE("shape VBO: cannot create a buffer for %u vertices", want);
+        return false;
+    }
+    VkMemoryRequirements vr{};
+    vkGetBufferMemoryRequirements(device_, shapeVbo_[frame], &vr);
+    VkMemoryAllocateInfo va{};
+    va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    va.allocationSize = vr.size;
+    va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[frame]) != VK_SUCCESS) {
+        LOGE("shape VBO: cannot allocate %llu bytes for %u vertices",
+             (unsigned long long)bytes, want);
+        vkDestroyBuffer(device_, shapeVbo_[frame], nullptr);
+        shapeVbo_[frame] = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindBufferMemory(device_, shapeVbo_[frame], shapeVboMemory_[frame], 0);
+    vkMapMemory(device_, shapeVboMemory_[frame], 0, bytes, 0, &shapeVboMapped_[frame]);
+    shapeVboVerts_[frame] = want;
     return true;
 }
 
@@ -1906,6 +2367,10 @@ void Renderer::initShapes() {
                  VK_SHADER_STAGE_VERTEX_BIT,   vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                  VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
+    // Bake the swapchain's output encoding in (OUTPUT_ENCODE, see
+    // shaders_src/output_encode.slang). Must outlive the create call below.
+    OutputEncodeSpec encodeSpec(output_.encode);
+    stages[1].pSpecializationInfo = encodeSpec.get();
 
     VkVertexInputBindingDescription bind{0, kShapeFloatsPerVert * sizeof(float),
                                           VK_VERTEX_INPUT_RATE_VERTEX};
@@ -1986,31 +2451,14 @@ void Renderer::initShapes() {
     vkDestroyShaderModule(device_, fs, nullptr);
     if (!shapePipeline_) return;
 
-    // Per-frame vertex buffers (host-visible, persistently mapped).
-    const VkDeviceSize vbBytes =
-        static_cast<VkDeviceSize>(kMaxShapeVerts) * kShapeFloatsPerVert * sizeof(float);
-    for (uint32_t f = 0; f < kFramesInFlight; f++) {
-        VkBufferCreateInfo vb{};
-        vb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        vb.size  = vbBytes;
-        vb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        vkCreateBuffer(device_, &vb, nullptr, &shapeVbo_[f]);
-        VkMemoryRequirements vr{};
-        vkGetBufferMemoryRequirements(device_, shapeVbo_[f], &vr);
-        VkMemoryAllocateInfo va{};
-        va.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        va.allocationSize = vr.size;
-        va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[f]);
-        vkBindBufferMemory(device_, shapeVbo_[f], shapeVboMemory_[f], 0);
-        vkMapMemory(device_, shapeVboMemory_[f], 0, vbBytes, 0, &shapeVboMapped_[f]);
-    }
+    for (uint32_t f = 0; f < kFramesInFlight; f++)
+        ensureShapeVboCapacity(f, kInitialShapeVerts);
     LOGI("SDF shape pipeline ready");
 }
 
-void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame) {
-    if (shapePipeline_ == VK_NULL_HANDLE || shapeVertCount_ == 0) return;
+void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame,
+                               uint32_t firstVert, uint32_t vertCount) {
+    if (shapePipeline_ == VK_NULL_HANDLE || vertCount == 0) return;
 
     VkViewport vp{0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f};
     VkRect2D   sc{{0, 0}, {width_, height_}};
@@ -2023,7 +2471,7 @@ void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame) {
                        0, sizeof(push), push);
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &shapeVbo_[frame], &off);
-    vkCmdDraw(cmd, shapeVertCount_, 1, 0, 0);
+    vkCmdDraw(cmd, vertCount, 1, firstVert, 0);
 }
 
 void Renderer::cleanupShapes() {
@@ -2031,6 +2479,7 @@ void Renderer::cleanupShapes() {
         if (shapeVboMapped_[f]) { vkUnmapMemory(device_, shapeVboMemory_[f]); shapeVboMapped_[f] = nullptr; }
         if (shapeVbo_[f])       { vkDestroyBuffer(device_, shapeVbo_[f], nullptr); shapeVbo_[f] = VK_NULL_HANDLE; }
         if (shapeVboMemory_[f]) { vkFreeMemory(device_, shapeVboMemory_[f], nullptr); shapeVboMemory_[f] = VK_NULL_HANDLE; }
+        shapeVboVerts_[f] = 0;
     }
     if (shapePipeline_)       { vkDestroyPipeline(device_, shapePipeline_, nullptr); shapePipeline_ = VK_NULL_HANDLE; }
     if (shapePipelineLayout_) { vkDestroyPipelineLayout(device_, shapePipelineLayout_, nullptr); shapePipelineLayout_ = VK_NULL_HANDLE; }

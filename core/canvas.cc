@@ -121,6 +121,9 @@ void Canvas::image(TextureHandle tex, float x, float y, float w, float h,
   d.tex = tex;
   d.x = x; d.y = y; d.w = w; d.h = h;
   d.u0 = u0; d.v0 = v0; d.u1 = u1; d.v1 = v1;
+  d.exposure = toneExposure_; d.toneMode = toneMode_;
+  d.white    = toneWhite_;    d.clipWarn = toneClipWarn_;
+  d.whiteNits = toneWhiteNits_; d.headroom = toneHeadroom_;
   if (clipActive_) {
     d.hasClip = true;
     d.clipX = clipX0_; d.clipY = clipY0_;
@@ -136,6 +139,9 @@ void Canvas::imageFg(TextureHandle tex, float x, float y, float w, float h,
   d.tex = tex;
   d.x = x; d.y = y; d.w = w; d.h = h;
   d.u0 = u0; d.v0 = v0; d.u1 = u1; d.v1 = v1;
+  d.exposure = toneExposure_; d.toneMode = toneMode_;
+  d.white    = toneWhite_;    d.clipWarn = toneClipWarn_;
+  d.whiteNits = toneWhiteNits_; d.headroom = toneHeadroom_;
   if (clipActive_) {
     d.hasClip = true;
     d.clipX = clipX0_; d.clipY = clipY0_;
@@ -497,6 +503,44 @@ float Canvas::textWidthStyled(std::string_view str, float size, FontStyle style)
         prevCp = cp;
     }
     return w;
+}
+
+size_t Canvas::prefixFitStyled(std::string_view str, float maxW, float size, FontStyle style,
+                               float* outWidth, size_t* outLastSpace) const {
+    // Deliberately mirrors textWidthStyled()'s loop rather than calling it:
+    // the running total after k codepoints is exactly what that function
+    // returns for the first k codepoints, which is the whole guarantee this
+    // offers. If that accumulation ever changes, both must change together.
+    float w = 0.0f, fitW = 0.0f;
+    size_t fit = 0, lastSpace = std::string_view::npos;
+    uint32_t prevCp = 0;
+    for (size_t i = 0; i < str.size(); ) {
+        const size_t start = i;
+        uint32_t cp = utf8::nextCodepoint(str, i);
+        if (!msdf_) {
+            // No font engine: textWidth() goes to font_->stringWidth() or the
+            // built-in stringWidth(), neither of which is a per-codepoint
+            // accumulation this can mirror. Measure the prefix outright rather
+            // than guess — correctness first, and this is not the hot path.
+            w = textWidth(str.substr(0, i), size);
+        } else if (style == FontStyle::Roman) {
+            // Mirrors RasterFont::textWidth() exactly, which is where
+            // textWidthStyled() sends Roman via textWidth().
+            w += msdf_->kernEmStyled(FontStyle::Roman, prevCp, cp) * size;
+            w += msdf_->advance(cp, size);
+        } else {
+            uint32_t key = msdf_->keyForStyle(style, cp);
+            w += msdf_->kernEmStyled(style, prevCp, cp) * size;
+            w += key ? msdf_->advanceKey(key, size) : msdf_->advance(cp, size);
+        }
+        if (w > maxW) break;
+        fit = i; fitW = w;
+        if (cp == ' ') lastSpace = start;
+        prevCp = cp;
+    }
+    if (outWidth)     *outWidth = fitW;
+    if (outLastSpace) *outLastSpace = lastSpace;
+    return fit;
 }
 
 void Canvas::textStyled(std::string_view str, float x, float y, float size, Color c, FontStyle style) {
