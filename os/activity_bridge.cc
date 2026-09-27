@@ -168,6 +168,12 @@ std::string get_clipboard() { return call_string("getClipboard"); }
 
 bool open_url(const std::string& url) { return call_with_string("openUrl", url); }
 
+void set_keep_screen_on(bool on) {
+    jvalue v;
+    v.z = on ? JNI_TRUE : JNI_FALSE;
+    call_void("setKeepScreenOn", "(Z)V", &v);
+}
+
 std::string external_storage_root() { return call_string("externalStorageRoot"); }
 
 std::string publish_image(const std::string& display_name,

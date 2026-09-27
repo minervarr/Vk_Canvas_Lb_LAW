@@ -701,4 +701,16 @@ public class AppShellActivity extends NativeActivity {
         CharSequence s = clip.getItemAt(0).coerceToText(this);
         return s == null ? "" : s.toString();
     }
+
+    /**
+     * Keep the panel lit while native code is in a long job. Window flags
+     * belong to the UI thread; the native caller may be the glue thread.
+     */
+    @SuppressWarnings("unused")
+    public void setKeepScreenOn(final boolean on) {
+        runOnUiThread(() -> {
+            if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        });
+    }
 }

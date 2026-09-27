@@ -203,10 +203,11 @@ public:
     // shape already showing, so callers need not track it themselves.
     virtual void setCursor(CursorShape shape) = 0;
 
-    // Hold the display awake (fullscreen artwork). SetThreadExecutionState on
-    // Windows; a Wayland idle inhibitor on Linux, which needs the compositor
-    // to expose zwp_idle_inhibit_manager_v1 — a no-op where it doesn't, since
-    // nothing else can ask.
+    // Hold the display awake (fullscreen artwork, a long background job).
+    // SetThreadExecutionState on Windows; a Wayland idle inhibitor on Linux,
+    // which needs the compositor to expose zwp_idle_inhibit_manager_v1 — a
+    // no-op where it doesn't, since nothing else can ask. Android sets
+    // FLAG_KEEP_SCREEN_ON on the activity window.
     virtual void setKeepAwake(bool on) = 0;
 
     // Cross-thread wakeup: safe to call from any thread. The three integers

@@ -297,11 +297,10 @@ void AndroidHost::drainActivity() {
 }
 
 void AndroidHost::setKeepAwake(bool on) {
-    // Deliberately a no-op for now. It has a real Android equivalent
-    // (FLAG_KEEP_SCREEN_ON), but its only caller is the fullscreen artwork
-    // window, and ArtWindow declines to open on Android — so wiring it would
-    // be code with no path that reaches it. See art_view.hh.
-    (void)on;
+    // FLAG_KEEP_SCREEN_ON, applied on the UI thread by the activity. A long
+    // job (a denoise is over a minute) otherwise lets the panel sleep, and
+    // Android then freezes the process.
+    activity::set_keep_screen_on(on);
 }
 
 // ── The app command stream ───────────────────────────────────────────────────

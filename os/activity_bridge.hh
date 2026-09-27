@@ -56,6 +56,10 @@ std::string get_clipboard();
 // Caller must already have validated the scheme — see Host::openUrl.
 bool open_url(const std::string& url);
 
+// FLAG_KEEP_SCREEN_ON. The Java side posts the flag change to the UI thread.
+// A no-op when the activity has no setKeepScreenOn method.
+void set_keep_screen_on(bool on);
+
 // How far above SDR white this display can go, as a multiplier of it. 1.0
 // means no headroom -- an SDR panel, an activity that does not extend
 // AppShellActivity, or a display that will not say. Never below 1.0, so a
