@@ -24,6 +24,17 @@ public:
     VkSurfaceKHR create(VkInstance instance) override;
     VkExtent2D   extent() const override;
 
+    // Point this provider at the window the system just handed us.
+    //
+    // Android destroys the ANativeWindow when the app is backgrounded and
+    // gives a DIFFERENT one back on return. Renderer holds the provider by
+    // reference and asks it for a surface, so re-pointing the provider is what
+    // lets Renderer::recreate_surface() rebuild only the surface and keep the
+    // device, the pipelines and every texture — instead of the whole Renderer
+    // being destroyed and rebuilt because the pointer inside here was fixed at
+    // construction.
+    void set_window(ANativeWindow* window) { window_ = window; }
+
 private:
     ANativeWindow* window_;
 };

@@ -190,6 +190,27 @@ public:
   // Width of `str` in `style` at `size` (matches textStyled's advance).
   float textWidthStyled(std::string_view str, float size, FontStyle style) const;
 
+  // The longest prefix of `str` that fits `maxW`, as a byte offset — in ONE
+  // pass, with no allocation.
+  //
+  // Callers that need this were computing it by measuring every prefix
+  // separately: `for (i…) textWidthStyled(s.substr(0, i))`, which is a heap
+  // allocation and a full re-walk per codepoint, so O(n²) work to answer a
+  // question a single walk answers. text_util's splitTwoLines() did exactly
+  // that, once per visible album tile, on every frame.
+  //
+  // The answer is IDENTICAL to the loop it replaces, not merely close:
+  // textWidthStyled() accumulates `kern(prev, cp) + advance(cp)` left to
+  // right from prevCp = 0, so the running total at a codepoint boundary IS
+  // that prefix's width. No kern pair spans the cut in either form.
+  //
+  // Returns the byte offset (always a codepoint boundary; 0 if nothing fits,
+  // str.size() if all of it does). `outWidth` receives that prefix's width.
+  // `outLastSpace` receives the byte offset of the last ' ' at or before the
+  // cut, or npos — what a word-wrap needs and would otherwise re-scan for.
+  size_t prefixFitStyled(std::string_view str, float maxW, float size, FontStyle style,
+                         float* outWidth = nullptr, size_t* outLastSpace = nullptr) const;
+
   // Draw text right-aligned: right edge of the text lands at rightX.
   void textRight(std::string_view str, float rightX, float y, float size, Color c);
 

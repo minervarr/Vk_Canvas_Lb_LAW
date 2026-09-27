@@ -32,13 +32,29 @@
 // contrast and shift hue: grading decisions, appropriate for a camera and
 // wrong for an instrument. Someone opening this to inspect a photograph needs
 // the midtones to be numerically what the file says.
-float rolloff(float x, float W) {
+//
+// MIRRORS rolloffCurve() in core/output_target.cc, which is the AUTHORITY --
+// same arrangement as the PQ constants above it. This shader cannot be
+// unit-tested (it needs slangc plus a GPU), so the maths is guarded on the C++
+// side in core/tests/output_target_test.cc. Change one, change both.
+//
+// P is the OUTPUT CEILING -- what the brightest input maps to. On an SDR
+// target it is 1.0 and this is exactly the curve that existed before, term for
+// term. On an HDR target it is the display's headroom, and that distinction is
+// load-bearing rather than cosmetic: with the ceiling pinned at 1.0 the rolloff
+// path can never emit a value above display white, so an HDR swapchain would
+// be requested, granted, and then handed nothing but SDR-range pixels. The
+// feature would be inert in the one tone mode a photograph actually uses.
+float rolloff(float x, float W, float P) {
   const float k = 0.8;
   if (x <= k) return x;
+  // P can never exceed W: this curve compresses, and given a ceiling above the
+  // white point it amplifies instead. See rolloffCurve() in output_target.cc.
+  P = min(P, W);
   float span = max(W - k, 1e-4);
   float a = (x - k) / span;
-  float d = span / (1.0 - k);
-  return k + (1.0 - k) * (a * (1.0 + a / d) / (1.0 + a));
+  float d = span / max(P - k, 1e-4);
+  return k + (P - k) * (a * (1.0 + a / d) / (1.0 + a));
 }
 
 // Interleaved-gradient noise, used as a +/-0.5 LSB dither before the 8-bit
@@ -65,14 +81,30 @@ float4 main(float2 uv : TEXCOORD0, float4 fragPos : SV_Position) : SV_Target {
   }
 
   // From here the texture is LINEAR light and may legitimately hold values
-  // below 0 (out-of-gamut) or far above 1 (highlights).
-  float3 lin = c.rgb * exposure;
+  // below 0 and far above 1.
+  //
+  // The NEGATIVES ARE CLAMPED FIRST, and that ordering is load-bearing rather
+  // than tidy-minded. A colour outside sRGB's gamut -- which is most of what a
+  // BT.2100 photo's saturated highlights are -- comes back from the colour
+  // conversion with a negative component. Feed that to the luminance dot
+  // product below and L collapses toward zero, so rolloff(L)/L explodes, the
+  // positive channels slam to 1.0 and the negative one clamps to 0. Bright
+  // specular reflections came out MAGENTA with a green fringe, which reads as
+  // a colour-conversion bug and is really an operator-ordering one. Measured
+  // on a real Rec.2100 photo: 63441 pixels had a negative component, and
+  // exactly 63441 pixels turned magenta.
+  //
+  // Clamping here is not data loss: the value is outside what the display can
+  // reproduce either way, and the full range is still in the texture for the
+  // exposure control to reach.
+  float3 lin = max(c.rgb * exposure, 0.0);
 
   // "Beyond what THIS target can show". On SDR that is display white; on an
   // HDR target the headroom above white is real, so striping at 1.0 would
   // false-alarm on every correctly-bright highlight. `headroom` is the
   // consumer's display-relative peak (see ImageDraw::headroom).
-  bool clipped = any(lin > outputClipThreshold(headroom));
+  float ceiling = outputClipThreshold(headroom);
+  bool clipped = any(lin > ceiling);
 
   float3 t;
   if (toneMode < 1.5) {
@@ -81,9 +113,40 @@ float4 main(float2 uv : TEXCOORD0, float4 fragPos : SV_Position) : SV_Target {
     // kRolloff. Scale by a ratio computed from LUMINANCE rather than curving
     // each channel on its own: per-channel compression desaturates saturated
     // highlights toward white, turning a bright red into a pink one.
-    float L = dot(lin, float3(0.2126, 0.7152, 0.0722));
-    float s = L > 1e-6 ? rolloff(L, max(white, 1.0)) / L : 0.0;
+    //
+    // The weights follow the PRIMARIES the pixels are in, which is decided by
+    // the same OUTPUT_ENCODE specialization constant the encode below uses --
+    // deliberately the same lever, so the two can never disagree. The PQ target
+    // is an HDR10/ST2084 surface, i.e. BT.2020 by definition, and its consumer
+    // decodes to BT.2020 primaries to match; the other targets are sRGB/BT.709.
+    // Using 709's weights on 2020 pixels overweights green by ~5%, which skews
+    // the ratio per hue and reappears as the same green cast the gamut mismatch
+    // produced, just more subtly.
+    float3 lumaW = (OUTPUT_ENCODE == kEncodePQ)
+                 ? float3(0.2627, 0.6780, 0.0593)   // BT.2020
+                 : float3(0.2126, 0.7152, 0.0722);  // BT.709
+    float L = dot(lin, lumaW);
+    // Below the threshold the curve is the identity, so pass the pixel through
+    // rather than zeroing it: returning 0.0 crushed every sub-threshold pixel to
+    // exact black, which turned the darkest parts of an image into flat voids
+    // with speckled edges instead of just very dark detail.
+    float s = L > 1e-6 ? rolloff(L, max(white, 1.0), ceiling) / L : 1.0;
     t = lin * s;
+  }
+
+  // Anything still over the ceiling is desaturated TOWARD WHITE rather than
+  // clipped per channel. A per-channel clamp changes the hue of a blown
+  // highlight -- the brightest channel stops growing while the others keep
+  // going -- which is the second half of the magenta artefact and is why a
+  // clipped specular used to acquire a colour it never had. This maps the
+  // largest channel to exactly the ceiling and pulls the others up with it, so
+  // a blown highlight goes white, which is what a blown highlight looks like.
+  //
+  // kClip deliberately does NOT get this treatment: its whole contract is to
+  // show the literal truth, and a hard clip is that truth.
+  if (toneMode > 1.5) {
+    float m = max(t.r, max(t.g, t.b));
+    if (m > ceiling) t = lerp(t, float3(ceiling, ceiling, ceiling), 1.0 - ceiling / m);
   }
 
   // Encode for whatever swapchain this pipeline was specialized against. The

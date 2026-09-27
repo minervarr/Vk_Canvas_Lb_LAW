@@ -137,11 +137,31 @@ device, do not assume.
   params asserted in the unit test.
 - Same honesty rules as always: claims limited to what was actually run.
 
-## Open questions (need one real device session each)
+## Open questions
 
-1. What does an S23 Ultra's Android Vulkan driver actually enumerate? (Item 3's log answers.)
-2. Does `setColorMode(COLOR_MODE_HDR)` change the enumerated format list on Samsung? (Re-enumerate after.)
-3. Does FP16-extended exist across Samsung's driver generations, or is PQ the safe Android pick?
+**1. What does an S23 Ultra's Android Vulkan driver enumerate? — ANSWERED.**
+68 format/colorspace pairs. `R16G16B16A16_SFLOAT` + `EXTENDED_SRGB_LINEAR_EXT`
+(format 97, colorspace 1000104002) is present and is what `pickTarget()` takes.
+`A2B10G10R10_UNORM_PACK32` + `HDR10_ST2084` is present too, so both HDR tables
+have a real candidate on this device.
+
+**2. Does `setColorMode(COLOR_MODE_HDR)` change the enumerated list on Samsung?
+— ANSWERED: NO.** Measured directly by flipping the consumer's opt-in
+meta-data off and relaunching: with the colour mode **not** requested the
+driver still advertises the same 68 pairs, still selects format 97 +
+1000104002, and still reports `hdr=1`. So on this device the format list is a
+property of the surface, not of the window's colour mode.
+
+That is worth stating plainly rather than burying: **the `setColorMode` call is
+not what makes format selection work here.** It is retained because it is what
+tells the *compositor* to treat the surface as HDR — which is a separate
+question from what the driver will enumerate, and one this experiment does not
+answer. Do not conclude from this that the call is unnecessary; conclude that
+format enumeration is not the evidence for it.
+
+**3. Does FP16-extended exist across Samsung's driver generations? — STILL
+OPEN.** One device (SM-S918B, Android 16 / API 36) says yes. One device is not
+a generation sweep, and nothing here justifies a claim about Samsung at large.
 
 ## Status (implementation)
 
@@ -194,9 +214,39 @@ a separate pass, deliberately out of scope here.
 
 ### What has NOT been verified
 
-No shader was compiled — `slangc` is not installed on the machine this landed
-from, so `output_encode.slang` and its four dependents are **unbuilt and
-unrun**. Nothing has been on a panel.
+Nothing has been on a panel.
+
+**Update — shaders now build.** On a machine with `slangc`, all six of
+vk_canvas's own shaders compile clean and pass `spirv-val`, and `SpecId 0`
+(`OUTPUT_ENCODE`) is present in `image_frag`, `shape_frag` and `overlay_frag`.
+The image push-constant block is byte-identical between `image_vert` and
+`image_frag`, checked rather than eyeballed. Compiling is not running: no
+fragment of this has executed on a GPU.
+
+**One real bug was found doing it.** `rolloff()` had its output ceiling
+hardcoded at 1.0, so under an HDR target the rolloff path — the tone mode a
+photograph actually uses — could never emit a value above display white. The
+swapchain would be requested, granted and then fed nothing but SDR-range
+pixels; the feature would have been inert in exactly the case it exists for.
+`rolloff()` now takes the ceiling, which is `outputClipThreshold(headroom)`.
+The curve moved to `rolloffCurve()` in `core/output_target.cc` as the C++
+authority (same arrangement as `pqEncode()`), and `output_target_test` now
+proves at `ceiling == 1.0` it is **bit-identical** to the old curve across
+2.4M samples — the regression proof for every SDR consumer — plus
+identity-below-knee, monotonicity, more-headroom-compresses-less, and the
+analytic ceiling crossing. The assertions were mutation-checked to confirm
+they are live.
+
+**A second bug, found on the panel.** The ceiling has to be clamped to the
+image's own white point. `rolloffCurve()` COMPRESSES -- it maps `white` down
+onto `ceiling` -- and handed a ceiling *above* `white` it extrapolated instead:
+a photo with `white = 1.37` on a panel with 2.22x headroom had its highlights
+multiplied by up to 2.24x and overshot the ceiling it was given
+(1.37 -> 3.279 against a ceiling of 2.22). `ceiling = min(ceiling, white)` now
+lives inside the curve, so both the C++ and the shader get it. The clamp makes
+the already-fits case an exact identity (to 2 ULP), which is what "the panel
+can show this picture" should mean, and it also stops an SDR image being
+stretched across headroom it never had.
 
 What *is* checked: the C++ all syntax-checks, and `output_target_test` passes,
 now including golden ST.2084 values against the PQ constants

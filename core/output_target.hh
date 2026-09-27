@@ -20,6 +20,29 @@ enum class OutputTarget {
     Hdr10PQ,              // 10-bit ST 2084 PQ
 };
 
+// Which present mode the swapchain should prefer.
+//
+// Two consumers want opposite things and the engine had only ever served one.
+//
+// A camera preview wants Latency: MAILBOX, where the newest rendered frame
+// replaces whatever was queued and the producer is never blocked. That was
+// chosen against a real failure — Android's compositor periodically held an
+// image for ~60 ms, which with a tight image count starved rendering and
+// froze the preview to about 1 Hz.
+//
+// A video player wants Vsync: FIFO, and for the same reason in reverse. Its
+// frames are not "the newest thing available", they are scheduled for
+// specific instants by a clock; there is no newer frame to prefer, and
+// nothing to gain from never blocking. What MAILBOX costs it is real: with no
+// backpressure the render loop free-runs — measured at about 900 fps,
+// redrawing identical content — and the heat that makes is the hardware
+// decoder's problem too. FIFO makes vkQueuePresentKHR the pacer, one frame
+// per vsync, which is what a player wants a present call to do.
+enum class PresentPolicy {
+    Latency = 0,  // prefer MAILBOX, fall back to FIFO. The default; unchanged.
+    Vsync,        // FIFO always. Paced by the display, and no wasted frames.
+};
+
 // How a fragment stage must encode its output for the resolved target. Mirrors
 // the OUTPUT_ENCODE specialization constant consumed by the shaders.
 enum class OutputEncode {
@@ -69,6 +92,27 @@ inline OutputSelection pickTarget(const std::vector<VkSurfaceFormatKHR>& formats
 // `y` is absolute luminance normalized so 1.0 == 10000 nits. Returns the
 // non-linear code value in [0,1].
 float pqEncode(float y);
+
+// ── The highlight rolloff curve ─────────────────────────────────────────────
+//
+// THIS IS THE AUTHORITY for the tone curve, on the same terms as pqEncode()
+// above: shaders_src/image_frag.slang mirrors it, the shader cannot be
+// unit-tested, so core/tests/output_target_test.cc guards the maths here.
+//
+// Extended Reinhard with a linear knee at k = 0.8. Below k it is the IDENTITY,
+// so an ordinary SDR image passes through numerically untouched. Above k the
+// range is compressed monotonically toward `ceiling`.
+//
+// `ceiling` is what the highlights roll TOWARD -- 1.0 (display white) on an
+// SDR target, the display's headroom on an HDR one. That parameter is the
+// whole reason this is not hardcoded: pinned at 1.0, the rolloff path can
+// never emit a value above display white, so an HDR swapchain could be
+// requested, granted, and then handed nothing but SDR-range pixels. At
+// ceiling == 1.0 this is bit-identical to the pre-HDR curve.
+//
+// The curve is UNBOUNDED -- it crosses `ceiling` and keeps going; capping is
+// the caller's saturate/desaturate step, exactly as before.
+float rolloffCurve(float x, float white, float ceiling);
 
 // Absolute luminance that PQ code value 1.0 represents.
 inline constexpr float kPQPeakNits = 10000.0f;
