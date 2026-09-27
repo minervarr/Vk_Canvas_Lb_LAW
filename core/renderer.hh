@@ -66,7 +66,10 @@ public:
               const std::vector<ImageDraw>& images = {},
               const std::vector<ImageDraw>& foregroundImages = {},
               const std::vector<float>& msdfQuads = {},
-              const std::vector<float>& shapeVerts = {});
+              const std::vector<float>& shapeVerts = {},
+              // Drawn after foreground images, so marks sit on top of a photo
+              // that would otherwise cover the shape pass.
+              const std::vector<float>& frontShapeVerts = {});
 
     // ── Surface lost and regained, WITHOUT losing the device ─────────────────
     //
@@ -506,11 +509,14 @@ private:
     void*            shapeVboMapped_[kFramesInFlight] = {};
     uint32_t         shapeVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
     uint32_t         shapeVertCount_ = 0;  // for the frame being recorded
+    uint32_t         shapeFrontFirst_ = 0;
+    uint32_t         shapeFrontCount_ = 0;
     VkPipelineLayout shapePipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline       shapePipeline_       = VK_NULL_HANDLE;
 
     void initShapes();
-    void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame);
+    void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame,
+                         uint32_t firstVert, uint32_t vertCount);
     void cleanupShapes();
     bool ensureShapeVboCapacity(uint32_t frame, uint32_t verts);
 

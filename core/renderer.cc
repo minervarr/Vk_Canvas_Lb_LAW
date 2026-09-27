@@ -591,7 +591,8 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
                     const std::vector<ImageDraw>& images,
                     const std::vector<ImageDraw>& foregroundImages,
                     const std::vector<float>& msdfQuads,
-                    const std::vector<float>& shapeVerts) {
+                    const std::vector<float>& shapeVerts,
+                    const std::vector<float>& frontShapeVerts) {
     if (!device_) return;
     int64_t draw_t0 = now_ns();
 
@@ -647,27 +648,48 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         msdfVertCount_ = verts;
     }
 
-    // Upload SDF shape quads into this frame slot's VBO.
+    // Upload SDF shape quads into this frame slot's VBO. Foreground shapes
+    // share the buffer and are drawn after images, so a photo cannot cover them.
     {
         uint32_t verts = static_cast<uint32_t>(shapeVerts.size() / kShapeFloatsPerVert);
+        uint32_t front = static_cast<uint32_t>(frontShapeVerts.size() / kShapeFloatsPerVert);
+        uint32_t total = verts + front;
         // Same contract as the text VBO: grow to fit, and if the allocation
         // genuinely fails, fall back to whatever capacity survives — rounded
         // down to a whole quad, so the tail is a missing shape and never
         // half of one (a Terminus glyph cut mid-run looks like a sliced
         // letter, which is how Settings lists used to die).
-        if (shapePipeline_ != VK_NULL_HANDLE && verts > 0) {
-            if (!ensureShapeVboCapacity(frame, verts))
-                verts = shapeVboVerts_[frame] -
-                        shapeVboVerts_[frame] % kShapeVertsPerQuad;
-            if (shapeVboMapped_[frame] && verts > 0)
-                std::memcpy(shapeVboMapped_[frame], shapeVerts.data(),
-                            static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
-            else
+        if (shapePipeline_ != VK_NULL_HANDLE && total > 0) {
+            if (!ensureShapeVboCapacity(frame, total)) {
+                uint32_t cap = shapeVboVerts_[frame] -
+                               shapeVboVerts_[frame] % kShapeVertsPerQuad;
+                if (verts > cap) {
+                    verts = cap;
+                    front = 0;
+                } else if (verts + front > cap) {
+                    front = cap - verts;
+                }
+            }
+            if (shapeVboMapped_[frame]) {
+                auto* dst = static_cast<float*>(shapeVboMapped_[frame]);
+                if (verts > 0)
+                    std::memcpy(dst, shapeVerts.data(),
+                                static_cast<size_t>(verts) * kShapeFloatsPerVert * sizeof(float));
+                if (front > 0)
+                    std::memcpy(dst + static_cast<size_t>(verts) * kShapeFloatsPerVert,
+                                frontShapeVerts.data(),
+                                static_cast<size_t>(front) * kShapeFloatsPerVert * sizeof(float));
+            } else {
                 verts = 0;
+                front = 0;
+            }
         } else {
             verts = 0;
+            front = 0;
         }
         shapeVertCount_ = verts;
+        shapeFrontFirst_ = verts;
+        shapeFrontCount_ = front;
     }
 
     int64_t t_afterupload = now_ns();
@@ -723,7 +745,13 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         recreate_swapchain();
         result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                        image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) return;
+    }
+    // SURFACE_LOST and DEVICE_LOST leave image_index undefined. Submitting
+    // that index paints a black frame and does not come back. Skip the
+    // frame; a new window rebuilds the swapchain.
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        LOGI("acquire skipped (VkResult %d)", (int)result);
+        return;
     }
     // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
     // render and present it, and let the present side's SUBOPTIMAL trigger
@@ -846,7 +874,7 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
     // SDF shape quads — the vector UI layer's fast path; same layer slot as
     // the overlay composite below (a host uses one or the other per frame).
     if (shapeVertCount_ > 0) {
-        recordShapeDraw(cmd_buffers_[image_index], frame);
+        recordShapeDraw(cmd_buffers_[image_index], frame, 0, shapeVertCount_);
     }
 
     if (!overlay_curves.empty()) {
@@ -855,6 +883,10 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
     if (!foregroundImages.empty()) {
         image_layer_.recordComposite(cmd_buffers_[image_index], foregroundImages, width_, height_);
+    }
+
+    if (shapeFrontCount_ > 0) {
+        recordShapeDraw(cmd_buffers_[image_index], frame, shapeFrontFirst_, shapeFrontCount_);
     }
 
     if (msdfVertCount_ > 0) {
@@ -2358,8 +2390,9 @@ void Renderer::initShapes() {
     LOGI("SDF shape pipeline ready");
 }
 
-void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame) {
-    if (shapePipeline_ == VK_NULL_HANDLE || shapeVertCount_ == 0) return;
+void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame,
+                               uint32_t firstVert, uint32_t vertCount) {
+    if (shapePipeline_ == VK_NULL_HANDLE || vertCount == 0) return;
 
     VkViewport vp{0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f};
     VkRect2D   sc{{0, 0}, {width_, height_}};
@@ -2372,7 +2405,7 @@ void Renderer::recordShapeDraw(VkCommandBuffer cmd, uint32_t frame) {
                        0, sizeof(push), push);
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &shapeVbo_[frame], &off);
-    vkCmdDraw(cmd, shapeVertCount_, 1, 0, 0);
+    vkCmdDraw(cmd, vertCount, 1, firstVert, 0);
 }
 
 void Renderer::cleanupShapes() {
