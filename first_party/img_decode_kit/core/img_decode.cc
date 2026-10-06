@@ -130,6 +130,10 @@ template <typename Body>
 void parallelRows(int n, const Body& body) {
     unsigned hw = std::thread::hardware_concurrency();
     if (hw == 0) hw = 1;
+    // Cover tiles are a few hundred rows. Launching a thread per chunk costs
+    // more than the resample on a slow core, and the frame thread is the one
+    // waiting. Fullscreen sources are where the extra cores pay for themselves.
+    if (n < 512 || hw <= 1) { body(0, n); return; }
     const int chunks = (int)std::min<unsigned>(hw, (unsigned)std::max(1, n / 64));
     if (chunks <= 1) { body(0, n); return; }
 
