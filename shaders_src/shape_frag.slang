@@ -50,12 +50,20 @@ float4 main(float4 color : COLOR0, float4 d0 : TEXCOORD0, float4 d1 : TEXCOORD1,
     d = -sqrt(dm.x) * sign(dm.y);
   }
 
-  // Distance -> coverage across exactly one SCREEN pixel, whatever the
-  // scale: fwidth(d) is how much the distance changes per screen pixel at
-  // this fragment, so dividing by it normalizes the AA band to 1px under
-  // any zoom/DPI/transform (identical to the old fixed `0.5 - d` at 1:1,
-  // where fwidth(d) == 1).
+  // Distance -> coverage across one SCREEN pixel: fwidth(d) is how much the
+  // distance changes per screen pixel, so dividing by it keeps the band at
+  // 1px when a transform magnifies the shape (fwidth < 1). Identical to the
+  // old fixed `0.5 - d` at 1:1, where fwidth(d) == 1.
   float w = max(fwidth(d), 1e-6);
+  // A box's gradient is at most 1, so a wider band is the 2x2 derivative
+  // quad overestimating the kink at a corner (it reports ~2). That extra
+  // width melts a 1px staircase — a bitmap glyph, a pixel-art ring — into a
+  // blur, and the blur stacks where separate rects meet. Cap a SHARP box at
+  // one pixel: an integer-aligned edge then lands fully inside or fully
+  // outside the pixel centers. Rounded boxes, capsules and triangles keep
+  // the uncapped band, and magnification (fwidth < 1) is untouched.
+  if (kind == 0 && d1.y == 0.0)
+    w = min(w, 1.0);
   float cov = clamp(0.5 - d / w, 0.0, 1.0);
   // color.rgb is an authored display-referred sRGB number. Written raw into a
   // linear/PQ surface it would wash out (the camera bug, from the other side),
