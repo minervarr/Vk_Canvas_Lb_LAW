@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <thread>
 
+#include "touch_hover.hh"        // when a finger lights a control, and when that drops
 #include "activity_bridge.hh"    // the IME/clipboard/URL seam onto AppShellActivity
 #include "keys.hh"               // vk_canvas: the portable key:: space
 #include "app_main.hh"           // APP_SHELL_LOG_NAME, the logcat tag
@@ -568,9 +569,9 @@ void AndroidHost::onTouchDown(float x, float y) {
     dragRemainder_ = 0.0f;
     touchDragging_ = false;
     touchDown_     = true;
-    // Hover follows the finger so the app can light what is under it. It is
-    // the only hover a touch screen has, and it is honest: the desktop's
-    // hover means "the pointer is here", and here it is.
+    // Contact is the one sample touchHoverFor() does not see. The control
+    // under the finger lights before the press is armed, and every sample
+    // after this one either follows the finger or drops the highlight.
     owner_->onMouseMove((int)x, (int)y);
 
     // The press goes out at CONTACT, as it does on every desktop host. It used
@@ -597,9 +598,10 @@ void AndroidHost::onTouchDown(float x, float y) {
 
 void AndroidHost::onTouchMove(float x, float y) {
     if (!touchDown_) return;
-    if (!touchDragging_) {
-        const float dx = x - touchStartX_, dy = y - touchStartY_;
-        if (std::sqrt(dx * dx + dy * dy) <= kTouchSlopPx) return;   // still a tap
+
+    const TouchHoverDecision hover = touchHoverFor(TouchHoverSample{
+        true, touchDragging_, x, y, touchStartX_, touchStartY_, kTouchSlopPx, false});
+    if (hover.becameDrag) {
         touchDragging_ = true;
         // The slop is SPENT, not banked. It is the distance that decided this
         // was a scroll at all, and feeding it to the wheel as one delta made
@@ -609,8 +611,14 @@ void AndroidHost::onTouchMove(float x, float y) {
         // gesture was admitted, and 1:1 from there.
         touchLastY_    = y;
         dragRemainder_ = 0.0f;   // the slop is spent; start the carry clean
-        return;
     }
+    if (hover.hover == TouchHover::Move)
+        owner_->onMouseMove((int)x, (int)y);
+    else if (hover.hover == TouchHover::Leave)
+        owner_->onMouseLeave();
+    // Still a tap, or the sample that just admitted the drag: no wheel yet.
+    if (!touchDragging_ || hover.becameDrag) return;
+
     // Past the slop the gesture belongs to scrolling, for good. The wheel is
     // fed the finger's own displacement since the last event, so content
     // tracks the finger rather than stepping. The app then snaps that travel
@@ -634,8 +642,15 @@ void AndroidHost::onTouchMove(float x, float y) {
 }
 
 void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
-    const bool wasTap  = touchDown_ && !touchDragging_ && !cancelled;
-    const bool wasDrag = touchDown_ && (touchDragging_ || cancelled);
+    const bool wasDown = touchDown_;
+    // Read before the flags drop. A lift is a leave whether or not the stroke
+    // had already become a scroll; a cancel is the same fact with a different
+    // reason (the system took the gesture). touchHoverFor() treats both as a
+    // lift — the highlight does not care which.
+    const TouchHoverDecision hover = touchHoverFor(TouchHoverSample{
+        wasDown, touchDragging_, x, y, touchStartX_, touchStartY_, kTouchSlopPx, true});
+    const bool wasTap  = wasDown && !touchDragging_ && !cancelled;
+    const bool wasDrag = wasDown && (touchDragging_ || cancelled);
     const float dx = x - touchStartX_, dy = y - touchStartY_;
 
     // A lift is a lift. The drag already emitted its wheel deltas; nothing
@@ -661,6 +676,13 @@ void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
     // way to learn that. What the release MEANS is the app's question; the
     // ordering above is what lets it answer.
     owner_->onLButtonUp((int)x, (int)y);
+
+    // After the release. The click is decided from where the press landed;
+    // the highlight is a different question, and the finger is now gone. A
+    // drag already dropped it when the slop was crossed, and leaving again
+    // is the same call — a tap that never became a drag has no earlier one.
+    if (hover.hover == TouchHover::Leave)
+        owner_->onMouseLeave();
 
     if (!wasTap) return;
 

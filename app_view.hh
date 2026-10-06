@@ -124,8 +124,17 @@ public:
     // Returning false means the app must not be drawn.
     virtual bool onSurfaceRecreated() { return true; }
 
-    // Pointer. On a touch screen the host synthesises these from taps, which is
-    // why hover exists there at all — see the slop note on onDragEnd.
+    // Pointer. On a touch screen the host synthesises these from contact,
+    // which is why hover exists there at all — see the slop note on onDragEnd.
+    //
+    // While a stroke is still a tap, onMouseMove follows the finger, so a
+    // control unlights as the finger slides off it. onMouseLeave is the finger
+    // lifting, the gesture being cancelled, or the stroke becoming a scroll.
+    // There is no cursor left on the glass between contacts: a highlight
+    // latched at the down edge stays lit until the next contact otherwise.
+    // Desktop hosts send leave only when the pointer actually leaves the
+    // window — a mouse button coming up is not a leave, because the cursor
+    // is still there. touch_hover.hh is the touch rule.
     virtual void onMouseMove(int x, int y) {}
     virtual void onMouseLeave() {}
     virtual void onLButtonDown(int x, int y) {}

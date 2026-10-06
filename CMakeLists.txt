@@ -171,4 +171,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
     # this test is the only thing that ever exercises them here.
     add_executable(utf16_utf8_test tests/utf16_utf8_test.cc utf16_utf8.cc)
     target_include_directories(utf16_utf8_test PRIVATE ${APP_SHELL_DIR})
+
+    # Header-only: the Android host cannot be compiled into a desktop test,
+    # and the highlight rule is the part that has to be asserted anyway.
+    add_executable(touch_hover_test tests/touch_hover_test.cc)
+    target_include_directories(touch_hover_test PRIVATE ${APP_SHELL_DIR})
 endif()

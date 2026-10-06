@@ -136,6 +136,13 @@ private:
     // past the slop it becomes wheel deltas 1:1 and the press is cancelled
     // for good, even if the finger comes back. A lift is a stop; there is no
     // fling.
+    //
+    // Hover is the same distinction, decided by touchHoverFor(). While the
+    // stroke is still a tap the finger is the pointer and onMouseMove follows
+    // it, so a button unlights as the finger slides off it. Crossing the slop,
+    // lifting, or a cancel is onMouseLeave: a scroll does not light the rows
+    // it passes, and nothing stays lit after the finger is gone. Sampling the
+    // pointer only at contact left the control grey until the next touch.
     void onTouchDown(float x, float y);
     void onTouchMove(float x, float y);
     void onTouchUp(float x, float y, bool cancelled);

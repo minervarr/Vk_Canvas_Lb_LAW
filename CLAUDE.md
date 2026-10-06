@@ -265,6 +265,7 @@ so a test can never quietly start depending on Vulkan.
 ./build/<tree>/app_shell_build/ui_metrics_test
 ./build/<tree>/app_shell_build/ui_orientation_test
 ./build/<tree>/app_shell_build/utf16_utf8_test
+./build/<tree>/app_shell_build/touch_hover_test
 ```
 
 Keep them pure. `utf16_utf8` is deliberately written over `uint16_t` rather than
