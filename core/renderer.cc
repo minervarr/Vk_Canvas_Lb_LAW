@@ -67,6 +67,7 @@ Renderer::Renderer(SurfaceProvider& surface, AssetReader& assets,
     pick_physical_device();
     create_logical_device();
     resolve_output_target();
+    resolve_text_composite();
     create_swapchain();
     create_render_pass();
     create_framebuffers();
@@ -889,11 +890,49 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         recordShapeDraw(cmd_buffers_[image_index], frame, shapeFrontFirst_, shapeFrontCount_);
     }
 
-    if (msdfVertCount_ > 0) {
-        recordMsdfDraw(cmd_buffers_[image_index], frame);
+    // Text is either the last draw of this pass (legacy UNORM encode, or a
+    // float linear swapchain) or its own pass through an sRGB view. The view
+    // is what makes the destination's share of a partial-coverage pixel
+    // happen in linear light. Ending the UI pass first is required: its
+    // finalLayout is COLOR_ATTACHMENT_OPTIMAL for the whole life of the pass,
+    // and present needs PRESENT_SRC, which the text pass or the barrier below
+    // is what produces.
+    if (text_srgb_pass_) {
+        vkCmdEndRenderPass(cmd_buffers_[image_index]);
+        const bool haveText = msdfVertCount_ > 0
+            && image_index < text_framebuffers_.size()
+            && text_framebuffers_[image_index] != VK_NULL_HANDLE;
+        if (haveText) {
+            VkRenderPassBeginInfo trp{};
+            trp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            trp.renderPass = text_render_pass_;
+            trp.framebuffer = text_framebuffers_[image_index];
+            trp.renderArea.offset = {0, 0};
+            trp.renderArea.extent = {width_, height_};
+            vkCmdBeginRenderPass(cmd_buffers_[image_index], &trp, VK_SUBPASS_CONTENTS_INLINE);
+            recordMsdfDraw(cmd_buffers_[image_index], frame);
+            vkCmdEndRenderPass(cmd_buffers_[image_index]);
+        } else {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = swapchain_images_[image_index];
+            b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = 0;
+            vkCmdPipelineBarrier(cmd_buffers_[image_index],
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+    } else {
+        if (msdfVertCount_ > 0)
+            recordMsdfDraw(cmd_buffers_[image_index], frame);
+        vkCmdEndRenderPass(cmd_buffers_[image_index]);
     }
-
-    vkCmdEndRenderPass(cmd_buffers_[image_index]);
     vkEndCommandBuffer(cmd_buffers_[image_index]);
 
     VkSubmitInfo submit_info{};
@@ -1169,6 +1208,18 @@ void Renderer::pick_physical_device() {
         if (!std::strcmp(e.extensionName, "VK_ANDROID_external_memory_android_hardware_buffer"))
             caps_.has_external_memory_ahb = true;
     }
+    // Both, or neither. The format list is core in Vulkan 1.2 and an
+    // extension on 1.1; this instance is 1.1, so a pNext list without the
+    // extension enabled is illegal. Mutable swapchain images are useless
+    // without that list.
+    bool hasMutable = false, hasList = false;
+    for (auto& e : exts) {
+        if (!std::strcmp(e.extensionName, "VK_KHR_swapchain_mutable_format"))
+            hasMutable = true;
+        if (!std::strcmp(e.extensionName, "VK_KHR_image_format_list"))
+            hasList = true;
+    }
+    device_mutable_swapchain_ = hasMutable && hasList;
 }
 
 void Renderer::create_logical_device() {
@@ -1180,6 +1231,10 @@ void Renderer::create_logical_device() {
     qci.pQueuePriorities = &priority;
 
     std::vector<const char*> dev_exts = { "VK_KHR_swapchain" };
+    if (device_mutable_swapchain_) {
+        dev_exts.push_back("VK_KHR_swapchain_mutable_format");
+        dev_exts.push_back("VK_KHR_image_format_list");
+    }
 #if defined(__ANDROID__)
     // Camera AHardwareBuffer import chain (Android-only).
     dev_exts.insert(dev_exts.end(), {
@@ -1272,6 +1327,69 @@ void Renderer::resolve_output_target() {
     LOGI("Swapchain: target=%s encode=%s fmt=%d colorspace=%d hdr=%d",
          outputTargetName(output_.target), outputEncodeName(output_.encode),
          swapchain_format_, swapchain_colorspace_, output_.hdr ? 1 : 0);
+}
+
+namespace {
+
+VkFormat srgbTwinOf(VkFormat unorm) {
+    switch (unorm) {
+    case VK_FORMAT_R8G8B8A8_UNORM:       return VK_FORMAT_R8G8B8A8_SRGB;
+    case VK_FORMAT_B8G8R8A8_UNORM:       return VK_FORMAT_B8G8R8A8_SRGB;
+    case VK_FORMAT_R8G8B8_UNORM:         return VK_FORMAT_R8G8B8_SRGB;
+    case VK_FORMAT_B8G8R8_UNORM:         return VK_FORMAT_B8G8R8_SRGB;
+    case VK_FORMAT_A8B8G8R8_UNORM_PACK32: return VK_FORMAT_A8B8G8R8_SRGB_PACK32;
+    default:                             return VK_FORMAT_UNDEFINED;
+    }
+}
+
+}  // namespace
+
+void Renderer::resolve_text_composite() {
+    // Once, beside resolve_output_target(). create_swapchain() may still
+    // clear text_srgb_pass_ if the mutable create is refused; the render
+    // pass does not exist yet, so that is still consistent.
+    text_srgb_pass_ = false;
+    text_linear_surface_ = false;
+    text_srgb_format_ = VK_FORMAT_UNDEFINED;
+
+    if (output_.encode == OutputEncode::LinearScRgb) {
+        text_linear_surface_ = true;
+        LOGI("Text composite: linear swapchain, same pass");
+        return;
+    }
+    if (output_.encode != OutputEncode::Srgb) {
+        LOGI("Text composite: legacy encode (%s)", outputEncodeName(output_.encode));
+        return;
+    }
+    if (!device_mutable_swapchain_ || text_mutable_refused_) {
+        LOGI("Text composite: legacy encode (no mutable sRGB view)");
+        return;
+    }
+    const VkFormat srgb = srgbTwinOf(swapchain_format_);
+    if (srgb == VK_FORMAT_UNDEFINED) {
+        LOGI("Text composite: legacy encode (format %d has no sRGB twin)",
+             (int)swapchain_format_);
+        return;
+    }
+    // The image is created with COLOR_ATTACHMENT | TRANSFER_SRC, and every
+    // format in the mutable list has to support that usage. BLEND is what
+    // the text pass actually does; without it the view would still create
+    // and the blend state would be illegal.
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(physical_dev_, srgb, &props);
+    const VkFormatFeatureFlags need =
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT |
+        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+    if ((props.optimalTilingFeatures & need) != need) {
+        LOGI("Text composite: legacy encode (sRGB twin %d features 0x%x)",
+             (int)srgb, (unsigned)props.optimalTilingFeatures);
+        return;
+    }
+    text_srgb_format_ = srgb;
+    text_srgb_pass_ = true;
+    text_linear_surface_ = true;
+    LOGI("Text composite: sRGB view fmt=%d (linear blend)", (int)srgb);
 }
 
 void Renderer::create_swapchain() {
@@ -1368,8 +1486,40 @@ void Renderer::create_swapchain() {
     ci.presentMode      = present_mode;
     ci.clipped          = VK_TRUE;
 
-    if (vkCreateSwapchainKHR(device_, &ci, nullptr, &swapchain_) != VK_SUCCESS)
-        throw std::runtime_error("vkCreateSwapchainKHR failed");
+    // sRGB view of the same images. The list must include the creation
+    // format. Stack lifetime covers the create call. A refused create on
+    // the first try drops back to a plain UNORM swapchain and the legacy
+    // encode; the render pass is not built yet. A refused create later is
+    // fatal: the UI pass's finalLayout already expects the text pass to
+    // finish the transition to PRESENT_SRC, and an sRGB view of a
+    // non-mutable swapchain is illegal.
+    VkFormat viewFmts[2] = { swapchain_format_, text_srgb_format_ };
+    VkImageFormatListCreateInfo fmtList{};
+    fmtList.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+    fmtList.viewFormatCount = 2;
+    fmtList.pViewFormats = viewFmts;
+    const bool wantMutable = text_srgb_pass_ && !text_mutable_refused_
+                          && text_srgb_format_ != VK_FORMAT_UNDEFINED;
+    if (wantMutable) {
+        ci.flags = VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
+        ci.pNext = &fmtList;
+    }
+
+    VkSwapchainKHR created = VK_NULL_HANDLE;
+    if (vkCreateSwapchainKHR(device_, &ci, nullptr, &created) != VK_SUCCESS) {
+        if (!wantMutable || render_pass_ != VK_NULL_HANDLE)
+            throw std::runtime_error("vkCreateSwapchainKHR failed");
+        LOGE("Text composite: mutable sRGB swapchain refused — legacy encode");
+        text_mutable_refused_ = true;
+        text_srgb_pass_ = false;
+        text_linear_surface_ = false;
+        text_srgb_format_ = VK_FORMAT_UNDEFINED;
+        ci.flags = 0;
+        ci.pNext = nullptr;
+        if (vkCreateSwapchainKHR(device_, &ci, nullptr, &created) != VK_SUCCESS)
+            throw std::runtime_error("vkCreateSwapchainKHR failed");
+    }
+    swapchain_ = created;
 
     uint32_t img_count = 0;
     vkGetSwapchainImagesKHR(device_, swapchain_, &img_count, nullptr);
@@ -1388,7 +1538,12 @@ void Renderer::create_render_pass() {
     color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    // The text pass, when there is one, is what transitions to PRESENT_SRC.
+    // finalLayout is fixed for the life of this pass, which is not rebuilt
+    // on resize — text_srgb_pass_ has to stay in step with it.
+    color_attachment.finalLayout = text_srgb_pass_
+        ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     VkAttachmentReference color_ref{};
     color_ref.attachment = 0;
@@ -1406,7 +1561,55 @@ void Renderer::create_render_pass() {
     ci.subpassCount = 1;
     ci.pSubpasses = &subpass;
 
-    vkCreateRenderPass(device_, &ci, nullptr, &render_pass_);
+    if (vkCreateRenderPass(device_, &ci, nullptr, &render_pass_) != VK_SUCCESS)
+        throw std::runtime_error("vkCreateRenderPass failed");
+    if (!text_srgb_pass_) return;
+
+    VkAttachmentDescription textAtt{};
+    textAtt.format = text_srgb_format_;
+    textAtt.samples = VK_SAMPLE_COUNT_1_BIT;
+    textAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    textAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    textAtt.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    textAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    textAtt.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    textAtt.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference textRef{};
+    textRef.attachment = 0;
+    textRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription textSub{};
+    textSub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    textSub.colorAttachmentCount = 1;
+    textSub.pColorAttachments = &textRef;
+
+    // The UI pass's colour writes are earlier in this same command buffer.
+    // The implicit external dependency starts at TOP_OF_PIPE and does not
+    // wait for them, so without this the text pass blends against a tile
+    // the UI pass has not stored.
+    VkSubpassDependency dep{};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                      | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+    VkRenderPassCreateInfo tci{};
+    tci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    tci.attachmentCount = 1;
+    tci.pAttachments = &textAtt;
+    tci.subpassCount = 1;
+    tci.pSubpasses = &textSub;
+    tci.dependencyCount = 1;
+    tci.pDependencies = &dep;
+    VkRenderPass textPass = VK_NULL_HANDLE;
+    if (vkCreateRenderPass(device_, &tci, nullptr, &textPass) != VK_SUCCESS)
+        throw std::runtime_error("text sRGB render pass failed");
+    text_render_pass_ = textPass;
 }
 
 void Renderer::create_framebuffers() {
@@ -1417,6 +1620,10 @@ void Renderer::create_framebuffers() {
 
     swapchain_image_views_.resize(image_count);
     framebuffers_.resize(image_count);
+    if (text_srgb_pass_) {
+        text_image_views_.assign(image_count, VK_NULL_HANDLE);
+        text_framebuffers_.assign(image_count, VK_NULL_HANDLE);
+    }
 
     for (size_t i = 0; i < image_count; i++) {
         VkImageViewCreateInfo iv_ci{};
@@ -1446,6 +1653,21 @@ void Renderer::create_framebuffers() {
         fb_ci.layers = 1;
 
         vkCreateFramebuffer(device_, &fb_ci, nullptr, &framebuffers_[i]);
+
+        if (!text_srgb_pass_) continue;
+        VkImageViewCreateInfo tv = iv_ci;
+        tv.format = text_srgb_format_;
+        VkImageView view = VK_NULL_HANDLE;
+        if (vkCreateImageView(device_, &tv, nullptr, &view) != VK_SUCCESS)
+            throw std::runtime_error("sRGB text view failed");
+        text_image_views_[i] = view;
+        VkFramebufferCreateInfo tfb = fb_ci;
+        tfb.renderPass = text_render_pass_;
+        tfb.pAttachments = &text_image_views_[i];
+        VkFramebuffer fb = VK_NULL_HANDLE;
+        if (vkCreateFramebuffer(device_, &tfb, nullptr, &fb) != VK_SUCCESS)
+            throw std::runtime_error("sRGB text framebuffer failed");
+        text_framebuffers_[i] = fb;
     }
 }
 
@@ -1510,6 +1732,12 @@ void Renderer::cleanup_hwb_resources() {
 #endif  // __ANDROID__
 
 void Renderer::destroy_swapchain_resources() {
+    for (auto fb : text_framebuffers_)
+        if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
+    text_framebuffers_.clear();
+    for (auto iv : text_image_views_)
+        if (iv) vkDestroyImageView(device_, iv, nullptr);
+    text_image_views_.clear();
     for (auto fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
     framebuffers_.clear();
     for (auto iv : swapchain_image_views_) vkDestroyImageView(device_, iv, nullptr);
@@ -2120,6 +2348,33 @@ void Renderer::createMsdfPipeline() {
                  VK_SHADER_STAGE_VERTEX_BIT,   vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                  VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
+    // LINEAR_SURFACE, constant_id 1 in msdf_frag.slang. Not OUTPUT_ENCODE
+    // (that is constant_id 0 on the other shaders, and this shader does not
+    // include it). 1 only when the attachment this pipeline is bound in
+    // actually blends in linear light. An sRGB pass that failed to build
+    // must not leave the constant set: linear values written into the UNORM
+    // pass come out too dark.
+    bool linearOut = text_linear_surface_;
+    VkRenderPass pass = render_pass_;
+    if (text_srgb_pass_) {
+        if (text_render_pass_ == VK_NULL_HANDLE) {
+            LOGE("Text composite: sRGB pass missing, using legacy encode");
+            linearOut = false;
+        } else {
+            pass = text_render_pass_;
+        }
+    }
+    VkSpecializationMapEntry specEntry{};
+    specEntry.constantID = 1;
+    specEntry.offset = 0;
+    specEntry.size = sizeof(int32_t);
+    const int32_t linearSurface = linearOut ? 1 : 0;
+    VkSpecializationInfo specInfo{};
+    specInfo.mapEntryCount = 1;
+    specInfo.pMapEntries = &specEntry;
+    specInfo.dataSize = sizeof(linearSurface);
+    specInfo.pData = &linearSurface;
+    stages[1].pSpecializationInfo = &specInfo;
 
     // The stride comes from TextFont, never from a literal, and the assert
     // below fails the build if the layout changes without this table changing
@@ -2166,13 +2421,12 @@ void Renderer::createMsdfPipeline() {
 
     VkPipelineColorBlendAttachmentState cba{};
     cba.blendEnable = VK_TRUE;
-    // PREMULTIPLIED source colour, not SRC_ALPHA. msdf_frag.slang composites
-    // the glyph in linear light and emits colour already multiplied by
-    // coverage, because fixed-function blending on this UNORM swapchain
-    // (presented as SRGB_NONLINEAR) would otherwise mix coverage in GAMMA
-    // space and render every antialiased edge too dark — light-on-dark text
-    // comes out too thin. The shader and this blend factor are one change;
-    // see the long comment in msdf_frag.slang before touching either.
+    // PREMULTIPLIED source. msdf_frag.slang emits linear(colour) * coverage.
+    // On an sRGB view or a linear float surface it leaves that linear, and
+    // the hardware blends the page in linear light too. On the legacy UNORM
+    // path it encodes first. ONE is the premultiply either way. Do not switch
+    // this to SRC_ALPHA: that mixes coverage in gamma and light type on a
+    // dark page goes thin. text_cover.hh is the tested pair of formulas.
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cba.colorBlendOp = VK_BLEND_OP_ADD;
@@ -2204,7 +2458,7 @@ void Renderer::createMsdfPipeline() {
     gp.pColorBlendState = &cb;
     gp.pDynamicState = &ds;
     gp.layout = msdfPipelineLayout_;
-    gp.renderPass = render_pass_;
+    gp.renderPass = pass;
     gp.subpass = 0;
     if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &msdfPipeline_) != VK_SUCCESS) {
         LOGE("Failed to create MSDF pipeline");
@@ -2436,6 +2690,7 @@ void Renderer::cleanup() {
     }
     if (cmd_pool_)            vkDestroyCommandPool(device_, cmd_pool_, nullptr);
     destroy_swapchain_resources();
+    if (text_render_pass_) vkDestroyRenderPass(device_, text_render_pass_, nullptr);
     if (render_pass_) vkDestroyRenderPass(device_, render_pass_, nullptr);
     if (device_)    vkDestroyDevice(device_, nullptr);
     if (surface_)   vkDestroySurfaceKHR(instance_, surface_, nullptr);
