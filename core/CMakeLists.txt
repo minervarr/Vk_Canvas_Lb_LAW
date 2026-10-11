@@ -84,6 +84,34 @@ target_link_libraries(vk_canvas_core PUBLIC vk_font_core)
 # img_decode_kit PUBLIC-exposes img_decode.hh + the turbojpeg link chain.
 target_link_libraries(vk_canvas_core PUBLIC img_decode_kit)
 
+# text_cover_test pins the two text-edge formulas msdf_frag.slang implements.
+# The shader cannot be executed from here. Header only — no Vulkan, no font.
+if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_executable(text_cover_test tests/text_cover_test.cc)
+    target_include_directories(text_cover_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(text_cover_test PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(text_cover_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(text_cover_test PRIVATE -Wall -Wextra)
+    endif()
+
+    # Pixel check of the same formulas, through the real shader and swapchain.
+    # Skips (exit 77) without a headless surface, the built shaders, or the face.
+    add_executable(text_edge_probe tests/text_edge_probe.cc)
+    target_include_directories(text_edge_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(text_edge_probe PRIVATE cxx_std_17)
+    target_compile_definitions(text_edge_probe PRIVATE
+        TEXT_EDGE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/"
+        TEXT_EDGE_FONT="${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+    target_link_libraries(text_edge_probe PRIVATE vk_canvas_core)
+    if(MSVC)
+        target_compile_options(text_edge_probe PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(text_edge_probe PRIVATE -Wall -Wextra)
+    endif()
+endif()
+
 if(ANDROID)
     # NDK provides libvulkan directly; log.hh routes to logcat and the camera
     # path imports AHardwareBuffers.

@@ -55,7 +55,9 @@ public:
     // described by overlay_curves (Canvas curve records), rotated by
     // overlay_rotation_deg (0/90/180/270) to follow device orientation;
     // foreground textured quads (icons/buttons — on top of UI chrome); then
-    // MSDF text quads (drawn last so text is always on top).
+    // MSDF text quads (drawn last so text is always on top). When the sRGB
+    // text pass is active that draw is a second render pass, so the blend
+    // reads the page in linear light.
     //
     // Frames in flight: two, EXCEPT when overlay_curves is non-empty — the
     // compute rasterizer's curve/tile buffers and output image are single-
@@ -323,6 +325,25 @@ private:
     VkColorSpaceKHR  swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     bool             ext_swapchain_colorspace_ = false;  // instance ext enabled
 
+    // Linear text composite. text_srgb_pass_ means the swapchain was created
+    // mutable and text is drawn in a second pass through an sRGB view, so the
+    // hardware decodes the page, blends, and encodes. text_linear_surface_
+    // is that pass, or a float linear swapchain in the same pass. Both false
+    // is the legacy UNORM encode (exact only on black). Decided once, before
+    // the first swapchain: the UI render pass's finalLayout and the text
+    // pipeline bake it in, and neither is rebuilt on resize. A resize must
+    // keep the mutable swapchain for as long as text_srgb_pass_ stays set.
+    // text_mutable_refused_ stops a failed first create from being retried
+    // on every resize.
+    bool             device_mutable_swapchain_ = false;
+    bool             text_srgb_pass_           = false;
+    bool             text_linear_surface_      = false;
+    bool             text_mutable_refused_     = false;
+    VkFormat         text_srgb_format_         = VK_FORMAT_UNDEFINED;
+    VkRenderPass     text_render_pass_         = VK_NULL_HANDLE;
+    std::vector<VkImageView>   text_image_views_;
+    std::vector<VkFramebuffer> text_framebuffers_;
+
     VkRenderPass                 render_pass_ = VK_NULL_HANDLE;
     std::vector<VkImage>         swapchain_images_;
     std::vector<VkImageView>     swapchain_image_views_;
@@ -527,6 +548,7 @@ private:
     // Resolves the output target once, from the constructor, before the first
     // create_swapchain(). See the definition for why it must not re-run.
     void resolve_output_target();
+    void resolve_text_composite();
     void create_swapchain();
     void create_render_pass();
     void create_framebuffers();
