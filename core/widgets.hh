@@ -179,6 +179,7 @@ struct ScrollListStyle {
   Color background       = col::panel2;  // backing box behind the whole list
   Color rowText          = col::text;    // unselected row text
   Color hoverBg          = col::track;   // hover highlight fill
+  Color hoverText        = col::text;    // hovered row text; default matches rowText
   ListSelectionStyle selection = ListSelectionStyle::Pill;
   Color pillColor        = col::accent;  // Pill: selected-row fill
   Color pillText         = col::text;    // Pill: selected-row text

@@ -561,6 +561,7 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
              sel ? style.borderSelected : style.borderUnselected);
       if (sel) textColor = style.borderSelected;
     }
+    if (!sel && i == hoverIndex) textColor = style.hoverText;
     c.text(item, textX, r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
     visible.push_back({r, i});
   }
