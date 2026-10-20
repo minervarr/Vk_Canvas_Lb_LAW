@@ -81,6 +81,24 @@ Rules of the structure:
 - The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/renderer.cc` under `#if defined(__ANDROID__)`.
 - Each platform folder owns its CMake entry: `platform/android/CMakeLists.txt` (reached via `platform/android/app/build.gradle` → `externalNativeBuild.cmake.path`) and `platform/windows/CMakeLists.txt` (standalone project, reached via its `Build.bat`). Both `add_subdirectory` `core/`; there is no root CMakeLists.
 
+### Device and queue selection
+
+`pick_physical_device()` requires `VK_KHR_swapchain` and a **graphics** queue
+family that reports `vkGetPhysicalDeviceSurfaceSupportKHR` for this surface,
+then prefers a non-CPU device while keeping **enumeration order** among the
+rest. The order is the policy on purpose: ranking by device type would silently
+move a hybrid laptop to its dGPU — and to its battery cost — which is the
+user's decision, not the library's. If nothing qualifies it falls back to the
+old `devs[0]` + family 0 and says so in the log, so a consumer that used to work
+on an unusual ICD does not regress.
+
+The chosen family is used for the device queue, the command pool and
+`vkGetDeviceQueue` — not a literal 0 (family 0 can be compute-only). The choice
+is logged once as `Device: <name> (<type>)[ [SOFTWARE]]` and exposed through
+`Renderer::deviceName()`, `deviceType()`, `isSoftwareDevice()` and
+`queueFamily()`, so an application can tell a real GPU from lavapipe instead of
+discovering it as "the UI runs at 2 fps".
+
 ### Component Map
 
 | File | Role |

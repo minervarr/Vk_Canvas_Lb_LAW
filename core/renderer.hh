@@ -12,6 +12,7 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <string>
 #include "platform.hh"
 #include "canvas.hh"
 #include "overlay.hh"
@@ -144,6 +145,15 @@ public:
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return height_; }
+
+    // What was actually chosen, for a log line, a diagnostics panel or a
+    // consumer that must warn when it fell back to a CPU rasterizer. A software
+    // device is legitimate (CI, capture on a machine with no GPU) but never a
+    // silent accident.
+    const std::string&   deviceName()    const { return device_name_; }
+    VkPhysicalDeviceType deviceType()    const { return device_type_; }
+    bool                 isSoftwareDevice() const { return device_type_ == VK_PHYSICAL_DEVICE_TYPE_CPU; }
+    uint32_t             queueFamily()   const { return queue_family_; }
 
     // Copy the most recently draw()n swapchain image back to host memory as
     // tightly-packed RGBA8 (width*height*4 bytes, straight from the
@@ -310,6 +320,12 @@ private:
     VkDevice         device_         = VK_NULL_HANDLE;
     VkQueue          queue_          = VK_NULL_HANDLE;
     VkSwapchainKHR   swapchain_      = VK_NULL_HANDLE;
+
+    // Chosen together with physical_dev_: a graphics family that also supports
+    // presenting to THIS surface. 0 is the historical value and the fallback.
+    uint32_t             queue_family_ = 0;
+    std::string          device_name_;
+    VkPhysicalDeviceType device_type_ = VK_PHYSICAL_DEVICE_TYPE_OTHER;
 
     // Swapchain pixel format/colorspace — resolved at create_swapchain() by
     // pickTarget() (output_target.hh) from the ctor's requested target and the

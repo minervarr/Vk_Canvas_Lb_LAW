@@ -1179,19 +1179,104 @@ void Renderer::create_surface() {
         throw std::runtime_error("SurfaceProvider::create failed");
 }
 
+static const char* deviceTypeName(VkPhysicalDeviceType type) {
+    switch (type) {
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return "discrete";
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return "virtual";
+    case VK_PHYSICAL_DEVICE_TYPE_CPU:            return "cpu";
+    default:                                     return "other";
+    }
+}
+
 void Renderer::pick_physical_device() {
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance_, &count, nullptr);
     if (count == 0) throw std::runtime_error("no Vulkan physical devices");
     std::vector<VkPhysicalDevice> devs(count);
     vkEnumeratePhysicalDevices(instance_, &count, devs.data());
-    physical_dev_ = devs[0];
+
+    // A device is usable only if it can PRESENT to this surface. Taking devs[0]
+    // used to be the whole policy, which on a machine whose first device cannot
+    // present — a compute-only family 0, or lavapipe enumerated first — either
+    // failed outright or silently rendered the UI on the CPU. Enumerate the
+    // candidates, then pick one.
+    struct Candidate {
+        VkPhysicalDevice dev;
+        uint32_t family;
+        VkPhysicalDeviceType type;
+    };
+    std::vector<Candidate> candidates;
+
+    for (VkPhysicalDevice dev : devs) {
+        uint32_t ext_count = 0;
+        vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, nullptr);
+        std::vector<VkExtensionProperties> exts(ext_count);
+        vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, exts.data());
+        bool has_swapchain = false;
+        for (const auto& e : exts) {
+            if (!std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+                has_swapchain = true;
+                break;
+            }
+        }
+        if (!has_swapchain) continue;
+
+        uint32_t family_count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &family_count, nullptr);
+        std::vector<VkQueueFamilyProperties> families(family_count);
+        vkGetPhysicalDeviceQueueFamilyProperties(dev, &family_count, families.data());
+
+        uint32_t family = UINT32_MAX;
+        for (uint32_t i = 0; i < family_count; ++i) {
+            if (!(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) continue;
+            VkBool32 present = VK_FALSE;
+            if (vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface_, &present) == VK_SUCCESS &&
+                present == VK_TRUE) {
+                family = i;
+                break;
+            }
+        }
+        if (family == UINT32_MAX) continue;
+
+        VkPhysicalDeviceProperties cand_props{};
+        vkGetPhysicalDeviceProperties(dev, &cand_props);
+        candidates.push_back({dev, family, cand_props.deviceType});
+    }
+
+    if (candidates.empty()) {
+        // Keep the historical behavior rather than refusing to start. The
+        // caller may still fail at create_swapchain(), but it will be able to
+        // see why instead of reading it as "the UI is broken".
+        physical_dev_ = devs[0];
+        queue_family_ = 0;
+        LOGI("Device selection: no device with VK_KHR_swapchain and a graphics+present "
+             "queue family; falling back to device 0, queue family 0");
+    } else {
+        // Prefer a non-CPU device, and among those keep ENUMERATION ORDER. Do
+        // not rank by device type: on a hybrid laptop that would silently move
+        // the app to the dGPU and its battery, which is the user's decision.
+        const Candidate* pick = &candidates.front();
+        for (const Candidate& c : candidates) {
+            if (c.type != VK_PHYSICAL_DEVICE_TYPE_CPU) {
+                pick = &c;
+                break;
+            }
+        }
+        physical_dev_ = pick->dev;
+        queue_family_ = pick->family;
+    }
+
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical_dev_, &props);
+    device_name_ = props.deviceName;
+    device_type_ = props.deviceType;
+    LOGI("Device: %s (%s)%s, queue family %u", device_name_.c_str(),
+         deviceTypeName(device_type_), isSoftwareDevice() ? " [SOFTWARE]" : "", queue_family_);
 
     // Capability scaffolding: optional techniques gate on caps_, never on the
     // platform, so a capable phone and a weak desktop GPU each get what they
     // can actually do.
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(physical_dev_, &props);
     caps_.api_version                       = props.apiVersion;
     caps_.max_image_dim_2d                  = props.limits.maxImageDimension2D;
     caps_.max_image_array_layers            = props.limits.maxImageArrayLayers;
@@ -1226,7 +1311,7 @@ void Renderer::create_logical_device() {
     float priority = 1.0f;
     VkDeviceQueueCreateInfo qci{};
     qci.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    qci.queueFamilyIndex = 0;
+    qci.queueFamilyIndex = queue_family_;
     qci.queueCount       = 1;
     qci.pQueuePriorities = &priority;
 
@@ -1261,7 +1346,7 @@ void Renderer::create_logical_device() {
     if (vkCreateDevice(physical_dev_, &ci, nullptr, &device_) != VK_SUCCESS)
         throw std::runtime_error("vkCreateDevice failed");
 
-    vkGetDeviceQueue(device_, 0, 0, &queue_);
+    vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
 
 #if defined(__ANDROID__)
     vkGetAndroidHardwareBufferPropertiesANDROID_ =
@@ -1675,7 +1760,7 @@ void Renderer::create_command_buffers() {
     VkCommandPoolCreateInfo pool_ci{};
     pool_ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pool_ci.queueFamilyIndex = 0;
+    pool_ci.queueFamilyIndex = queue_family_;
 
     vkCreateCommandPool(device_, &pool_ci, nullptr, &cmd_pool_);
 
