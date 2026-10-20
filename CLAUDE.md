@@ -192,6 +192,21 @@ MEANS happens in `AppView::onHostReady()`, which is the app's.
 **The test for anything new here: could a drawing program use it?** If the
 answer needs the word "track", "album" or "playlist", it belongs in the app.
 
+### Window geometry is a request, not a mode
+
+`setWindowOptions(WindowOptions)` exists because fullscreen had stopped being
+the only sensible startup. A 4K desktop hands a fullscreen window a 4K
+swapchain — four full-screen images for a view that redraws once a minute — so
+a consumer can ask for a 1280x720 window instead. It is a **pre-init request**,
+not a runtime mode: the size is what the window is created with. Linux honours
+it (the Wayland window's first buffer); Win32 and Android keep their historical
+behaviour through the defaulted no-op, which is also the honest answer for a
+phone whose window is the activity's surface.
+
+On a tiling compositor the tile size is the compositor's decision — Wayland has
+no client-side "float at this size" request — so the same binary floats at
+1280x720 and tiles at 1916x1056. That is the platform answering, not a bug.
+
 ### Two rules learned by crashing on a phone
 
 1. **Nothing decided before `pump()` may be trusted after it.** `pump()` is

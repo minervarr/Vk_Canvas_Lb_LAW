@@ -20,6 +20,7 @@
 #include <cstring>
 #include <cmath>
 #include <chrono>
+#include <algorithm>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -45,6 +46,8 @@ public:
 
     std::string exeDir() const override { return app_paths::exeDir(); }
 
+    void setWindowOptions(const WindowOptions& options) override { windowOptions_ = options; }
+
     bool init(AppView* owner) override {
         owner_ = owner;
         if (!display_->valid()) {
@@ -52,8 +55,13 @@ public:
             return false;
         }
 
+        // The size the app asked for, defaulting to the historical 1200x700.
+        // Wayland has no "set my size" call: the constructor's first buffer is
+        // the request, and the compositor may answer with its own tile.
+        const uint32_t width = static_cast<uint32_t>(std::max(1, windowOptions_.width));
+        const uint32_t height = static_cast<uint32_t>(std::max(1, windowOptions_.height));
         window_ = std::make_unique<WaylandWindow>(*display_, APP_SHELL_WINDOW_TITLE,
-                                                   APP_SHELL_APP_ID, kDefaultW, kDefaultH);
+                                                   APP_SHELL_APP_ID, width, height);
         if (!window_->valid()) {
             fprintf(stderr, "[LinuxHost] Failed to create Wayland window\n");
             return false;
@@ -62,11 +70,12 @@ public:
 
         surfaceProvider_ = std::make_unique<WaylandSurfaceProvider>(*display_, *window_);
 
-        // Fullscreen unconditionally: Complete was the only surviving mode, so
-        // this is what the app has always done. The compositor answers with a
+        // Fullscreen only when asked for. The compositor answers with a
         // configure asynchronously (unlike Windows' synchronous SetWindowPos),
         // and pump() calls onHostResized() once that resize actually lands.
-        window_->set_fullscreen(nullptr);
+        if (windowOptions_.fullscreen) {
+            window_->set_fullscreen(nullptr);
+        }
 
         seekTimerFd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
         return true;
@@ -352,6 +361,7 @@ private:
     void dispatchAppEvent(const Event& e) { owner_->onAppEvent(e.id, e.p1, e.p2); }
 
     AppView* owner_ = nullptr;
+    WindowOptions windowOptions_;
     std::unique_ptr<WaylandDisplay> display_;
     std::unique_ptr<WaylandWindow> window_;
     std::unique_ptr<WaylandSurfaceProvider> surfaceProvider_;

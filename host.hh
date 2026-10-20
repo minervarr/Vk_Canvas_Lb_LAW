@@ -80,6 +80,22 @@ struct SafeInsets {
 // other two have one timer fd and ignore the value, which is a narrowing to fix
 // on the day a second timer exists, not before.
 
+// How the app wants its window to exist when it first appears. Fullscreen is
+// the historical default and stays the default: a consumer that says nothing
+// keeps today's behaviour, and a host that cannot honour a request keeps its
+// own (a phone window is the activity's surface, whatever this says).
+//
+// Call it BEFORE Host::init(); the size is what the window is created with, not
+// something that can be resized into place afterwards. On a tiling compositor
+// the tile size is the compositor's decision — Wayland has no client-side
+// "float at this size" request — so honouring the size is a property of the
+// compositor, not a promise this seam can make.
+struct WindowOptions {
+    int width = 1200;
+    int height = 700;
+    bool fullscreen = true;
+};
+
 // Owns the real OS window handle and drives every window/monitor/input/
 // message-pump concern PlayerWindow never touches directly — see
 // os/windows_host.cc (moved almost verbatim from the pre-reorg
@@ -97,6 +113,11 @@ struct SafeInsets {
 class Host {
 public:
     virtual ~Host() = default;
+
+    // Ask for the window's initial geometry and mode. Call before init().
+    // Defaulted to a no-op: a host that has no such concept (Android) or has
+    // not implemented it (Win32 today) keeps the mode the app has always got.
+    virtual void setWindowOptions(const WindowOptions&) {}
 
     // Portable executable-relative directory, UTF-8, trailing separator.
     // (GetModuleFileNameW-derived on Windows, /proc/self/exe on Linux —
