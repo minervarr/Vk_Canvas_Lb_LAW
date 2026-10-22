@@ -74,13 +74,13 @@ public:
 
     // Keyboard, in the portable key::* space (vk_canvas's keys.hh), never in
     // the platform's own keycodes.
-    virtual void onKeyDownPortable(int keyCode) {}
+    virtual void onKeyDownPortable(int) {}
     // The release, for the same reason onLButtonUp exists: a HELD modifier is
     // not expressible as a stream of down edges. "Was Ctrl down at the moment
     // C's edge arrived?" needs both ends, and every host already has them —
     // InputSink::onKey carries a `down` flag the hosts currently drop.
-    virtual void onKeyUpPortable(int keyCode) {}
-    virtual void onCharPortable(uint32_t codepoint) {}
+    virtual void onKeyUpPortable(int) {}
+    virtual void onCharPortable(uint32_t) {}
 
     // A platform INPUT METHOD replaced the focused field's whole contents.
     //
@@ -99,11 +99,11 @@ public:
     //
     // Desktop backends never emit this: Win32 WM_CHAR and Wayland's xkb path
     // both produce finished characters and keep using onCharPortable.
-    virtual void onTextEditPortable(const std::string& text, size_t cursorByte) {}
+    virtual void onTextEditPortable(const std::string&, size_t) {}
     // A system-wide or focused-window hotkey the host registered on the app's
     // behalf. The IDs are the application's own vocabulary; the host only
     // carries them back.
-    virtual void onHotkey(int hotkeyId) {}
+    virtual void onHotkey(int) {}
 
     // The window may have moved to a different monitor. Windows reports this;
     // Wayland cannot, and Android has one screen, so on those it never fires.
@@ -135,9 +135,9 @@ public:
     // Desktop hosts send leave only when the pointer actually leaves the
     // window — a mouse button coming up is not a leave, because the cursor
     // is still there. touch_hover.hh is the touch rule.
-    virtual void onMouseMove(int x, int y) {}
+    virtual void onMouseMove(int, int) {}
     virtual void onMouseLeave() {}
-    virtual void onLButtonDown(int x, int y) {}
+    virtual void onLButtonDown(int, int) {}
     // The release. Every host already sees it — that is where onDragEnd below
     // is computed from — but until now none forwarded it, because a retained
     // UI that hit-tests on press has no use for it.
@@ -150,8 +150,8 @@ public:
     //
     // Fires on every release, including a tap that never moved — unlike
     // onDragEnd, which is deliberately silent below the host's slop.
-    virtual void onLButtonUp(int x, int y) {}
-    virtual void onLButtonDblClk(int x, int y) {}
+    virtual void onLButtonUp(int, int) {}
+    virtual void onLButtonDblClk(int, int) {}
 
     // ── Raw multi-pointer touch ─────────────────────────────────────────────
     //
@@ -176,13 +176,13 @@ public:
     // single pointer as id 0 — a documented narrowing in the same spirit as
     // registerHotkey being system-wide on Win32 and focus-local on Wayland. A
     // mouse genuinely has one pointer; pretending otherwise would be the fake.
-    virtual void onPointerDown(int pointerId, int x, int y) {}
-    virtual void onPointerMove(int pointerId, int x, int y) {}
+    virtual void onPointerDown(int, int, int) {}
+    virtual void onPointerMove(int, int, int) {}
     // Fires for a lifted finger AND for a cancelled one (the window losing the
     // gesture to a system edge swipe). An app that tracks a set of live
     // pointers must remove on both or it strands a finger that never came up.
-    virtual void onPointerUp(int pointerId, int x, int y) {}
-    virtual void onMouseWheel(int x, int y, int delta) {}
+    virtual void onPointerUp(int, int, int) {}
+    virtual void onMouseWheel(int, int, int) {}
 
     // A drag that has ENDED: the pointer travelled dx,dy with the button held
     // and has just been released. Reported by the host rather than
@@ -190,7 +190,7 @@ public:
     // WM_LBUTTONDOWN/UP, Wayland from PointerAction::Down/Up, Android from its
     // own touch slop. Which is also the rule: the SLOP is a host property and
     // the MEANING is an application one. A tap never reaches this.
-    virtual void onDragEnd(int dx, int dy) {}
+    virtual void onDragEnd(int, int) {}
 
     // The two extra buttons on the side of a mouse (Win32 XBUTTON1/XBUTTON2,
     // evdev BTN_SIDE/BTN_EXTRA).
@@ -200,7 +200,7 @@ public:
     // A timer the app started through Host::startTimer() has fired. `timerId`
     // is the app's own integer, handed back unread — see host.hh on why the
     // host does not own that vocabulary.
-    virtual void onTimer(int timerId) {}
+    virtual void onTimer(int) {}
 
     // ── The two that used to be method calls by name ────────────────────────
 
@@ -213,7 +213,7 @@ public:
     // once in each backend and once more in the headless capture tool — each
     // naming the application's own methods. They could not drift, being
     // identical; they could only all have to change together, which is worse.
-    virtual void onAppEvent(int id, intptr_t p1, intptr_t p2) {}
+    virtual void onAppEvent(int, intptr_t, intptr_t) {}
 
     // The first moment the application is fully constructed AND the host is
     // running: after create() has returned, from inside the first pump(). May

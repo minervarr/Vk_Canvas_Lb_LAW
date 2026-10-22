@@ -27,6 +27,12 @@
 // it constructs the app and the AndroidHost directly.
 int app_shell_main(int argc, char** argv);
 
+// Undo the desktop bootstrap's log-file redirection, restoring the process's
+// original stdout/stderr. A bootstrap redirects only when there is no terminal
+// (a desktop launch), but a CLI mode (`--print-timing`, `--check`, `--help`) is
+// still talking to a pipe and must be allowed to answer there.
+void app_shell_restore_console();
+
 // ── The two strings an application gives its shell ──────────────────────────
 //
 // A log file and a window class have to be CALLED something, and only the app

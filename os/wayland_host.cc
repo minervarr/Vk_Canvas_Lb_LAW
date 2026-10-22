@@ -48,6 +48,15 @@ public:
 
     void setWindowOptions(const WindowOptions& options) override { windowOptions_ = options; }
 
+    void setFullscreen(bool on) override {
+        if (!window_) return;
+        if (on) {
+            window_->set_fullscreen(find_output(outputName_));
+        } else {
+            window_->unset_fullscreen();
+        }
+    }
+
     bool init(AppView* owner) override {
         owner_ = owner;
         if (!display_->valid()) {
@@ -73,8 +82,9 @@ public:
         // Fullscreen only when asked for. The compositor answers with a
         // configure asynchronously (unlike Windows' synchronous SetWindowPos),
         // and pump() calls onHostResized() once that resize actually lands.
+        outputName_ = windowOptions_.output;
         if (windowOptions_.fullscreen) {
-            window_->set_fullscreen(nullptr);
+            window_->set_fullscreen(find_output(outputName_));
         }
 
         seekTimerFd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -188,7 +198,10 @@ public:
     void pump(bool haveWork) override {
         if (window_->closed()) { owner_->shutdown(); quit_ = true; return; }
 
-        if (!display_->dispatch(haveWork ? 0 : 250)) {
+        // Include the seek timerfd in the display poll: otherwise a 16 ms app
+        // timer is only noticed after the 250 ms display timeout, which turns a
+        // 60 Hz scroll into 4 Hz. The timer is drained below.
+        if (!display_->dispatch(haveWork ? 0 : 250, seekTimerFd_)) {
             owner_->shutdown();
             quit_ = true;
             return;
@@ -351,6 +364,16 @@ public:
     }
 
 private:
+    wl_output* find_output(const std::string& name) {
+        if (name.empty() || !display_) return nullptr;
+        for (const WaylandOutput& output : display_->outputs()) {
+            if (output.name == name && output.output != nullptr) return output.output;
+        }
+        fprintf(stderr, "[LinuxHost] output \"%s\" not found; compositor chooses\n",
+                name.c_str());
+        return nullptr;
+    }
+
     struct Event { int id; intptr_t p1, p2; };
 
     int timerId_ = 0;
@@ -364,6 +387,7 @@ private:
     WindowOptions windowOptions_;
     std::unique_ptr<WaylandDisplay> display_;
     std::unique_ptr<WaylandWindow> window_;
+    std::string outputName_;
     std::unique_ptr<WaylandSurfaceProvider> surfaceProvider_;
     FileAssetReader assets_;
     FileByteReader  dataReader_;
@@ -408,6 +432,9 @@ void crashHandler(int sig) {
     raise(sig);
 }
 
+int g_saved_stdout = -1;
+int g_saved_stderr = -1;
+
 void openLogFile() {
     // Only when there is no terminal to print to.
     //
@@ -422,6 +449,8 @@ void openLogFile() {
     // stays right under a pipe or a redirect, where the caller has already said
     // where output should go.
     if (isatty(fileno(stdout))) return;
+    g_saved_stdout = dup(fileno(stdout));
+    g_saved_stderr = dup(fileno(stderr));
     // app_paths::stateDir() (not the exe's own directory) so a read-only
     // install still gets a log — see app_paths.hh. Identical to the old path
     // unless MATRIX_STATE_HOME was defined at build time. This is the FIRST
@@ -443,6 +472,19 @@ void openLogFile() {
 }
 
 } // namespace
+
+void app_shell_restore_console() {
+    if (g_saved_stdout >= 0) {
+        dup2(g_saved_stdout, fileno(stdout));
+        close(g_saved_stdout);
+        g_saved_stdout = -1;
+    }
+    if (g_saved_stderr >= 0) {
+        dup2(g_saved_stderr, fileno(stderr));
+        close(g_saved_stderr);
+        g_saved_stderr = -1;
+    }
+}
 
 int main(int argc, char** argv) {
     openLogFile();

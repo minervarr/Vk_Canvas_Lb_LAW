@@ -94,6 +94,10 @@ struct WindowOptions {
     int width = 1200;
     int height = 700;
     bool fullscreen = true;
+    // Wayland connector name to fullscreen on, e.g. "DP-2". Empty means the
+    // compositor chooses. A windowed request cannot be positioned by a Wayland
+    // client; this only selects the output for a fullscreen request.
+    std::string output;
 };
 
 // Owns the real OS window handle and drives every window/monitor/input/
@@ -118,6 +122,14 @@ public:
     // Defaulted to a no-op: a host that has no such concept (Android) or has
     // not implemented it (Win32 today) keeps the mode the app has always got.
     virtual void setWindowOptions(const WindowOptions&) {}
+
+    // Switch an existing window between fullscreen and windowed mode.
+    //
+    // Wayland answers asynchronously with a configure; the host reports the
+    // resulting size through onHostResized(), exactly as it does for an
+    // interactive resize. Defaulted to a no-op for hosts without a windowing
+    // mode (Android) or without the implementation yet.
+    virtual void setFullscreen(bool) {}
 
     // Portable executable-relative directory, UTF-8, trailing separator.
     // (GetModuleFileNameW-derived on Windows, /proc/self/exe on Linux —
@@ -215,7 +227,7 @@ public:
     // to speak of and does nothing.
     //
     // Call it after Host::init() — Win32 needs the window to exist.
-    virtual void registerHotkey(int id, int keyCode) {}
+    virtual void registerHotkey(int, int) {}
 
     virtual void invalidate() = 0;  // schedule a repaint
 
@@ -268,7 +280,7 @@ public:
     //
     // No-ops on a desktop, where a physical keyboard is always present and
     // there is nothing to raise. That is not a stub — it is the honest answer.
-    virtual void showKeyboard(const std::string& text, size_t cursorByte) {}
+    virtual void showKeyboard(const std::string&, size_t) {}
     virtual void hideKeyboard() {}
 
     // Whether this host's pointer is a FINGER rather than a mouse.
@@ -305,14 +317,14 @@ public:
     // is acceptable because paste is user-triggered and rare; nothing on a
     // frame path may call it. Returns "" when the clipboard is empty, holds
     // something that is not text, or the host cannot do this yet.
-    virtual void setClipboardText(const std::string& utf8) {}
+    virtual void setClipboardText(const std::string&) {}
     virtual std::string getClipboardText() { return {}; }
 
     // Open `url` in whatever the user has chosen as their browser.
     // Fire-and-forget: nothing here can observe what the browser then does.
     // False means this host has no launcher at all, so the caller can offer
     // the URL as text to copy instead of appearing to have done nothing.
-    virtual bool openUrl(const std::string& url) { return false; }
+    virtual bool openUrl(const std::string&) { return false; }
 
     // Native directory picker. `cb` receives the chosen absolute path, or ""
     // if the user cancelled.
@@ -324,7 +336,7 @@ public:
     // Callers must therefore not assume `cb` runs before the current frame
     // ends — nor that it runs at all, since an unimplemented host never calls
     // it.
-    virtual void pickDirectory(std::function<void(const std::string&)> cb) {}
+    virtual void pickDirectory(std::function<void(const std::string&)>) {}
 
     // One iteration of the platform's message/event pump. Blocks up to
     // ~timeoutMs if haveWork is false, else processes what's ready and
