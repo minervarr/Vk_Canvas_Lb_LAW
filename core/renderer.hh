@@ -211,6 +211,33 @@ public:
     // While recording the camera delivers HLG frames; this enables the shader's
     // HLG->SDR tone-map so the preview isn't washed out.
     void set_camera_hlg(bool hlg) { camera_hlg_ = hlg ? 1.0f : 0.0f; }
+
+    // Focus-check loupe: draws the camera frame a second time, magnified about
+    // the frame's centre, into a square inset. The wide view underneath is left
+    // intact — the point is to judge focus without losing the framing. `zoom`
+    // <= 1 turns it off. The caller is responsible for feeding a preview stream
+    // with enough resolution to make the magnification worth looking at.
+    void set_camera_loupe(float zoom) { camera_loupe_zoom_ = zoom; }
+    float camera_loupe_zoom() const { return camera_loupe_zoom_; }
+    // Where the inset was last drawn (x, y, w, h in surface pixels), so an
+    // overlay can frame it. False when the loupe is off or no camera frame has
+    // been composited yet. The value is one frame old, which does not matter:
+    // it only changes when the loupe or the frame size does.
+    // Focus peaking: paints hard luminance edges a flat colour so critical
+    // focus is unmistakable. `threshold` is the per-texel luma gradient above
+    // which a pixel counts as an edge — smaller is more sensitive; <= 0 is off.
+    // Peaking is only as truthful as the image it runs on, so it is at its most
+    // accurate inside the loupe, where the bound stream is full-sensor.
+    void set_camera_peaking(float threshold, bool green = false) {
+        camera_peak_ = threshold;
+        camera_peak_color_ = green ? 1.0f : 0.0f;
+    }
+
+    bool camera_loupe_rect(float out[4]) const {
+        if (camera_loupe_zoom_ <= 1.0f || loupe_rect_[2] <= 0.0f) return false;
+        for (int i = 0; i < 4; ++i) out[i] = loupe_rect_[i];
+        return true;
+    }
 #endif
 
     // ── Telling the engine what colour an external image actually is ────────
@@ -307,6 +334,11 @@ private:
     uint32_t width_  = 0;
     uint32_t height_ = 0;
     uint32_t desired_swapchain_images_ = 4;  // constructor arg; see create_swapchain()
+    float          camera_hlg_ = 0.0f;
+    float          camera_loupe_zoom_ = 1.0f;
+    float          loupe_rect_[4] = {0, 0, 0, 0};
+    float          camera_peak_ = 0.0f;
+    float          camera_peak_color_ = 0.0f;
 
     DeviceCaps caps_{};
 
@@ -398,7 +430,8 @@ private:
     // its transfer function, its orientation, and how much of the buffer is
     // actually picture. All of that is the same fact on any host. Only the
     // import beneath it is per-platform.
-    float                           camera_hlg_ = 0.0f;
+    // camera_hlg_ lives with the loupe state above: it is the preview's HLG
+    // flag, not a property of an imported video frame.
     // Empty until set_external_colour() overrides the driver's suggestion.
     bool                            external_colour_set_ = false;
     VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;

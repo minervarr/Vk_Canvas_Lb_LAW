@@ -843,6 +843,11 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
         vkCmdBindPipeline(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd_buffers_[image_index], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &hwb_it->second.desc_set, 0, nullptr);
+        // Texel steps of the bound camera image, so peaking measures real
+        // image detail rather than screen pixels.
+        const float tx = desc.width  > 0 ? 1.0f / (float)desc.width  : 0.0f;
+        const float ty = desc.height > 0 ? 1.0f / (float)desc.height : 0.0f;
+
         // The visible fraction of the decoder's buffer. desc is the ALLOCATED
         // size, aligned up by the hardware; external_visible_* is what the
         // producer said is actually picture. Equal, or unset, means 1.0.
@@ -853,9 +858,8 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
             vScale = static_cast<float>(external_visible_h_) / static_cast<float>(desc.height);
 
         // Zero-initialized first, so every field this renderer does not drive
-        // is definitively OFF rather than whatever was on the stack. The
-        // camera's loupe and focus peaking are pushed by a different consumer;
-        // zoom <= 1 and peak <= 0 are what "not in use" means for both.
+        // is definitively OFF rather than whatever was on the stack.
+        // zoom <= 1 is the wide view; peaking still runs on it.
         CompositePush pc{};
         pc.hlg         = camera_hlg_;
         pc.transfer    = static_cast<int>(external_transfer_);
@@ -863,8 +867,70 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
         pc.rotQuadrant = external_rotation_quadrant_;
         pc.uvScaleX    = uScale;
         pc.uvScaleY    = vScale;
+        pc.zoom        = 1.0f;
+        pc.cx          = 0.5f;
+        pc.cy          = 0.5f;
+        pc.peak        = camera_peak_;
+        pc.texelX      = tx;
+        pc.texelY      = ty;
+        pc.peakColor   = camera_peak_color_;
         vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
+
+        // The loupe: the same frame again, magnified about its centre, into a
+        // square inset. Drawn with the viewport confined to the inset, so the
+        // fullscreen triangle lands inside it and the wide view underneath
+        // survives everywhere else.
+        if (camera_loupe_zoom_ > 1.0f) {
+            // The inset MUST keep the frame's aspect ratio. The draw is the
+            // same fullscreen triangle, so whatever rectangle the viewport
+            // describes is what the whole frame gets mapped onto — a square
+            // inset would show a squashed image, which is useless for judging
+            // focus. Height is the free dimension; width follows the frame.
+            const float ih = std::min((float)width_, (float)height_) * 0.52f;
+            const float iw = ih * (draw_w / draw_h);
+            const float ix = (width_ - iw) * 0.5f;
+            const float iy = y_offset + draw_h * 0.08f;
+
+            VkViewport lv{};
+            lv.x = ix; lv.y = iy;
+            lv.width = iw; lv.height = ih;
+            lv.minDepth = 0.0f; lv.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd_buffers_[image_index], 0, 1, &lv);
+
+            VkRect2D ls{};
+            ls.offset = { (int32_t)ix, (int32_t)iy };
+            ls.extent = { (uint32_t)iw, (uint32_t)ih };
+            vkCmdSetScissor(cmd_buffers_[image_index], 0, 1, &ls);
+
+            // The shader zooms in UV space — a fraction of the FRAME — but the
+            // inset is drawn much smaller than the main preview, so a UV zoom
+            // of N lands on screen as N * (iw / draw_w), which is well under
+            // 1.0 for a small inset: the "magnifier" showed the scene SMALLER
+            // than the preview it sits on. The zoom the caller asks for is
+            // relative to what the preview already shows, so convert it.
+            // Published so the overlay can outline the window: an inset with no
+            // border is hard to even find in a busy frame, and impossible to
+            // read as "this is a magnified view of the centre".
+            loupe_rect_[0] = ix; loupe_rect_[1] = iy;
+            loupe_rect_[2] = iw; loupe_rect_[3] = ih;
+
+            const float uv_zoom = camera_loupe_zoom_ * (draw_w / iw);
+            CompositePush lpc = pc;
+            lpc.zoom = uv_zoom;
+            lpc.cx = 0.5f;
+            lpc.cy = 0.5f;
+            vkCmdPushConstants(cmd_buffers_[image_index], pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lpc), &lpc);
+            vkCmdDraw(cmd_buffers_[image_index], 3, 1, 0, 0);
+
+            // Hand the scissor back to the full surface: every later layer
+            // (images, shapes, the UI overlay) inherits this command buffer's
+            // state, and a stale inset scissor would clip the whole UI away.
+            VkRect2D full{};
+            full.offset = {0, 0};
+            full.extent = {width_, height_};
+            vkCmdSetScissor(cmd_buffers_[image_index], 0, 1, &full);
+        }
     }
 #endif  // __ANDROID__
 

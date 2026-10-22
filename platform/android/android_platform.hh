@@ -12,6 +12,7 @@ class AndroidAssetReader : public AssetReader {
 public:
     explicit AndroidAssetReader(AAssetManager* mgr) : mgr_(mgr) {}
     bool read(const char* path, std::vector<uint8_t>& out) override;
+    AAssetManager* aassetManager() const { return mgr_; }
 
 private:
     AAssetManager* mgr_;
