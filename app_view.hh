@@ -42,6 +42,19 @@ public:
     // frame on screen is stale.
     virtual void onHostExposed() {}
 
+    // ── App lifecycle (Android background/foreground) ───────────────────────
+    //
+    // The app moved to the background (APP_CMD_PAUSE on Android). The
+    // application MUST release exclusive hardware resources here — cameras,
+    // audio capture, location — because Android revokes their grants when the
+    // app is not in the foreground. GPU state is unaffected (that is
+    // onSurfaceLost's job). Desktop backends never fire either callback.
+    virtual void onAppBackgrounded() {}
+    // The app returned to the foreground (APP_CMD_RESUME on Android). Re-acquire
+    // any resources released in onAppBackgrounded(). May fire again after
+    // onHostReady(), so one-time init belongs there, not here.
+    virtual void onAppForegrounded() {}
+
     // The window now HAS INPUT FOCUS — a stronger statement than being visible,
     // and the two are not the same moment: Android hands an app its surface,
     // lets it draw a frame, and only then gives the window focus.

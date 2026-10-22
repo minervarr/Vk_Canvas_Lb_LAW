@@ -11,6 +11,15 @@
 #include <windows.h>
 #endif
 
+// Forward declaration for Android-only JNI access (see javaVm()/activityObject()).
+// On Android, <jni.h> defines JavaVM as a typedef; elsewhere we provide our own.
+#if defined(__ANDROID__)
+#include <jni.h>
+#else
+struct _JavaVM;
+using JavaVM = _JavaVM;
+#endif
+
 // vk_canvas platform seams (framework/vk_canvas/core/platform.hh) — already
 // portable base classes, so Host doesn't need to re-abstract rendering at
 // all, only window/monitor/input/message-pump concerns.
@@ -348,6 +357,16 @@ public:
     // Phase 7 replaces this with a real vk_canvas panel; until then this is
     // a native MessageBox on Windows, a stderr log line on Linux.
     virtual void showErrorMessage(const std::string& title, const std::string& msg) = 0;
+
+    // Android-only: the JavaVM pointer from the activity, so consumers can make
+    // JNI calls without owning the android_app* state. nullptr on desktops.
+    virtual JavaVM* javaVm() const { return nullptr; }
+    // Android-only: the ANativeActivity jobject, so consumers can make JNI
+    // calls against the Activity class. nullptr on desktops.
+    virtual void* activityObject() const { return nullptr; }
+    // Android-only: the raw android_app* from native_app_glue, for legacy code
+    // that still needs it (permissions, fullscreen, etc.). nullptr on desktops.
+    virtual void* nativeApp() const { return nullptr; }
 
 #ifdef _WIN32
     // Only exists on Windows: player_view.cc's TRACKMOUSEEVENT (mouse-leave

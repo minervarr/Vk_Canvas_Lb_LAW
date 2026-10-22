@@ -103,6 +103,10 @@ public:
 
     void showErrorMessage(const std::string& title, const std::string& msg) override;
 
+    JavaVM* javaVm() const override { return state_ ? state_->activity->vm : nullptr; }
+    void*   activityObject() const override { return state_ ? state_->activity->clazz : nullptr; }
+    void*   nativeApp() const override { return state_; }
+
     // The NativeActivity handle this host was built on.
     //
     // Exposed because the launch-intent helpers (launch_intent.hh) are free
@@ -123,6 +127,7 @@ private:
     void onGainedFocus();
     void onLostFocus();
     void onResume();
+    void onPause();
 
     void dispatchAppEvent(const Event& e);
     void drainEvents();
