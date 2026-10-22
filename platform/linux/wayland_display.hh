@@ -116,9 +116,12 @@ public:
     FrameWaker& waker() { return waker_; }
 
     // Pump: sleep up to timeout_ms for display events / waker / key repeat,
-    // dispatch them. Returns false when the connection died (compositor gone
-    // or protocol error) — the host should quit.
-    bool dispatch(int timeout_ms);
+    // dispatch them. `extra_fd` (when >= 0) is included in the poll and left
+    // readable for the caller to drain — the host does this with its own
+    // timerfd, so a 60 Hz animation is not paced by the 250 ms display timeout.
+    // Returns false when the connection died (compositor gone or protocol
+    // error) — the host should quit.
+    bool dispatch(int timeout_ms, int extra_fd = -1);
 
     void roundtrip();
 

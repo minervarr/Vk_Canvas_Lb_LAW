@@ -874,7 +874,7 @@ void WaylandDisplay::fire_repeat(uint64_t expirations)
 
 // ── the pump ────────────────────────────────────────────────────────────────
 
-bool WaylandDisplay::dispatch(int timeout_ms)
+bool WaylandDisplay::dispatch(int timeout_ms, int extra_fd)
 {
     if (!display_) return false;
 
@@ -882,11 +882,16 @@ bool WaylandDisplay::dispatch(int timeout_ms)
         wl_display_dispatch_pending(display_);
     wl_display_flush(display_);
 
-    pollfd fds[3];
+    pollfd fds[4];
     fds[0] = { wl_display_get_fd(display_), POLLIN, 0 };
     fds[1] = { waker_.fd(),                 POLLIN, 0 };
     fds[2] = { repeat_timer_fd_,            POLLIN, 0 };
-    int n = poll(fds, 3, timeout_ms);
+    nfds_t count = 3;
+    if (extra_fd >= 0) {
+        fds[3] = { extra_fd, POLLIN, 0 };
+        count = 4;
+    }
+    int n = poll(fds, count, timeout_ms);
 
     if (n > 0 && (fds[0].revents & POLLIN))
         wl_display_read_events(display_);
