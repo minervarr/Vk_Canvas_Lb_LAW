@@ -11,12 +11,19 @@
 #   wayland-cursor   cursor-theme loader (part of the wayland package)
 #   xkbcommon        keymap interpretation (what TranslateMessage did on Win32)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(VCE_WAYLAND REQUIRED IMPORTED_TARGET
-    wayland-client wayland-cursor xkbcommon)
+find_library(VCE_WAYLAND_CLIENT_LIB NAMES wayland-client REQUIRED)
+find_library(VCE_WAYLAND_CURSOR_LIB NAMES wayland-cursor REQUIRED)
+find_library(VCE_XKBCOMMON_LIB      NAMES xkbcommon      REQUIRED)
+find_path(VCE_WAYLAND_INCLUDE_DIR NAMES wayland-client.h REQUIRED)
 
 find_program(VCE_WAYLAND_SCANNER wayland-scanner REQUIRED)
-pkg_get_variable(VCE_WAYLAND_PROTOCOLS wayland-protocols pkgdatadir)
+# pkg-config's `pkgdatadir` for wayland-protocols, without pkg-config: the dir
+# is wherever the XML we generate from lives. find_path returns the prefix
+# containing the relative name, i.e. <prefix>/stable/xdg-shell/xdg-shell.xml.
+find_path(VCE_WAYLAND_PROTOCOLS
+    NAMES stable/xdg-shell/xdg-shell.xml
+    PATHS /usr/share/wayland-protocols /usr/local/share/wayland-protocols
+    DOC "wayland-protocols datadir (what `pkg-config --variable=pkgdatadir wayland-protocols` gave)")
 set(_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/protocols)
 
 # Every protocol we bind is generated the same way: a client header + the
@@ -61,10 +68,13 @@ target_sources(vk_canvas_wayland PRIVATE
     ${_gen_dir}/idle-inhibit-unstable-v1-client-protocol.h)
 
 target_include_directories(vk_canvas_wayland
-    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}
+    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR} ${VCE_WAYLAND_INCLUDE_DIR}
     PRIVATE ${_gen_dir})
 
 # PUBLIC: the headers consumers include (<wayland-client.h> via
 # wayland_display.hh) and the link libs both propagate.
 target_link_libraries(vk_canvas_wayland
-    PUBLIC vk_canvas_core PkgConfig::VCE_WAYLAND)
+    PUBLIC vk_canvas_core
+           ${VCE_WAYLAND_CLIENT_LIB}
+           ${VCE_WAYLAND_CURSOR_LIB}
+           ${VCE_XKBCOMMON_LIB})
