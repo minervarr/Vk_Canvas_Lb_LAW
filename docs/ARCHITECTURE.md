@@ -110,8 +110,8 @@ Phase 3 applies the policy; the roadmap tracks it.
   on the render thread.
 - `FrameWaker::wake()` may be called from any thread; the platform
   implementation owns its synchronization.
-- `Renderer::frameReady()` / the atomic wake flag are the cross-thread signal.
-  Nothing else is implicitly thread-safe.
+- `Renderer::consume_frame_ready()` / the atomic wake flag are the cross-thread
+  signal. Nothing else is implicitly thread-safe.
 - `App_shell` hosts own their event queues and document their own locking.
 
 ## Public-header boundaries
