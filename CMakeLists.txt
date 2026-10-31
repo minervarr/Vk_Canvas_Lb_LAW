@@ -46,12 +46,18 @@ endif()
 
 add_library(app_shell STATIC ${APP_SHELL_SOURCES})
 
-# vulkan_font_engine's core is here because vk_canvas's platform.hh includes
-# asset_reader.hh, whose definition that submodule owns — the same transitive
-# hop vk_canvas_core itself makes.
+# vulkan_font_engine's core is here because vk_canvas's core/gpu/platform.hh
+# includes asset_reader.hh, whose definition that submodule owns — the same
+# transitive hop vk_canvas_core itself makes. The five module directories
+# replace the old flat core/ include root; app_shell deliberately links no
+# engine target, so it carries the include paths itself.
 target_include_directories(app_shell PUBLIC
     ${APP_SHELL_DIR}
-    ${VK_CANVAS_DIR}/core
+    ${VK_CANVAS_DIR}/core/base
+    ${VK_CANVAS_DIR}/core/input
+    ${VK_CANVAS_DIR}/core/layout
+    ${VK_CANVAS_DIR}/core/draw
+    ${VK_CANVAS_DIR}/core/gpu
     ${VK_CANVAS_DIR}/first_party/vulkan_font_engine/core
     ${CMAKE_BINARY_DIR}/generated)
 
@@ -159,7 +165,13 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
     add_executable(ui_metrics_test tests/ui_metrics_test.cc ui_metrics.cc)
     target_include_directories(ui_metrics_test PRIVATE
-        ${APP_SHELL_DIR} ${VK_CANVAS_DIR}/core ${CMAKE_BINARY_DIR}/generated)
+        ${APP_SHELL_DIR}
+        ${VK_CANVAS_DIR}/core/base
+        ${VK_CANVAS_DIR}/core/input
+        ${VK_CANVAS_DIR}/core/layout
+        ${VK_CANVAS_DIR}/core/draw
+        ${VK_CANVAS_DIR}/core/gpu
+        ${CMAKE_BINARY_DIR}/generated)
     # A consumer normally calls app_shell_generate_min_text_size() before this
     # file, which defines the target. The dev superbuild supplies a stub header
     # instead, so the test must not require the target to exist.
