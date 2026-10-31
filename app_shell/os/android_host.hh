@@ -1,0 +1,235 @@
+#pragma once
+#include <android_native_app_glue.h>
+
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "android_platform.hh"  // AndroidSurfaceProvider, AndroidAssetReader
+#include "host.hh"              // gui/src: the seam PlayerWindow talks to the OS through
+
+// The THIRD implementation of gui/src/host.hh's Host, beside WindowsHost and
+// LinuxHost (and the headless one tools/ui_capture builds). Android therefore
+// runs the REAL PlayerWindow — the same bars, grid, album view, guided search
+// and settings panels the desktop draws, out of the same player_view.cc.
+//
+// This file used to say the opposite, and so did CLAUDE.md: Android had its
+// own small AndroidPlayerView because "a touch phone UI is genuinely different
+// from a sidebar-and-grid desktop one". What that produced was a lookalike
+// that had to be rebuilt feature by feature, and it was dropped once the
+// premise was actually checked — player_view.cc includes no OS header at all,
+// and PlayerWindow::run() is a loop over host_->pump(). The app was already
+// portable; only this class was missing.
+//
+// What Android genuinely cannot do is answered honestly rather than faked:
+// there is no second monitor to snap a window to, no cursor to shape, and no
+// window position a client may set. Those are no-ops here exactly as several
+// of them already are on Wayland.
+//
+// Text input WORKS, and it is the one thing here that needs a Java half: see
+// os/activity_bridge.hh and AppShellActivity. An input method is not a stream
+// of key presses, so onCharPortable() is still never fed on this platform —
+// onTextEditPortable() is, carrying the field's whole contents.
+class AndroidHost : public Host {
+public:
+    // `launchExtraKey` names the intent extra launchArgument() should return
+    // — "scan_root" for a music player, something else for something else, and
+    // nullptr for an app that is not launched with an argument at all. It is a
+    // constructor parameter rather than a constant here because naming it was
+    // the LAST piece of one application's vocabulary left inside this host.
+    // `fallback` is what to return when the extra is absent or empty.
+    // `requestAllFilesAccess` gates the MANAGE_EXTERNAL_STORAGE prompt:
+    // Matrix Player scans shared storage and wants it; an app whose files all
+    // live in internalDataPath does not — it would only see a Settings screen
+    // it cannot use (and, because the permission is absent from its manifest,
+    // a toggle it cannot even press).
+    explicit AndroidHost(android_app* state,
+                         const char* launchExtraKey = nullptr,
+                         const char* fallback       = nullptr,
+                         bool requestAllFilesAccess = true);
+    ~AndroidHost() override;
+
+    // ── Host ────────────────────────────────────────────────────────────────
+    std::string exeDir() const override;
+
+    // Pumps the looper until Android hands us a window, then builds the
+    // surface/asset seams over it. Everything after that — Vulkan, the DB, the
+    // fonts, the layout — is PlayerWindow::create()'s ordinary work, unchanged.
+    bool init(AppView* owner) override;
+
+    SurfaceProvider& surfaceProvider() override { return *surface_; }
+    AssetReader&     assetReader()     override { return *assets_; }
+    // On Android these two are NOT interchangeable in principle but ARE the
+    // same object: both the shaders and the faces live inside the APK, behind
+    // one AAssetManager. See host.hh for why the distinction exists at all.
+    AssetReader&     dataReader()      override { return *assets_; }
+
+    void showWindow() override {}
+    MonitorInfo primaryMonitor() const override;
+    float       displayDpi() const override;
+    // The display cutout, and ONLY the cutout — see the definition. The system
+    // bars are hidden rather than avoided, so they contribute nothing here.
+    SafeInsets safeInsets() const override;
+    void adaptToCurrentMonitor() override {}   // one screen, and we do not place ourselves
+    void snapToEdge(SnapEdge) override {}      // no window position to set
+    void invalidate() override {}              // run()'s dirty flag already covers it
+    void setCursor(CursorShape) override {}    // a finger has no shape to change
+    void setKeepAwake(bool on) override;
+
+    void postAppEvent(int id, intptr_t p1 = 0, intptr_t p2 = 0) override;
+    void startTimer(int id, int intervalMs) override;
+    void stopTimer(int id) override;
+    std::string launchArgument() const override;
+
+    // ── Platform services (see host.hh) ─────────────────────────────────────
+    // All of these go through AppShellActivity — see os/activity_bridge.hh.
+    // A consumer whose activity does NOT extend it still links and runs; the
+    // JNI method lookups simply fail and each call becomes a no-op, which is
+    // why every helper there clears the pending exception.
+    void showKeyboard(const std::string& text, size_t cursorByte) override;
+    void hideKeyboard() override;
+    bool inputIsTouch() const override { return true; }
+    int  keyboardInset() const override { return imeBottom_; }
+
+    void setClipboardText(const std::string& utf8) override;
+    std::string getClipboardText() override;
+    bool openUrl(const std::string& url) override;
+    void pickDirectory(std::function<void(const std::string&)> cb) override;
+
+    void pump(bool haveWork) override;
+    bool quitRequested() const override;
+
+    void showErrorMessage(const std::string& title, const std::string& msg) override;
+
+    JavaVM* javaVm() const override { return state_ ? state_->activity->vm : nullptr; }
+    void*   activityObject() const override { return state_ ? state_->activity->clazz : nullptr; }
+    void*   nativeApp() const override { return state_; }
+
+    // The NativeActivity handle this host was built on.
+    //
+    // Exposed because the launch-intent helpers (launch_intent.hh) are free
+    // functions that need it, and an app that wants to read its OWN intent —
+    // a viewer opened on a document, say — otherwise has to thread that
+    // pointer down from android_main() in parallel with the Host it already
+    // owns. Read-only: nothing outside this class may drive the looper.
+    android_app* androidApp() const { return state_; }
+
+private:
+    struct Event { int id; intptr_t p1, p2; };
+
+    static void    handleAppCmd(android_app* app, int32_t cmd);
+    static int32_t handleInputEvent(android_app* app, AInputEvent* event);
+
+    void onWindowInit();
+    void onWindowTerm();
+    void onGainedFocus();
+    void onLostFocus();
+    void onResume();
+    void onPause();
+
+    void dispatchAppEvent(const Event& e);
+    void drainEvents();
+    void drainTimer();
+
+    // ── Touch, translated into the pointer events PlayerWindow expects ──────
+    //
+    // A finger is not a mouse, and the difference is not cosmetic: a drag must
+    // scroll and must NOT press whatever was under it when it started. Below
+    // the slop the gesture is a tap (press at contact, completes at release);
+    // past the slop it becomes wheel deltas 1:1 and the press is cancelled
+    // for good, even if the finger comes back. A lift is a stop; there is no
+    // fling.
+    //
+    // Hover is the same distinction, decided by touchHoverFor(). While the
+    // stroke is still a tap the finger is the pointer and onMouseMove follows
+    // it, so a button unlights as the finger slides off it. Crossing the slop,
+    // lifting, or a cancel is onMouseLeave: a scroll does not light the rows
+    // it passes, and nothing stays lit after the finger is gone. Sampling the
+    // pointer only at contact left the control grey until the next touch.
+    void onTouchDown(float x, float y);
+    void onTouchMove(float x, float y);
+    void onTouchUp(float x, float y, bool cancelled);
+
+    // Asks for "All files access" IF it is not already granted, and at most
+    // once per process. Both halves matter — see the definition: the call it
+    // replaces was unconditional and ran on every window init, which is a
+    // loop, not a prompt.
+    void ensureStoragePermission();
+    // Fires AppView::onHostReady() once, at the first moment it is honest to:
+    // the app fully constructed AND storage access settled, so that whatever
+    // the app does with launchArgument() has somewhere to do it.
+    //
+    // It used to be called maybeSeedMusicRoot() and its comment described a
+    // scan root going into a database — one application's vocabulary in the
+    // file that is supposed to know nothing about it. The BODY was already
+    // generic; only the name was not.
+    void maybeSignalHostReady();
+
+    android_app*  state_ = nullptr;
+    AppView*    owner_          = nullptr;
+    const char* launchKey_      = nullptr;
+    const char* launchFallback_ = nullptr;
+    bool        requestAllFilesAccess_ = true;
+    int      timerId_ = 0;
+
+    std::unique_ptr<AndroidSurfaceProvider> surface_;
+    std::unique_ptr<AndroidAssetReader>     assets_;
+
+    // False until the first pump(), which is the first moment
+    // PlayerWindow::create() is known to have RETURNED. Before that the app is
+    // half-built: it has no Renderer yet and, more dangerously, no open
+    // database — `db_` is opened a few lines after host_->init() returns.
+    //
+    // This is not a precaution. Android delivers APP_CMD_RESUME while init()
+    // is still pumping for its first window, and onResume() reaching into
+    // PlayerWindow at that moment dereferenced a null sqlite3* and killed the
+    // process before anything was ever drawn: SIGSEGV in Db::loadMusicRoots(),
+    // three frames under AndroidHost::init(). Every path from a system
+    // callback INTO the app must be gated on this.
+    bool appReady_ = false;
+
+    // Cross-thread events, exactly LinuxHost's shape: a queue plus an eventfd
+    // registered on the looper, so a background thread finishing a scan or an
+    // art decode wakes a blocked pump().
+    std::mutex         eventsMu_;
+    std::vector<Event> events_;
+    std::vector<Event> pendingEvents_;   // reused by drainEvents()
+    int                eventFd_ = -1;
+    int                timerFd_ = -1;
+
+    // Touch state (one finger; this app has no pinch or two-finger gesture).
+    float touchStartX_ = 0.0f, touchStartY_ = 0.0f;
+    float touchLastY_  = 0.0f;
+    // Sub-pixel carry for the drag. Without it a drag slower than one pixel
+    // per sample rounds to nothing and the content does not move -- see
+    // onTouchMove().
+    float dragRemainder_ = 0.0f;
+    bool  touchDragging_ = false;
+    bool  touchDown_     = false;
+    std::chrono::steady_clock::time_point lastTapTime_;
+    float lastTapX_ = 0.0f, lastTapY_ = 0.0f;
+    bool  lastTapValid_ = false;
+
+    bool storageAsked_ = false;
+    bool hostReadySignalled_   = false;
+
+    // Pixels of the bottom edge the on-screen keyboard is covering, pushed up
+    // from AppShellActivity and latched here. Deliberately NOT folded into
+    // cachedInsets_ below: that one is the cutout, which is permanent, and
+    // this one comes and goes. See Host::keyboardInset().
+    int imeBottom_ = 0;
+
+    // Drains os/activity_bridge.hh's slot into owner_. Called from pump(),
+    // which is the only place touching app state from a system callback is
+    // safe — the IME reports on Android's UI thread, not this one.
+    void drainActivity();
+
+    // The cutout, cached because safeInsets() is called from every layout pass
+    // and answering it costs a chain of five JNI calls. Refreshed where the
+    // answer can actually change: window init, and every resize (which is what
+    // a rotation and a fold both arrive as).
+    SafeInsets cachedInsets_{};
+    void refreshSafeInsets();
+};

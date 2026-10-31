@@ -1,0 +1,155 @@
+#pragma once
+#include <android_native_app_glue.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+// ── Talking to AppShellActivity ──────────────────────────────────────────────
+//
+// The C++ end of platform/android/java/io/nava/appshell/AppShellActivity.java.
+// Two directions, and they are asymmetric on purpose:
+//
+//   UP   (here -> Java)  plain blocking JNI calls. The Java side marshals to
+//                        the UI thread itself wherever Android demands it, so
+//                        callers here need not care which thread they are on.
+//   DOWN (Java -> here)  never a direct call into the app. Java hands us a
+//                        snapshot under a lock and the host collects it from
+//                        inside pump(), on the app thread.
+//
+// That second rule is the important one. Android's UI thread and the glue's
+// app thread are different threads; an IME callback that reached into the app's
+// widget state directly would be a data race against the frame being drawn.
+// Everything therefore lands in one small slot, and drain() empties it at a
+// point in the frame where touching app state is safe.
+namespace activity {
+
+// Must be called once, before any JNI entry point can fire — the down-calls
+// need the android_app to find a JNIEnv, and they arrive on a thread that has
+// no other way to reach it.
+void set_app(android_app* app);
+
+// Rings the host's doorbell after something has been stored below.
+//
+// Storing is not enough, and the difference is the whole reason this exists: a
+// blocked pump() is asleep in ALooper_pollOnce with no timeout, and Android's
+// UI thread dropping text into a mutex does not wake it. Measured on a phone —
+// every character typed was received, decoded and parked correctly, and the
+// screen did not change until the user touched it, because a touch is an event
+// the LOOPER knows about and an IME callback is not.
+//
+// AndroidHost installs one that writes its eventfd. Nothing is lost if none is
+// installed: the next event of any kind drains the slot as well.
+void set_waker(void (*wake)());
+
+// ── Up-calls ────────────────────────────────────────────────────────────────
+
+// Raise the IME, seeding its buffer. `cursorByte` is a BYTE offset into `text`
+// (what a UTF-8 app has); it is converted to the UTF-16 code-unit index Java
+// wants on the way through, since the two indices have no fixed relationship.
+void show_keyboard(const std::string& text, size_t cursorByte);
+void hide_keyboard();
+
+void set_clipboard(const std::string& utf8);
+std::string get_clipboard();
+
+// Caller must already have validated the scheme — see Host::openUrl.
+bool open_url(const std::string& url);
+
+// FLAG_KEEP_SCREEN_ON. The Java side posts the flag change to the UI thread.
+// A no-op when the activity has no setKeepScreenOn method.
+void set_keep_screen_on(bool on);
+
+// How far above SDR white this display can go, as a multiplier of it. 1.0
+// means no headroom -- an SDR panel, an activity that does not extend
+// AppShellActivity, or a display that will not say. Never below 1.0, so a
+// caller can multiply by it unconditionally.
+//
+// A REPORT ABOUT THE DISPLAY, not about what was granted. An app still has to
+// ask its surface which colourspace it actually got: a panel can have headroom
+// while the window is SDR, and the window's colour mode is a request the
+// system may refuse without saying so.
+float display_hdr_headroom();
+
+// Pixels per inch of the activity's display, 0 when unknown. See
+// AppShellActivity.displayDpi() for why this is xdpi and not densityDpi.
+float display_dpi();
+
+// ── Orientation ─────────────────────────────────────────────────────────────
+//
+// android.content.pm.ActivityInfo's SCREEN_ORIENTATION_* constants, named here
+// so callers do not scatter the integers. Only the three an app with a genuine
+// opinion about its content needs; the full table has eighteen.
+//
+// The SENSOR variants deliberately, not the plain ones: they pin the AXIS and
+// leave the user free to flip the device end for end within it. LANDSCAPE
+// alone picks one of the two landscapes and refuses the other, which reads as
+// a bug to anyone holding the phone the other way round.
+enum Orientation : int {
+    OrientationUnspecified    = -1,  // SCREEN_ORIENTATION_UNSPECIFIED
+    OrientationSensorLandscape = 6,  // SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    OrientationSensorPortrait  = 7,  // SCREEN_ORIENTATION_SENSOR_PORTRAIT
+};
+
+// Ask to be held at `mode`. A REQUEST: the system may decline it, and a
+// foldable's outer display, a split-screen window or a device policy all can.
+// Nothing may depend on it having taken effect — the answer arrives later as a
+// configuration change, which reaches the app as an ordinary resize.
+//
+// Unspecified hands control back to the user's rotation setting, which is the
+// right thing to ask for whenever the app has no opinion. Overriding somebody's
+// rotation lock to no benefit is worse than a letterbox.
+void request_orientation(int mode);
+
+// Root of SHARED storage as a real path, e.g. "/storage/emulated/0". Empty if
+// the activity does not answer (which is what a consumer whose Activity does
+// not extend AppShellActivity gets); callers should fall back rather than
+// treat "" as a directory.
+//
+// NOT app_paths::stateDir(). That one is private to the app and is deleted on
+// uninstall — the right place for a cache and the wrong place for a library
+// the user believes is theirs.
+std::string external_storage_root();
+
+// Publish an image into the user's shared Pictures collection. Returns the
+// content:// URI it landed at, or "" on failure.
+//
+// The ONLY supported way to put a picture where the gallery will find it from
+// API 29 on: scoped storage forbids creating files in a shared collection by
+// path, so a filesystem write to /sdcard/Pictures fails no matter how correct
+// the path looks. This goes through MediaStore, which needs a ContentResolver,
+// which only Java has. `relativeDir` is a sub-path under Pictures ("" for
+// Pictures itself).
+std::string publish_image(const std::string& display_name,
+                          const std::string& mime_type,
+                          const std::string& relative_dir,
+                          const uint8_t* data, size_t bytes);
+
+// ── Down-calls, collected ───────────────────────────────────────────────────
+
+// Everything Java has reported since the last drain, coalesced.
+//
+// Text is a SLOT rather than a queue: an input method fires one of these per
+// keystroke of a composition and each supersedes the last, so keeping the
+// older ones would only replay a word being typed. The flags and the insets
+// are latched, so nothing is lost if two arrive between frames.
+struct Update {
+    bool        hasText    = false;
+    std::string text;
+    size_t      cursorByte = 0;
+
+    bool committed = false;   // user accepted (IME action / Enter)
+    bool dismissed = false;   // IME went away on its own (back gesture)
+
+    // How much of the bottom edge the keyboard covers, 0 when it is down.
+    // The display CUTOUT is not here — that is read natively in safe_area.cc,
+    // and the two are kept apart on purpose (see Host::keyboardInset).
+    bool imeInsetChanged = false;
+    int  imeBottom       = 0;
+};
+
+// Takes and clears whatever is pending. Returns false when nothing was
+// waiting, so a caller can skip the work without comparing fields.
+bool drain(Update& out);
+
+} // namespace activity

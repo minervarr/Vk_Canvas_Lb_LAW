@@ -1,0 +1,806 @@
+#include "android_host.hh"
+
+#include <android/input.h>
+#include <android/log.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
+
+#include <cmath>
+#include <cstdio>
+#include <thread>
+
+#include "touch_hover.hh"        // when a finger lights a control, and when that drops
+#include "activity_bridge.hh"    // the IME/clipboard/URL seam onto AppShellActivity
+#include "keys.hh"               // vk_canvas: the portable key:: space
+#include "app_main.hh"           // APP_SHELL_LOG_NAME, the logcat tag
+#include "app_paths.hh"          // the exeDir()/stateDir() seam itself
+#include "app_paths_android.hh"  // and this platform's one-time setter for it
+#include "fullscreen.hh"  // vce::platform::enable_immersive/query_nav_bar_height
+#include "launch_intent.hh"
+#include "safe_area.hh"
+#include "storage_permission.hh"
+
+#define LOG_TAG "AndroidHost"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace {
+
+// Looper identifiers for the two descriptors this host adds. LOOPER_ID_MAIN
+// and LOOPER_ID_INPUT (1 and 2) belong to native_app_glue; start above them.
+constexpr int kLooperIdEvents = 3;
+constexpr int kLooperIdTimer  = 4;
+
+// Past this many pixels a touch is a scroll, and stops being a tap. 24 px is
+// roughly a finger's own wobble on a modern phone — small enough that a
+// deliberate tap never scrolls, large enough that resting a thumb does not
+// count as a press.
+constexpr float kTouchSlopPx = 24.0f;
+
+// The wheel unit onMouseWheel()'s callers assume (Win32's WHEEL_DELTA), and
+// the same scaling LinuxHost applies to Wayland's continuous axis. A touch
+// drag is already in pixels, and every scroll consumer subtracts the delta
+// from its scroll offset — so passing the finger's own displacement gives
+// 1:1 content tracking, which is the only thing that feels right on a touch
+// screen.
+constexpr float kWheelPerPixel = 1.0f;
+
+// A lift is a stop. There is no coasting: the app snaps every list by whole
+// rows, and a throw that kept emitting wheel deltas after the finger left
+// would animate those steps. The drag itself is still 1:1 into wheel units.
+
+// The eventfd activity_bridge's waker writes to. A file-scope int rather than a
+// member because the waker is a plain function pointer with nowhere to keep a
+// `this` — see where it is installed in init(). One host per process, so there
+// is nothing to disambiguate.
+int g_wakeFd = -1;
+
+// ── Make the app's own diagnostics visible ───────────────────────────────────
+//
+// player_view.cc, the scanner and both audio backends report through printf on
+// every platform: "[Audio] signal path: …", "[Scan] Done: N scanned", the USB
+// driver's errors. On a desktop those land on a terminal or in
+// matrix_player.log. On Android stdout goes to /dev/null, so the entire
+// diagnostic channel of a 7000-line app was being silently discarded — which
+// is exactly the channel you want the first time something misbehaves on a
+// phone.
+//
+// A pipe with a reader thread is the standard fix: dup2 both descriptors onto
+// its write end and forward whole lines to logcat under the tag
+// "matrix_player". Costs one idle thread, and is what makes `adb logcat` tell
+// the same story a terminal tells on Linux.
+void redirect_stdio_to_logcat() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+
+    // Unbuffered, or a crash takes the last (most interesting) lines with it.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+
+    std::thread([readFd = fds[0]] {
+        std::string line;
+        char buf[512];
+        for (;;) {
+            ssize_t n = read(readFd, buf, sizeof(buf));
+            if (n <= 0) return;   // pipe closed: the process is going away
+            for (ssize_t i = 0; i < n; ++i) {
+                if (buf[i] == '\n') {
+                    __android_log_write(ANDROID_LOG_INFO, APP_SHELL_LOG_NAME, line.c_str());
+                    line.clear();
+                } else if (buf[i] != '\r') {
+                    line.push_back(buf[i]);
+                }
+            }
+            // A partial line is HELD, not flushed: splitting on the read
+            // boundary would tear messages in half at arbitrary points.
+        }
+    }).detach();
+}
+
+}  // namespace
+
+// Host's platform factory, which on Android cannot do its job: an AndroidHost
+// needs the android_app* that only android_main() is ever handed, so the host
+// is INJECTED (src/main.cc) rather than manufactured. This exists because
+// PlayerWindow::create() names the symbol on the branch it does not take here;
+// create() checks for a null host and refuses, so a future caller that forgets
+// to inject one fails at startup with a log line instead of a null dereference.
+std::unique_ptr<Host> make_host() {
+    LOGE("make_host(): Android has no ambient host — inject one (see main.cc)");
+    return nullptr;
+}
+
+AndroidHost::AndroidHost(android_app* state, const char* launchExtraKey,
+                         const char* fallback, bool requestAllFilesAccess)
+    : state_(state), launchKey_(launchExtraKey), launchFallback_(fallback),
+      requestAllFilesAccess_(requestAllFilesAccess) {
+    // First thing, before any of the app's own code can print: everything
+    // player_view.cc and the engine report is otherwise thrown away here.
+    redirect_stdio_to_logcat();
+    // Before any JNI entry point can fire: the down-calls arrive on Android's
+    // UI thread, which has no other way to reach the android_app.
+    activity::set_app(state);
+    state_->userData     = this;
+    state_->onAppCmd     = handleAppCmd;
+    state_->onInputEvent = handleInputEvent;
+}
+
+AndroidHost::~AndroidHost() {
+    if (eventFd_ >= 0) close(eventFd_);
+    if (timerFd_ >= 0) close(timerFd_);
+}
+
+std::string AndroidHost::exeDir() const {
+    // Empty, and that is the whole trick: PlayerWindow builds its font paths
+    // as exeDir() + "fonts/…", which on Android is exactly the asset name
+    // AAssetManager wants. See Host::dataReader().
+    return app_paths::exeDir();
+}
+
+bool AndroidHost::init(AppView* owner) {
+    owner_ = owner;
+
+    // internalDataPath is a plain field on ANativeActivity — no JNI needed.
+    // Set BEFORE anything opens the database, which create() does immediately
+    // after this returns.
+    app_paths::setAndroidPaths("", state_->activity->internalDataPath);
+
+    ALooper* looper = ALooper_forThread();
+    eventFd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    timerFd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (looper && eventFd_ >= 0)
+        ALooper_addFd(looper, eventFd_, kLooperIdEvents, ALOOPER_EVENT_INPUT, nullptr, nullptr);
+    if (looper && timerFd_ >= 0)
+        ALooper_addFd(looper, timerFd_, kLooperIdTimer, ALOOPER_EVENT_INPUT, nullptr, nullptr);
+
+    // The IME's doorbell, on the SAME eventfd postAppEvent() uses — a wake-up
+    // is a wake-up, and the payload is collected from the slot either way.
+    //
+    // Without it, text typed on a phone reached the app correctly and was
+    // never drawn: pump() sleeps in ALooper_pollOnce with no timeout, and
+    // Android's UI thread putting a string into a mutex is not something the
+    // looper can see. The screen caught up only when the user touched it,
+    // because a touch IS a looper event.
+    //
+    // A plain function pointer rather than a lambda with captures, because
+    // there is one host per process and the alternative is a std::function
+    // holding a `this` that must then outlive every JNI callback.
+    activity::set_waker([] {
+        if (g_wakeFd < 0) return;
+        uint64_t one = 1;
+        ssize_t ignored = write(g_wakeFd, &one, sizeof(one));
+        (void)ignored;
+    });
+    g_wakeFd = eventFd_;
+
+    // Android gives us a window when it is ready to, which is some time after
+    // android_main() starts. Pump until it arrives; everything the app does
+    // next needs a surface to exist.
+    while (!state_->window && !state_->destroyRequested) {
+        int events;
+        android_poll_source* source = nullptr;
+        if (ALooper_pollOnce(-1, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
+            if (source) source->process(state_, source);
+        }
+    }
+    if (!state_->window) return false;   // destroyed before it ever appeared
+
+    LOGI("window ready: %dx%d", ANativeWindow_getWidth(state_->window),
+         ANativeWindow_getHeight(state_->window));
+    return surface_ != nullptr && assets_ != nullptr;
+}
+
+// xdpi via the activity bridge; see AppShellActivity.displayDpi() for why the
+// bucketed densityDpi is only the fallback.
+float AndroidHost::displayDpi() const { return activity::display_dpi(); }
+
+MonitorInfo AndroidHost::primaryMonitor() const {
+    MonitorInfo mi{};
+    if (state_->window) {
+        mi.bounds = { 0, 0, ANativeWindow_getWidth(state_->window),
+                            ANativeWindow_getHeight(state_->window) };
+    }
+    // No taskbar/panel concept, so the two are the same rectangle — the same
+    // answer LinuxHost gives, for the same reason.
+    mi.workArea = mi.bounds;
+    return mi;
+}
+
+// The display cutout, and DELIBERATELY NOT the navigation bar, even though
+// query_nav_bar_height() reports one (84 px on the test device).
+//
+// The two are different kinds of obstacle and take different answers. A system
+// bar is SOFTWARE: enable_immersive() hides it, and the screen is then really
+// ours — insetting for a bar that is not on screen would leave a permanent
+// empty strip for nothing. A cutout is GLASS. It is still there with every bar
+// hidden, and no API removes it; the only thing an app can do is not put
+// anything under it.
+//
+// Which is also why hiding the bars CREATED this: while the status bar is
+// shown, Android keeps the window clear of the cutout by itself, because the
+// bar is what covers it. Hide the bar and the window goes edge to edge — 720 x
+// 1640 on the test device, the whole panel — and the navigation rail lands
+// under a 70 px camera notch.
+SafeInsets AndroidHost::safeInsets() const { return cachedInsets_; }
+
+void AndroidHost::refreshSafeInsets() {
+    const SafeAreaInsets cut = query_safe_area_insets(state_);
+    cachedInsets_ = { cut.top, cut.bottom, cut.left, cut.right };
+}
+
+// ── Platform services, all of them through AppShellActivity ─────────────────
+
+void AndroidHost::showKeyboard(const std::string& text, size_t cursorByte) {
+    activity::show_keyboard(text, cursorByte);
+}
+
+void AndroidHost::hideKeyboard() { activity::hide_keyboard(); }
+
+void AndroidHost::setClipboardText(const std::string& utf8) {
+    activity::set_clipboard(utf8);
+}
+
+std::string AndroidHost::getClipboardText() { return activity::get_clipboard(); }
+
+bool AndroidHost::openUrl(const std::string& url) {
+    // Validate here rather than in Java: ACTION_VIEW on an arbitrary scheme
+    // can reach any app on the device, and the C++ side is the one that must
+    // not be talked into handing over something that is not a web address.
+    if (url.find("://") == std::string::npos) return false;
+    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) return false;
+    return activity::open_url(url);
+}
+
+void AndroidHost::pickDirectory(std::function<void(const std::string&)> cb) {
+    // Not implemented, and it says so by calling back with "" — a caller that
+    // never hears anything cannot tell a cancelled picker from a missing one.
+    //
+    // A real one is ACTION_OPEN_DOCUMENT_TREE, whose answer arrives in
+    // onActivityResult on a later trip through the looper. That is genuine
+    // work, and it also returns a content:// TREE URI rather than a path,
+    // which is useless to an app that walks the filesystem with std::filesystem
+    // — so the app that needs it must want the URI, and none does yet.
+    if (cb) cb("");
+}
+
+// Runs on the app thread from inside pump(). Everything it reads was written
+// by Android's UI thread under activity_bridge's lock; this is the point in
+// the frame where handing it to the app is safe.
+void AndroidHost::drainActivity() {
+    activity::Update u;
+    if (!activity::drain(u)) return;
+    if (!appReady_ || !owner_) return;
+
+    if (u.hasText) owner_->onTextEditPortable(u.text, u.cursorByte);
+
+    // The IME's action key is a submit, and an app's text handling already
+    // treats Enter as one — reporting it as a key rather than inventing a
+    // second path keeps one meaning for one gesture. Likewise a dismissal is
+    // Escape: "I am done with this field, and I did not accept it."
+    if (u.committed) owner_->onKeyDownPortable(key::Enter);
+    if (u.dismissed) owner_->onKeyDownPortable(key::Escape);
+
+    if (u.imeInsetChanged && u.imeBottom != imeBottom_) {
+        imeBottom_ = u.imeBottom;
+        // A keyboard appearing changes how much room the app has, which is a
+        // relayout — not a resize, since the window itself did not change
+        // (SOFT_INPUT_ADJUST_NOTHING, see AppShellActivity).
+        owner_->onHostLayoutInvalidated();
+    }
+}
+
+void AndroidHost::setKeepAwake(bool on) {
+    // FLAG_KEEP_SCREEN_ON, applied on the UI thread by the activity. A long
+    // job (a denoise is over a minute) otherwise lets the panel sleep, and
+    // Android then freezes the process.
+    activity::set_keep_screen_on(on);
+}
+
+// ── The app command stream ───────────────────────────────────────────────────
+
+void AndroidHost::handleAppCmd(android_app* app, int32_t cmd) {
+    auto* self = reinterpret_cast<AndroidHost*>(app->userData);
+    switch (cmd) {
+        case APP_CMD_INIT_WINDOW:   if (app->window) self->onWindowInit(); break;
+        case APP_CMD_TERM_WINDOW:   self->onWindowTerm();  break;
+        case APP_CMD_GAINED_FOCUS:  self->onGainedFocus(); break;
+        case APP_CMD_LOST_FOCUS:    self->onLostFocus();   break;
+        case APP_CMD_RESUME:        self->onResume();      break;
+        case APP_CMD_PAUSE:         self->onPause();       break;
+        case APP_CMD_WINDOW_RESIZED:
+        case APP_CMD_CONFIG_CHANGED:
+            // A rotation arrives here as an ordinary resize, which is exactly
+            // what ui_orientation.hh assumes: the layout is derived from the
+            // window's own shape and nothing ever asks Android which way up
+            // the device is. Confirmed on a moto g06 — turning the phone
+            // delivers CONFIG_CHANGED, then WINDOW_RESIZED with the window
+            // already reporting 1640x720, and the app lays out horizontal from
+            // that alone.
+            // The cutout moves with the screen: what was a 70 px top inset in
+            // portrait is a side inset in landscape. Re-queried here rather
+            // than cached from startup, exactly as safe_area.hh asks.
+            self->refreshSafeInsets();
+            if (self->owner_ && self->appReady_) self->owner_->onHostResized();
+            break;
+        default: break;
+    }
+}
+
+// APP_CMD_INIT_WINDOW is NOT "the app started". It fires again every time
+// another activity covers this one and the listener comes back — treating it
+// as startup is what produced the permission loop this file used to have.
+void AndroidHost::onWindowInit() {
+    // Re-point the EXISTING provider when there is one, rather than making a
+    // new one. Renderer holds the provider by reference, so replacing the
+    // object would dangle that reference and force the whole Renderer to be
+    // rebuilt — which is exactly the ~370 ms of black this is here to remove.
+    // See AndroidSurfaceProvider::set_window and Renderer::recreate_surface.
+    if (surface_) surface_->set_window(state_->window);
+    else          surface_ = std::make_unique<AndroidSurfaceProvider>(state_->window);
+    if (!assets_)
+        assets_ = std::make_unique<AndroidAssetReader>(state_->activity->assetManager);
+
+    vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
+
+    // What the OS actually handed us, versus what it says is in the way. The
+    // goal is for these three numbers to make the inset arithmetic
+    // unnecessary: if the window we get already excludes the bars and the
+    // cutout, PlayerWindow needs no notion of a safe area at all — the
+    // rectangle IS the safe area. Logged rather than assumed because every
+    // handset places its cutout and its navigation differently, and a height
+    // we compute ourselves is a height that is wrong on the next phone.
+    refreshSafeInsets();
+    LOGI("geometry: window %dx%d | cutout t=%d b=%d l=%d r=%d | navbar=%d (hidden, not inset)",
+         ANativeWindow_getWidth(state_->window), ANativeWindow_getHeight(state_->window),
+         cachedInsets_.top, cachedInsets_.bottom, cachedInsets_.left, cachedInsets_.right,
+         vce::platform::query_nav_bar_height(state_));
+
+    // Before run() takes over, PlayerWindow::create() is still building its
+    // own Renderer over this surface — telling it to rebuild one here would
+    // be a second Renderer for the same window.
+    if (appReady_ && owner_) {
+        if (!owner_->onSurfaceRecreated())
+            LOGE("could not rebuild the renderer on returning to the app");
+    }
+}
+
+void AndroidHost::onWindowTerm() {
+    // The SURFACE is going away — not the device, and not the app. PlayerWindow
+    // keeps its database, its library and its playback: the listener left the
+    // app, they did not restart it.
+    //
+    // The provider is deliberately NOT reset here any more. Renderer holds it
+    // by reference and still needs it alive to destroy its old VkSurfaceKHR
+    // and make the next one; onWindowInit() re-points it at the new window.
+    // Destroying it here is what used to force the whole Renderer to go with
+    // it.
+    if (owner_) owner_->onSurfaceLost();
+}
+
+void AndroidHost::onGainedFocus() {
+    // The system clears immersive flags on focus loss (e.g. a permission
+    // dialog) — fullscreen.hh's documented contract requires re-applying on
+    // every APP_CMD_GAINED_FOCUS, not just at startup.
+    if (state_->window)
+        vce::platform::enable_immersive(state_, vce::platform::ImmersiveMode::kFullImmersive);
+
+    // The app is told, because this is the first moment the input system will
+    // accept anything from it — see AppView::onHostFocusGained().
+    if (owner_) owner_->onHostFocusGained();
+}
+
+void AndroidHost::onLostFocus() {
+    // No immersive flags to re-apply and nothing to re-query: this exists
+    // purely to tell the app, because losing focus is the earliest and most
+    // reliable signal that the user has looked away. APP_CMD_PAUSE follows it
+    // and APP_CMD_TERM_WINDOW may follow that, seconds later or never.
+    if (owner_) owner_->onHostFocusLost();
+}
+
+void AndroidHost::onResume() {
+    // Coming back from the system Settings screen is the ONE moment the
+    // storage answer can have changed, and it is the moment
+    // storage_permission.hh's own comment says to re-check on.
+    maybeSignalHostReady();
+    if (appReady_ && owner_) owner_->onAppForegrounded();
+}
+
+void AndroidHost::onPause() {
+    if (appReady_ && owner_) owner_->onAppBackgrounded();
+}
+
+// ── Storage permission, asked at most once ───────────────────────────────────
+//
+// This used to be two unconditional startActivity() calls in onWindowInit(),
+// and that is a LOOP rather than a prompt: launching the Settings screen
+// covers this activity, which destroys its window; coming back recreates the
+// window and fires APP_CMD_INIT_WINDOW again, which asked again. Granting the
+// permission did not break the cycle, because nothing ever checked — the
+// request did not depend on the answer.
+//
+// The once-per-process flag is the second half, and it is not redundant: a
+// listener who DECLINES leaves has_all_files_access() false forever, so the
+// check alone would re-ask on every resume — a slower loop, but the same one.
+//
+// show_folder_picker_hint() is deliberately NOT called. Its result cannot be
+// read without a Java onActivityResult override (see its own comment), so it
+// contributed nothing but a second modal — and it is the one that literally
+// asks the listener to select a folder.
+void AndroidHost::ensureStoragePermission() {
+    if (!requestAllFilesAccess_) {
+        LOGI("storage: all-files access not requested for this app");
+        return;
+    }
+    if (storageAsked_) return;
+    storageAsked_ = true;
+    if (has_all_files_access(state_)) {
+        LOGI("storage: all-files access already granted");
+        return;
+    }
+    LOGI("storage: requesting all-files access (once)");
+    request_all_files_access(state_);
+}
+
+// Storage, then a nudge to the app — and NOT a decision.
+//
+// This used to read the intent's "scan_root" extra and call PlayerWindow's own
+// commitAddFolder() with it, which is a host reaching into an application's
+// domain: the one place a message pump knew what music was. Now it does the two
+// things that are genuinely a phone's business — get permission, and be sure
+// the app is actually built — and then says onHostReady(). What a launch
+// argument MEANS is answered in AppView::onHostReady(); the string itself comes
+// out of launchArgument() below.
+void AndroidHost::maybeSignalHostReady() {
+    // appReady_, not just owner_. owner_ is set at the TOP of init(), while
+    // whatever the app builds for itself — a database, a catalogue, a cache —
+    // is only built after init() RETURNS, and Android fires APP_CMD_RESUME
+    // inside that window. Calling onHostReady() then reaches an app that is
+    // half-constructed: measured once as a null sqlite3* dereference and an
+    // instant, silent process death. The guard lives here rather than in each
+    // caller because the requirement belongs to this function, not to the
+    // callers who happen to exist today.
+    if (hostReadySignalled_ || !appReady_ || !owner_) return;
+    ensureStoragePermission();
+    if (requestAllFilesAccess_ && !has_all_files_access(state_)) {
+        // Deferred, not skipped: the next pump() asks again, so an app whose
+        // launch argument names a path is not told about it until it could
+        // actually be read.
+        LOGI("storage: no access yet -- deferring onHostReady()");
+        return;
+    }
+    hostReadySignalled_ = true;
+    owner_->onHostReady();
+}
+
+// What this activity was launched WITH. Empty on both desktops (see host.hh);
+// here it is the intent's "scan_root" extra, stated and not interpreted.
+std::string AndroidHost::launchArgument() const {
+    if (!launchKey_) return {};
+    return read_string_extra(state_, launchKey_,
+                             launchFallback_ ? launchFallback_ : "");
+}
+
+// ── Touch ────────────────────────────────────────────────────────────────────
+
+int32_t AndroidHost::handleInputEvent(android_app* app, AInputEvent* event) {
+    auto* self = reinterpret_cast<AndroidHost*>(app->userData);
+    if (!self->owner_ || AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION) return 0;
+
+    const int32_t action = AMotionEvent_getAction(event);
+    const int32_t masked  = action & AMOTION_EVENT_ACTION_MASK;
+
+    // ── The raw multi-pointer stream ────────────────────────────────────────
+    //
+    // Reported FIRST and separately from the single-pointer synthesis below,
+    // which is left exactly as it was. The two are different questions: this
+    // one is "which fingers are where", and that one is "was that a tap, a
+    // drag or a scroll". Answering the second has never needed the second
+    // finger; a pinch cannot be answered without it.
+    //
+    // ACTION_POINTER_DOWN/UP name ONE pointer, carried in the action's high
+    // bits, and MOVE names none — it is a batch covering every pointer still
+    // down. That asymmetry is why this is a switch and not one loop.
+    const int32_t idx = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                        >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+    switch (masked) {
+        case AMOTION_EVENT_ACTION_DOWN:
+        case AMOTION_EVENT_ACTION_POINTER_DOWN:
+            self->owner_->onPointerDown((int)AMotionEvent_getPointerId(event, idx),
+                                        (int)AMotionEvent_getX(event, idx),
+                                        (int)AMotionEvent_getY(event, idx));
+            break;
+        case AMOTION_EVENT_ACTION_UP:
+        case AMOTION_EVENT_ACTION_POINTER_UP:
+            self->owner_->onPointerUp((int)AMotionEvent_getPointerId(event, idx),
+                                      (int)AMotionEvent_getX(event, idx),
+                                      (int)AMotionEvent_getY(event, idx));
+            break;
+        case AMOTION_EVENT_ACTION_MOVE: {
+            const size_t n = AMotionEvent_getPointerCount(event);
+            for (size_t i = 0; i < n; ++i)
+                self->owner_->onPointerMove((int)AMotionEvent_getPointerId(event, i),
+                                            (int)AMotionEvent_getX(event, i),
+                                            (int)AMotionEvent_getY(event, i));
+            break;
+        }
+        case AMOTION_EVENT_ACTION_CANCEL: {
+            // Every live pointer is gone at once. Reported as an up for each,
+            // because an app tracking a set of fingers would otherwise strand
+            // all of them — see the note on AppView::onPointerUp.
+            const size_t n = AMotionEvent_getPointerCount(event);
+            for (size_t i = 0; i < n; ++i)
+                self->owner_->onPointerUp((int)AMotionEvent_getPointerId(event, i),
+                                          (int)AMotionEvent_getX(event, i),
+                                          (int)AMotionEvent_getY(event, i));
+            break;
+        }
+        default: break;
+    }
+
+    // ── The single-pointer synthesis, unchanged ─────────────────────────────
+    //
+    // Pointer 0 only, and deliberately: a tap or a scroll is a one-finger
+    // gesture, and feeding it a second finger's coordinates would make every
+    // existing consumer misbehave the moment a palm touched the screen.
+    const float x = AMotionEvent_getX(event, 0);
+    const float y = AMotionEvent_getY(event, 0);
+    switch (masked) {
+        case AMOTION_EVENT_ACTION_DOWN:   self->onTouchDown(x, y);        return 1;
+        case AMOTION_EVENT_ACTION_MOVE:   self->onTouchMove(x, y);        return 1;
+        case AMOTION_EVENT_ACTION_UP:     self->onTouchUp(x, y, false);   return 1;
+        case AMOTION_EVENT_ACTION_CANCEL: self->onTouchUp(x, y, true);    return 1;
+        // A second finger arriving or leaving is not a tap, a drag or a
+        // scroll, so the synthesis ignores it — but it WAS reported above, and
+        // the event is consumed either way.
+        case AMOTION_EVENT_ACTION_POINTER_DOWN:
+        case AMOTION_EVENT_ACTION_POINTER_UP:                             return 1;
+        default: return 0;
+    }
+}
+
+void AndroidHost::onTouchDown(float x, float y) {
+    // A finger on the glass cancels leftover drag carry. There is no fling
+    // to stop: a lift already ended the scroll.
+    touchStartX_ = x;
+    touchStartY_ = y;
+    touchLastY_  = y;
+    dragRemainder_ = 0.0f;
+    touchDragging_ = false;
+    touchDown_     = true;
+    // Contact is the one sample touchHoverFor() does not see. The control
+    // under the finger lights before the press is armed, and every sample
+    // after this one either follows the finger or drops the highlight.
+    owner_->onMouseMove((int)x, (int)y);
+
+    // The press goes out at CONTACT, as it does on every desktop host. It used
+    // to be synthesised at release instead, which reads as harmless until an
+    // app wants the two edges apart: a press-and-hold cannot be recognised
+    // while the finger is down if the app is only told about the finger after
+    // it has left, and an app that acts on the release is never told at all.
+    // A stroke that turns into a scroll is retracted by onDragEnd() below,
+    // which is the signal that already means "that was a gesture, not a press".
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    const bool isDouble =
+        lastTapValid_ &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTapTime_).count() < 400 &&
+        std::fabs(x - lastTapX_) < kTouchSlopPx && std::fabs(y - lastTapY_) < kTouchSlopPx;
+
+    if (isDouble) {
+        owner_->onLButtonDblClk((int)x, (int)y);
+        lastTapValid_ = false;   // don't chain a third tap into another double
+    } else {
+        owner_->onLButtonDown((int)x, (int)y);
+    }
+}
+
+void AndroidHost::onTouchMove(float x, float y) {
+    if (!touchDown_) return;
+
+    const TouchHoverDecision hover = touchHoverFor(TouchHoverSample{
+        true, touchDragging_, x, y, touchStartX_, touchStartY_, kTouchSlopPx, false});
+    if (hover.becameDrag) {
+        touchDragging_ = true;
+        // The slop is SPENT, not banked. It is the distance that decided this
+        // was a scroll at all, and feeding it to the wheel as one delta made
+        // the content jump a finger's width the moment a drag was recognised —
+        // which reads as the list being sticky and then lurching. Restarting
+        // the measurement here means the scroll begins exactly where the
+        // gesture was admitted, and 1:1 from there.
+        touchLastY_    = y;
+        dragRemainder_ = 0.0f;   // the slop is spent; start the carry clean
+    }
+    if (hover.hover == TouchHover::Move)
+        owner_->onMouseMove((int)x, (int)y);
+    else if (hover.hover == TouchHover::Leave)
+        owner_->onMouseLeave();
+    // Still a tap, or the sample that just admitted the drag: no wheel yet.
+    if (!touchDragging_ || hover.becameDrag) return;
+
+    // Past the slop the gesture belongs to scrolling, for good. The wheel is
+    // fed the finger's own displacement since the last event, so content
+    // tracks the finger rather than stepping. The app then snaps that travel
+    // onto whole rows; this host does not throw after a lift.
+    const float dy = y - touchLastY_;
+    // Sub-pixel travel is CARRIED, never rounded away.
+    //
+    // onMouseWheel takes an int, and a drag slower than one pixel per touch
+    // sample rounds to zero. On a 120 Hz screen that is an ordinary slow drag:
+    // every sample is discarded, the content does not move at all, and the
+    // list feels stuck exactly when it is being moved carefully.
+    //
+    // Accumulating the fraction instead means a 0.4 px sample is not lost --
+    // it lands as a 1 px step every third sample, and the average speed is
+    // exactly the finger's.
+    dragRemainder_ += dy * kWheelPerPixel;
+    const int delta = (int)std::lround(dragRemainder_);
+    dragRemainder_ -= (float)delta;
+    touchLastY_    = y;
+    if (delta != 0) owner_->onMouseWheel((int)x, (int)y, delta);
+}
+
+void AndroidHost::onTouchUp(float x, float y, bool cancelled) {
+    const bool wasDown = touchDown_;
+    // Read before the flags drop. A lift is a leave whether or not the stroke
+    // had already become a scroll; a cancel is the same fact with a different
+    // reason (the system took the gesture). touchHoverFor() treats both as a
+    // lift — the highlight does not care which.
+    const TouchHoverDecision hover = touchHoverFor(TouchHoverSample{
+        wasDown, touchDragging_, x, y, touchStartX_, touchStartY_, kTouchSlopPx, true});
+    const bool wasTap  = wasDown && !touchDragging_ && !cancelled;
+    const bool wasDrag = wasDown && (touchDragging_ || cancelled);
+    const float dx = x - touchStartX_, dy = y - touchStartY_;
+
+    // A lift is a lift. The drag already emitted its wheel deltas; nothing
+    // continues after the finger leaves.
+
+    touchDown_     = false;
+    touchDragging_ = false;
+
+    // A finished drag is reported as such, in addition to the wheel deltas it
+    // already produced along the way. The app uses it for gestures that are
+    // about the WHOLE stroke rather than its increments (the artwork's swipe);
+    // the slop that decided this was a drag at all stays here, because it is a
+    // property of a touch screen and not of the app.
+    //
+    // A CANCELLED stroke goes down this path too. The system took the gesture
+    // away — a notification shade, a back gesture, another window — and the
+    // press that went out at contact has to be retracted before the release
+    // below arrives, or the app would treat the interruption as a choice.
+    if (wasDrag) owner_->onDragEnd((int)dx, (int)dy);
+
+    // The release, always: a tap, a drag and a cancellation all end with the
+    // finger off the glass, and an app holding a pressed state has no other
+    // way to learn that. What the release MEANS is the app's question; the
+    // ordering above is what lets it answer.
+    owner_->onLButtonUp((int)x, (int)y);
+
+    // After the release. The click is decided from where the press landed;
+    // the highlight is a different question, and the finger is now gone. A
+    // drag already dropped it when the slop was crossed, and leaving again
+    // is the same call — a tap that never became a drag has no earlier one.
+    if (hover.hover == TouchHover::Leave)
+        owner_->onMouseLeave();
+
+    if (!wasTap) return;
+
+    // Only a real tap seeds the double-tap window, measured release to
+    // contact — onTouchDown() is where the second one is recognised.
+    lastTapTime_  = std::chrono::steady_clock::now();
+    lastTapX_ = x; lastTapY_ = y;
+    lastTapValid_ = true;
+}
+
+// ── Cross-thread events and the seek timer ───────────────────────────────────
+
+void AndroidHost::postAppEvent(int id, intptr_t p1, intptr_t p2) {
+    {
+        std::lock_guard<std::mutex> lk(eventsMu_);
+        events_.push_back({id, p1, p2});
+    }
+    // Wakes a pump() blocked in ALooper_pollOnce. The counter's VALUE is never
+    // read — the queue above is the payload; this is only the doorbell.
+    if (eventFd_ >= 0) {
+        uint64_t one = 1;
+        ssize_t ignored = write(eventFd_, &one, sizeof(one));
+        (void)ignored;
+    }
+}
+
+void AndroidHost::drainEvents() {
+    if (eventFd_ >= 0) {
+        uint64_t sink = 0;
+        while (read(eventFd_, &sink, sizeof(sink)) > 0) {}
+    }
+    // Reuse the member buffer: a local vector swap freed its capacity every
+    // drain, so each producer post reallocated the next frame.
+    {
+        std::lock_guard<std::mutex> lk(eventsMu_);
+        pendingEvents_.swap(events_);
+    }
+    for (auto& e : pendingEvents_) dispatchAppEvent(e);
+    pendingEvents_.clear();
+}
+
+void AndroidHost::dispatchAppEvent(const Event& e) {
+    if (!owner_) return;
+    owner_->onAppEvent(e.id, e.p1, e.p2);
+}
+
+void AndroidHost::startTimer(int id, int intervalMs) {
+    timerId_ = id;  // one timer fd; the id is remembered, not honoured
+    if (timerFd_ < 0) return;
+    itimerspec spec{};
+    spec.it_value.tv_sec  = intervalMs / 1000;
+    spec.it_value.tv_nsec = (intervalMs % 1000) * 1000000L;
+    spec.it_interval = spec.it_value;
+    timerfd_settime(timerFd_, 0, &spec, nullptr);
+}
+
+void AndroidHost::stopTimer(int) {
+    if (timerFd_ < 0) return;
+    itimerspec spec{};
+    timerfd_settime(timerFd_, 0, &spec, nullptr);
+}
+
+void AndroidHost::drainTimer() {
+    if (timerFd_ < 0 || !owner_) return;
+    uint64_t expirations = 0;
+    if (read(timerFd_, &expirations, sizeof(expirations)) > 0) owner_->onTimer(timerId_);
+}
+
+// ── The pump ─────────────────────────────────────────────────────────────────
+
+void AndroidHost::pump(bool haveWork) {
+    if (!appReady_) {
+        appReady_ = true;
+        // First tick after create(): the app exists now, so this is the
+        // earliest honest moment to ask for storage and hand over the root.
+        maybeSignalHostReady();
+    }
+
+    // Blocking when there is nothing to draw is what keeps a phone's battery
+    // out of this: with no pending frame the process sleeps in the kernel
+    // until a touch, a timer, or a background thread's eventfd wakes it.
+    // With a frame already pending the draw paces us and the wait stays zero.
+    const int timeout = haveWork ? 0 : -1;
+
+    int events;
+    android_poll_source* source = nullptr;
+    const int ident = ALooper_pollOnce(timeout, nullptr, &events,
+                                       reinterpret_cast<void**>(&source));
+    if (ident >= 0) {
+        if (source) source->process(state_, source);
+        else if (ident == kLooperIdEvents) drainEvents();
+        else if (ident == kLooperIdTimer)  drainTimer();
+    }
+
+    // Both are drained unconditionally as well: several descriptors can be
+    // ready in one wake-up and pollOnce reports only one of them, so relying
+    // on the ident alone loses whichever it did not name.
+    drainEvents();
+    drainTimer();
+    // The IME does not go through the looper at all — it arrives on Android's
+    // UI thread and parks in a lock — so it is drained here every time rather
+    // than in response to any descriptor.
+    drainActivity();
+}
+
+bool AndroidHost::quitRequested() const {
+    return state_->destroyRequested != 0;
+}
+
+void AndroidHost::showErrorMessage(const std::string& title, const std::string& msg) {
+    // A log line, exactly as on Linux. The app's own on-screen notice
+    // (audioNotice_) is the report a listener actually sees; this is its
+    // companion for whoever is holding a logcat.
+    LOGE("[%s] %s", title.c_str(), msg.c_str());
+}
