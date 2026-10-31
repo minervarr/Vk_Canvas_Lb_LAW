@@ -15,6 +15,11 @@ vce_compile_slang(compile_shared_shaders
     ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
+)
+vce_compile_slang_stage(compile_shared_compute_shaders
+    ${CMAKE_BINARY_DIR}/assets/shaders
+    ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
+    compute
     tiling
     coverage
 )
@@ -34,7 +39,7 @@ add_executable(vk_canvas
     win32_platform.cc
 )
 
-add_dependencies(vk_canvas compile_shared_shaders compile_shaders)
+add_dependencies(vk_canvas compile_shared_shaders compile_shared_compute_shaders compile_shaders)
 
 # FileAssetReader reads <exe dir>/assets/, and the shaders above compile into
 # ${CMAKE_BINARY_DIR}/assets — so the exe must sit at the build root.

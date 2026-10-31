@@ -89,7 +89,9 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     hwb_props.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
     hwb_props.pNext = &hwb_format_props;
 
-    vkGetAndroidHardwareBufferPropertiesANDROID_(device_, hwb, &hwb_props);
+    if (!vce_vk_ok(vkGetAndroidHardwareBufferPropertiesANDROID_(device_, hwb, &hwb_props),
+                   "vkGetAndroidHardwareBufferPropertiesANDROID", __FILE__, __LINE__))
+        return;
     last_external_format_ = hwb_format_props.externalFormat;
     LOGI("HWB externalFormat: %llu", (unsigned long long)last_external_format_);
 
@@ -144,7 +146,7 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_info.maxAnisotropy = 1.0f;
     sampler_info.unnormalizedCoordinates = VK_FALSE;
-    vkCreateSampler(device_, &sampler_info, nullptr, &hwb_sampler_);
+    VCE_VK_CHECK_OR(vkCreateSampler(device_, &sampler_info, nullptr, &hwb_sampler_), return);
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 0;
@@ -157,7 +159,7 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &samplerLayoutBinding;
-    vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &desc_layout_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &desc_layout_), return);
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -180,7 +182,7 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     poolInfo.maxSets = kMaxCachedHwb;
-    vkCreateDescriptorPool(device_, &poolInfo, nullptr, &desc_pool_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &desc_pool_), return);
 
     
 
@@ -192,8 +194,11 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
         ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         ci.codeSize = code.size();
         ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        vkCreateShaderModule(device_, &ci, nullptr, &mod);
+        VkShaderModule mod = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(device_, &ci, nullptr, &mod) != VK_SUCCESS) {
+            LOGE("camera shader module creation failed: %s", path);
+            return VK_NULL_HANDLE;
+        }
         return mod;
     };
 
@@ -272,7 +277,7 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     pipelineLayoutInfo.pSetLayouts = &desc_layout_;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pcRange;
-    vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipeline_layout_);
+    VCE_VK_CHECK_OR(vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipeline_layout_), return);
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -288,10 +293,14 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
     pipelineInfo.layout = pipeline_layout_;
     pipelineInfo.renderPass = render_pass_;
     pipelineInfo.subpass = 0;
-    vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
-
+    const VkResult cam_created =
+        vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
     vkDestroyShaderModule(device_, vert, nullptr);
     vkDestroyShaderModule(device_, frag, nullptr);
+    if (!vce_vk_ok(cam_created, "vkCreateGraphicsPipelines(camera)", __FILE__, __LINE__)) {
+        pipeline_ = VK_NULL_HANDLE;
+        return;
+    }
 }
 
 void Renderer::Impl::bind_hwb(AHardwareBuffer* hwb) {
@@ -318,7 +327,9 @@ void Renderer::Impl::bind_hwb(AHardwareBuffer* hwb) {
         if (!victim) break;   // everything is the current buffer; nothing to give
         auto vit = hwb_cache_.find(victim);
         if (vit == hwb_cache_.end()) continue;
-        vkDeviceWaitIdle(device_);
+        if (!vce_vk_ok(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle(HWB evict)",
+                       __FILE__, __LINE__))
+            return;
         vkFreeDescriptorSets(device_, desc_pool_, 1, &vit->second.desc_set);
         vkDestroyImageView(device_, vit->second.view, nullptr);
         vkDestroyImage(device_, vit->second.image, nullptr);
@@ -376,13 +387,22 @@ void Renderer::Impl::bind_hwb(AHardwareBuffer* hwb) {
 
     VkAndroidHardwareBufferPropertiesANDROID hwb_props{};
     hwb_props.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
-    vkGetAndroidHardwareBufferPropertiesANDROID_(device_, hwb, &hwb_props);
+    if (!vce_vk_ok(vkGetAndroidHardwareBufferPropertiesANDROID_(device_, hwb, &hwb_props),
+                   "vkGetAndroidHardwareBufferPropertiesANDROID(bind)", __FILE__, __LINE__)) {
+        vkDestroyImage(device_, cache.image, nullptr);
+        return;
+    }
 
     VkMemoryAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.pNext = &dedicated_info;
     alloc_info.allocationSize = hwb_props.allocationSize;
     alloc_info.memoryTypeIndex = find_memory_type(hwb_props.memoryTypeBits, 0);
+    if (alloc_info.memoryTypeIndex == UINT32_MAX) {
+        LOGI("bind_hwb: no memory type for the imported buffer");
+        vkDestroyImage(device_, cache.image, nullptr);
+        return;
+    }
 
     if (vkAllocateMemory(device_, &alloc_info, nullptr, &cache.memory) != VK_SUCCESS) {
         LOGI("bind_hwb: vkAllocateMemory failed (%llu bytes, typeBits 0x%x)",
@@ -391,7 +411,12 @@ void Renderer::Impl::bind_hwb(AHardwareBuffer* hwb) {
         return;
     }
 
-    vkBindImageMemory(device_, cache.image, cache.memory, 0);
+    if (!vce_vk_ok(vkBindImageMemory(device_, cache.image, cache.memory, 0),
+                   "vkBindImageMemory(HWB)", __FILE__, __LINE__)) {
+        vkDestroyImage(device_, cache.image, nullptr);
+        vkFreeMemory(device_, cache.memory, nullptr);
+        return;
+    }
 
     VkSamplerYcbcrConversionInfo ycbcr_info{};
     ycbcr_info.sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO;

@@ -10,10 +10,17 @@ Vk_Canvas_Lb_LAW/tools/audit.sh
 ```
 
 It runs the dependency/source-inventory check, configures and builds the Vk dev
-tree, builds the header self-containment target, runs every unit test, and does
-the same for `App_shell` when the two repositories are checked out together.
-Build trees default to `/tmp/opencode/{vk-dev,app-shell-dev}`; override with
-`VK_BUILD_DIR` / `APP_SHELL_BUILD_DIR`. Build trees are reused, never deleted.
+tree, builds the header self-containment target, runs every unit test, then the
+Phase 3 stages: validation-layer GPU runs, ASan+UBSan CTest, soak repeats and
+libFuzzer. It does the same build/test side for `App_shell` when the two
+repositories are checked out together. Build trees default to
+`/tmp/opencode/{vk-dev,app-shell-dev}` (plus `-validation`, `-sanitize`, `-fuzz`);
+override with `VK_BUILD_DIR` / `APP_SHELL_BUILD_DIR` / `VK_VALIDATION_DIR` /
+`VK_SANITIZE_DIR` / `VK_FUZZ_DIR`. Build trees are reused, never deleted.
+
+Stage switches: `VK_AUDIT_VALIDATION=0`, `VK_AUDIT_SANITIZE=0`, `VK_AUDIT_SOAK=0`,
+`VK_AUDIT_FUZZ_SECONDS=0`. A stage that cannot run prints why and is skipped;
+it is never counted as a pass.
 
 Run a single side manually:
 
@@ -37,16 +44,18 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `unit` | pure logic, CPU only, no GPU/swapchain | a compiler; some tests include Vulkan headers | must pass |
 | `gpu` | headless surface, real swapchain, pixel probes | Vulkan device + built SPIR-V assets | skip `77` if unavailable |
 | `bench` | frame/startup/allocation/size | as above; planned | report, not a hard gate yet |
-| `fuzz` | UTF-8/UTF-16, text buffer, archive parsers | sanitizer build; planned | crash = bug |
+| `fuzz` | UTF-8, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
 
-The current tree has 13 Vk `unit` tests and 4 App_shell tests. The GPU tests
-(`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`) are registered with
-the `gpu` label and `SKIP_RETURN_CODE 77`; the dev superbuild compiles the
-Slang shaders into `<build>/assets/shaders` when `slangc` is found (override
-with `-DVCE_SLANGC=/path/to/slangc` or disable with
-`-DVCE_DEV_BUILD_SHADERS=OFF`). The text tests use the canonical
-`assets/fonts` face when checked in, otherwise the face in the font-engine
-submodule; with neither they skip (77).
+The current tree has 14 Vk `unit` tests and 4 App_shell tests. The GPU tests
+(`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`,
+`renderer_lifecycle_test`) are registered with the `gpu` label and
+`SKIP_RETURN_CODE 77`; the dev superbuild compiles the Slang shaders into
+`<build>/assets/shaders` when `slangc` is found (override with
+`-DVCE_SLANGC=/path/to/slangc` or disable with
+`-DVCE_DEV_BUILD_SHADERS=OFF`). Shaders are emitted as SPIR-V 1.3 through
+glslang, because the renderer asks for a Vulkan 1.1 instance/device. The text
+tests use the canonical `assets/fonts` face when checked in, otherwise the face
+in the font-engine submodule; with neither they skip (77).
 
 ## Current unit tests
 
@@ -65,6 +74,8 @@ submodule; with neither they skip (77).
 | `ui_state_test` | `ui/widgets.*` text state + theme | insertion, deletion, selection, IME, type scale |
 | `canvas_records_test` | `canvas.*` | curve records, SDF packing, images, clipping |
 | `owner_semantics_test` | `Renderer`/`OverlayRasterizer`/`ImageLayer` | compile-time non-copyability |
+| `vk_result_test` | `vk_check.hh` | VkResult → swapchain/recovery classification |
+| `renderer_lifecycle_test` | `Renderer` | resize, minimize/restore, surface loss/regain, create/destroy soak (GPU) |
 
 ## Adding a test
 
@@ -106,19 +117,39 @@ submodule; with neither they skip (77).
   centres, ink coverage) over an exact hash across drivers. Use lavapipe for a
   deterministic run when available.
 
+## Fuzzing
+
+The parsers that consume untrusted bytes have libFuzzer harnesses under
+`dev/fuzz/`:
+
+```bash
+cmake -S Vk_Canvas_Lb_LAW/dev -B /tmp/opencode/vk-fuzz -G Ninja \
+    -DCMAKE_CXX_COMPILER=clang++ -DVCE_DEV_BUILD_FUZZ=ON \
+    -DVCE_DEV_BUILD_SHADERS=OFF -DVCE_DEV_BUILD_PLATFORM=OFF
+cmake --build /tmp/opencode/vk-fuzz --target utf8_fuzz text_buffer_fuzz html_strip_fuzz
+/tmp/opencode/vk-fuzz/fuzz/utf8_fuzz -max_total_time=30
+```
+
+`utf8_fuzz` pins forward progress in the shared decoder, `text_buffer_fuzz`
+drives the gap buffer through arbitrary edit/cursor sequences and checks the
+line/cursor invariants after every step, and `html_strip_fuzz` exercises the
+HTML-sidecar flattener. `tools/audit.sh` runs each for
+`VK_AUDIT_FUZZ_SECONDS` (default 5) when clang is available. The `wip/archive`
+prototype is not fuzzed because it is not compiled and has no target.
+
 ## What is not tested yet
 
-- `Renderer` lifecycle edge cases: swapchain recreation, surface loss, device
-  loss. The normal draw paths (overlay, shapes, images, clip, rotation) are in
-  `gpu_smoke_test`.
-- `OverlayRasterizer` and `ImageLayer` resource ownership/teardown under stress.
+- Real `VK_ERROR_DEVICE_LOST`: the state machine is unit-tested, but the event
+  itself is not injectable without `VK_EXT_device_fault` or hardware removal.
+- `OverlayRasterizer` and `ImageLayer` resource ownership under allocation
+  failure; the sanitizer and lifecycle soak cover the normal teardown path.
 - `textarea`, `plotview` and `art_texture`; widget geometry and text-field
   state are covered, but their draw calls are not pixel-tested.
 - Platform hosts (Win32/Wayland/Android) and the Java half.
 - Exact pixel output across drivers; the GPU tests assert structure, not hashes.
 - `App_shell`'s `Host`/`AppView` integration and Android JNI paths.
 
-These gaps are Phase 2/3 work. Until then, changes to those areas need a written
+These gaps are Phase 4/5 work. Until then, changes to those areas need a written
 manual verification note in the commit or PR, and must not claim automated
 coverage.
 
@@ -130,5 +161,6 @@ coverage.
   of treating it as a pass.
 - No CI workflow is checked in yet. `tools/audit.sh` is the intended CI entry
   point; adding the workflow is part of the foundation work.
-- There is no benchmark or sanitizer build configuration yet; Phase 3/4 add
-  them.
+- A sanitizer build is `-DVCE_DEV_SANITIZE=ON` in the dev tree; the audit script
+  runs it. There is still no benchmark target (`docs/PERFORMANCE.md` records the
+  baseline); Phase 4 adds budgets and a regression check.

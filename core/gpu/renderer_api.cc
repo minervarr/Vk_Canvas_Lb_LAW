@@ -30,6 +30,9 @@ void Renderer::draw(const std::vector<float>& overlay_curves, int overlay_rotati
 
 bool Renderer::recreate_surface() { return impl_->recreate_surface(); }
 
+bool Renderer::deviceLost() const { return impl_->device_lost_; }
+bool Renderer::surfaceLost() const { return impl_->surface_lost_; }
+
 void Renderer::initMsdf(const TextFont& font) { impl_->initMsdf(font); }
 
 VkDevice         Renderer::vkDevice() const { return impl_->device_; }

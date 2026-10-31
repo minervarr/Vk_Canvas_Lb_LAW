@@ -16,6 +16,11 @@ vce_compile_slang(compile_shared_shaders
     ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
     composite_vert
     composite_frag
+)
+vce_compile_slang_stage(compile_shared_compute_shaders
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/src/main/assets/shaders
+    ${REPO_ROOT}/first_party/vulkan_font_engine/shaders_src
+    compute
     tiling
     coverage
 )
@@ -40,7 +45,7 @@ add_library(vk_canvas SHARED
 )
 # WIP Android glue, not yet wired: input_handler orientation fullscreen jni_util
 
-add_dependencies(vk_canvas compile_shared_shaders compile_shaders)
+add_dependencies(vk_canvas compile_shared_shaders compile_shared_compute_shaders compile_shaders)
 
 target_include_directories(vk_canvas PRIVATE
     ${NATIVE_APP_GLUE}

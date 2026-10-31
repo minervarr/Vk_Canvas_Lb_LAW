@@ -1,5 +1,6 @@
 #include "overlay.hh"
 #include "log.hh"
+#include "vk_check.hh"
 #include <cstring>
 #include <cmath>
 #include <vector>
@@ -39,7 +40,7 @@ VkShaderModule OverlayRasterizer::loadShader(const char* path) {
     return mod;
 }
 
-void OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
+bool OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                              AssetReader& assets, VkRenderPass renderPass,
                              uint32_t width, uint32_t height,
                              OutputEncode encode) {
@@ -50,27 +51,29 @@ void OverlayRasterizer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     width_          = width;
     height_         = height;
 
-    createDescriptorLayoutAndPool();
-    createComputePipelines();
-    createCompositePipeline(renderPass);
+    if (!createDescriptorLayoutAndPool()) return false;
+    if (!createComputePipelines()) return false;
+    if (!createCompositePipeline(renderPass)) return false;
     // Buffers / output image / descriptor writes are deferred to
     // ensureResources_() — see init()'s comment in overlay.hh.
     LOGI("OverlayRasterizer ready (%ux%u, resources on demand)", width_, height_);
+    return true;
 }
 
-void OverlayRasterizer::ensureResources_() {
-    if (resourcesReady_) return;
-    createBuffers();
-    createOutputImage();
-    writeDescriptors();
+bool OverlayRasterizer::ensureResources_() {
+    if (resourcesReady_) return true;
+    if (!createBuffers()) return false;
+    if (!createOutputImage()) return false;
+    if (!writeDescriptors()) return false;
     updateCompositeImageDescriptor();
     firstRun_    = true;
     curvesDirty_ = true;
     resourcesReady_ = true;
     LOGI("OverlayRasterizer resources allocated (%ux%u)", width_, height_);
+    return true;
 }
 
-void OverlayRasterizer::createDescriptorLayoutAndPool() {
+bool OverlayRasterizer::createDescriptorLayoutAndPool() {
     VkDescriptorSetLayoutBinding bindings[4]{};
     for (int i = 0; i < 4; i++) {
         bindings[i].binding         = i;
@@ -84,7 +87,8 @@ void OverlayRasterizer::createDescriptorLayoutAndPool() {
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 4;
     layoutInfo.pBindings    = bindings;
-    vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &descLayout_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &descLayout_),
+                    return false);
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -97,17 +101,20 @@ void OverlayRasterizer::createDescriptorLayoutAndPool() {
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes    = poolSizes;
     poolInfo.maxSets       = 1;
-    vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descPool_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descPool_),
+                    return false);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool     = descPool_;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts        = &descLayout_;
-    vkAllocateDescriptorSets(device_, &allocInfo, &descSet_);
+    VCE_VK_CHECK_OR(vkAllocateDescriptorSets(device_, &allocInfo, &descSet_),
+                    return false);
+    return true;
 }
 
-void OverlayRasterizer::createBuffers() {
+bool OverlayRasterizer::createBuffers() {
     const VkDeviceSize curveBufferSize =
         static_cast<VkDeviceSize>(MAX_CURVES) * CURVE_FLOATS * sizeof(float);
 
@@ -116,24 +123,33 @@ void OverlayRasterizer::createBuffers() {
     cbInfo.size        = curveBufferSize;
     cbInfo.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     cbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    vkCreateBuffer(device_, &cbInfo, nullptr, &curveBuffer_);
+    VCE_VK_CHECK_OR(vkCreateBuffer(device_, &cbInfo, nullptr, &curveBuffer_), return false);
 
     VkMemoryRequirements cbReqs{};
     vkGetBufferMemoryRequirements(device_, curveBuffer_, &cbReqs);
+    const uint32_t mem_type = findMemoryType(cbReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (mem_type == UINT32_MAX) {
+        LOGE("overlay: no host-visible memory type for the curve buffer");
+        return false;
+    }
     VkMemoryAllocateInfo cbAlloc{};
     cbAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     cbAlloc.allocationSize  = cbReqs.size;
-    cbAlloc.memoryTypeIndex = findMemoryType(cbReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    vkAllocateMemory(device_, &cbAlloc, nullptr, &curveBufferMemory_);
-    vkBindBufferMemory(device_, curveBuffer_, curveBufferMemory_, 0);
-    vkMapMemory(device_, curveBufferMemory_, 0, curveBufferSize, 0, &curveBufferMapped_);
+    cbAlloc.memoryTypeIndex = mem_type;
+    VCE_VK_CHECK_OR(vkAllocateMemory(device_, &cbAlloc, nullptr, &curveBufferMemory_),
+                    return false);
+    VCE_VK_CHECK_OR(vkBindBufferMemory(device_, curveBuffer_, curveBufferMemory_, 0),
+                    return false);
+    VCE_VK_CHECK_OR(vkMapMemory(device_, curveBufferMemory_, 0, curveBufferSize, 0,
+                                &curveBufferMapped_),
+                    return false);
     std::memset(curveBufferMapped_, 0, static_cast<size_t>(curveBufferSize));
 
-    createTileRowBuffers();
+    return createTileRowBuffers();
 }
 
-void OverlayRasterizer::createTileRowBuffers() {
+bool OverlayRasterizer::createTileRowBuffers() {
     const uint32_t tileCountX = (width_  + TILE_SIZE - 1) / TILE_SIZE;
     const uint32_t tileCountY = (height_ + TILE_SIZE - 1) / TILE_SIZE;
 
@@ -143,24 +159,32 @@ void OverlayRasterizer::createTileRowBuffers() {
         bi.size        = size;
         bi.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCreateBuffer(device_, &bi, nullptr, &buf);
+        VCE_VK_CHECK_OR(vkCreateBuffer(device_, &bi, nullptr, &buf), return false);
         VkMemoryRequirements reqs{};
         vkGetBufferMemoryRequirements(device_, buf, &reqs);
+        const uint32_t type = findMemoryType(reqs.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (type == UINT32_MAX) {
+            LOGE("overlay: no device-local memory type for a tile buffer");
+            return false;
+        }
         VkMemoryAllocateInfo ai{};
         ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         ai.allocationSize  = reqs.size;
-        ai.memoryTypeIndex = findMemoryType(reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        vkAllocateMemory(device_, &ai, nullptr, &mem);
-        vkBindBufferMemory(device_, buf, mem, 0);
+        ai.memoryTypeIndex = type;
+        VCE_VK_CHECK_OR(vkAllocateMemory(device_, &ai, nullptr, &mem), return false);
+        VCE_VK_CHECK_OR(vkBindBufferMemory(device_, buf, mem, 0), return false);
+        return true;
     };
 
-    makeDeviceBuffer(static_cast<VkDeviceSize>(tileCountX) * tileCountY * TILE_STRIDE_U32 * sizeof(uint32_t),
-                     tileBuffer_, tileBufferMemory_);
-    makeDeviceBuffer(static_cast<VkDeviceSize>(tileCountX) * tileCountY * WIND_STRIDE_U32 * sizeof(uint32_t),
-                     rowBuffer_, rowBufferMemory_);
+    if (!makeDeviceBuffer(static_cast<VkDeviceSize>(tileCountX) * tileCountY * TILE_STRIDE_U32 * sizeof(uint32_t),
+                          tileBuffer_, tileBufferMemory_))
+        return false;
+    return makeDeviceBuffer(static_cast<VkDeviceSize>(tileCountX) * tileCountY * WIND_STRIDE_U32 * sizeof(uint32_t),
+                            rowBuffer_, rowBufferMemory_);
 }
 
-void OverlayRasterizer::createOutputImage() {
+bool OverlayRasterizer::createOutputImage() {
     VkImageCreateInfo imgInfo{};
     imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType     = VK_IMAGE_TYPE_2D;
@@ -173,16 +197,24 @@ void OverlayRasterizer::createOutputImage() {
     imgInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    vkCreateImage(device_, &imgInfo, nullptr, &outputImage_);
+    VCE_VK_CHECK_OR(vkCreateImage(device_, &imgInfo, nullptr, &outputImage_), return false);
 
     VkMemoryRequirements imgReqs{};
     vkGetImageMemoryRequirements(device_, outputImage_, &imgReqs);
+    const uint32_t img_type = findMemoryType(imgReqs.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (img_type == UINT32_MAX) {
+        LOGE("overlay: no device-local memory type for the overlay image");
+        return false;
+    }
     VkMemoryAllocateInfo imgAlloc{};
     imgAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     imgAlloc.allocationSize  = imgReqs.size;
-    imgAlloc.memoryTypeIndex = findMemoryType(imgReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device_, &imgAlloc, nullptr, &outputImageMemory_);
-    vkBindImageMemory(device_, outputImage_, outputImageMemory_, 0);
+    imgAlloc.memoryTypeIndex = img_type;
+    VCE_VK_CHECK_OR(vkAllocateMemory(device_, &imgAlloc, nullptr, &outputImageMemory_),
+                    return false);
+    VCE_VK_CHECK_OR(vkBindImageMemory(device_, outputImage_, outputImageMemory_, 0),
+                    return false);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -190,7 +222,8 @@ void OverlayRasterizer::createOutputImage() {
     viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format           = VK_FORMAT_R8G8B8A8_UNORM;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(device_, &viewInfo, nullptr, &outputImageView_);
+    VCE_VK_CHECK_OR(vkCreateImageView(device_, &viewInfo, nullptr, &outputImageView_),
+                    return false);
 
     VkSamplerCreateInfo sampInfo{};
     sampInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -200,10 +233,12 @@ void OverlayRasterizer::createOutputImage() {
     sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(device_, &sampInfo, nullptr, &outputSampler_);
+    VCE_VK_CHECK_OR(vkCreateSampler(device_, &sampInfo, nullptr, &outputSampler_),
+                    return false);
+    return true;
 }
 
-void OverlayRasterizer::createComputePipelines() {
+bool OverlayRasterizer::createComputePipelines() {
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushRange.offset     = 0;
@@ -215,11 +250,17 @@ void OverlayRasterizer::createComputePipelines() {
     layoutInfo.pSetLayouts            = &descLayout_;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges    = &pushRange;
-    vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &computePipelineLayout_);
+    VCE_VK_CHECK_OR(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &computePipelineLayout_),
+                    return false);
 
     VkShaderModule tilingShader   = loadShader("shaders/tiling.spv");
     VkShaderModule coverageShader = loadShader("shaders/coverage.spv");
-    if (!tilingShader || !coverageShader) { LOGE("overlay compute shaders missing"); return; }
+    if (!tilingShader || !coverageShader) {
+        LOGE("overlay compute shaders missing");
+        if (tilingShader) vkDestroyShaderModule(device_, tilingShader, nullptr);
+        if (coverageShader) vkDestroyShaderModule(device_, coverageShader, nullptr);
+        return false;
+    }
 
     VkComputePipelineCreateInfo infos[2]{};
     for (int i = 0; i < 2; i++) {
@@ -232,14 +273,22 @@ void OverlayRasterizer::createComputePipelines() {
     infos[0].stage.module = tilingShader;
     infos[1].stage.module = coverageShader;
     VkPipeline pipelines[2]{};
-    vkCreateComputePipelines(device_, VK_NULL_HANDLE, 2, infos, nullptr, pipelines);
-    tilingPipeline_   = pipelines[0];
-    coveragePipeline_ = pipelines[1];
+    const VkResult created =
+        vkCreateComputePipelines(device_, VK_NULL_HANDLE, 2, infos, nullptr, pipelines);
     vkDestroyShaderModule(device_, tilingShader,   nullptr);
     vkDestroyShaderModule(device_, coverageShader, nullptr);
+    if (!vce_vk_ok(created, "vkCreateComputePipelines", __FILE__, __LINE__)) {
+        // vkCreateComputePipelines writes VK_NULL_HANDLE for failed entries.
+        if (pipelines[0]) vkDestroyPipeline(device_, pipelines[0], nullptr);
+        if (pipelines[1]) vkDestroyPipeline(device_, pipelines[1], nullptr);
+        return false;
+    }
+    tilingPipeline_   = pipelines[0];
+    coveragePipeline_ = pipelines[1];
+    return true;
 }
 
-void OverlayRasterizer::writeDescriptors() {
+bool OverlayRasterizer::writeDescriptors() {
     const VkDeviceSize curveBufferSize =
         static_cast<VkDeviceSize>(MAX_CURVES) * CURVE_FLOATS * sizeof(float);
     const uint32_t tileCountX = (width_  + TILE_SIZE - 1) / TILE_SIZE;
@@ -266,9 +315,10 @@ void OverlayRasterizer::writeDescriptors() {
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;  writes[2].pImageInfo  = &imageDesc;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[3].pBufferInfo = &rowDesc;
     vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
+    return true;
 }
 
-void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
+bool OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     // Descriptor: combined image sampler of the overlay image (fragment stage).
     VkDescriptorSetLayoutBinding b{};
     b.binding         = 0;
@@ -279,7 +329,8 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     sli.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     sli.bindingCount = 1;
     sli.pBindings    = &b;
-    vkCreateDescriptorSetLayout(device_, &sli, nullptr, &compSetLayout_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorSetLayout(device_, &sli, nullptr, &compSetLayout_),
+                    return false);
 
     VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
     VkDescriptorPoolCreateInfo pci{};
@@ -287,14 +338,14 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     pci.poolSizeCount = 1;
     pci.pPoolSizes    = &ps;
     pci.maxSets       = 1;
-    vkCreateDescriptorPool(device_, &pci, nullptr, &compPool_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorPool(device_, &pci, nullptr, &compPool_), return false);
 
     VkDescriptorSetAllocateInfo sa{};
     sa.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     sa.descriptorPool     = compPool_;
     sa.descriptorSetCount = 1;
     sa.pSetLayouts        = &compSetLayout_;
-    vkAllocateDescriptorSets(device_, &sa, &compSet_);
+    VCE_VK_CHECK_OR(vkAllocateDescriptorSets(device_, &sa, &compSet_), return false);
 
     updateCompositeImageDescriptor();
 
@@ -309,11 +360,16 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     pli.pSetLayouts            = &compSetLayout_;
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges    = &pcRange;
-    vkCreatePipelineLayout(device_, &pli, nullptr, &compLayout_);
+    VCE_VK_CHECK_OR(vkCreatePipelineLayout(device_, &pli, nullptr, &compLayout_), return false);
 
     VkShaderModule vm = loadShader("shaders/overlay_vert.spv");
     VkShaderModule fm = loadShader("shaders/overlay_frag.spv");
-    if (!vm || !fm) { LOGE("overlay composite shaders missing"); return; }
+    if (!vm || !fm) {
+        LOGE("overlay composite shaders missing");
+        if (vm) vkDestroyShaderModule(device_, vm, nullptr);
+        if (fm) vkDestroyShaderModule(device_, fm, nullptr);
+        return false;
+    }
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -361,9 +417,15 @@ void OverlayRasterizer::createCompositePipeline(VkRenderPass renderPass) {
     gpci.pMultisampleState   = &ms; gpci.pColorBlendState    = &cb;
     gpci.pDynamicState       = &dy; gpci.layout = compLayout_;
     gpci.renderPass          = renderPass; gpci.subpass = 0;
-    vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpci, nullptr, &compPipeline_);
+    const VkResult created =
+        vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpci, nullptr, &compPipeline_);
     vkDestroyShaderModule(device_, vm, nullptr);
     vkDestroyShaderModule(device_, fm, nullptr);
+    if (!vce_vk_ok(created, "vkCreateGraphicsPipelines(overlay)", __FILE__, __LINE__)) {
+        compPipeline_ = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
 }
 
 void OverlayRasterizer::updateCompositeImageDescriptor() {
@@ -407,9 +469,12 @@ void OverlayRasterizer::resize(uint32_t width, uint32_t height) {
     width_ = width;
     height_ = height;
 
-    createTileRowBuffers();
-    createOutputImage();
-    writeDescriptors();               // rewires descSet_ to the new image/buffers
+    if (!createTileRowBuffers() || !createOutputImage() || !writeDescriptors()) {
+        // Cleanup destroys whatever exists; recordDispatch()/recordComposite()
+        // stay no-ops until the host recreates the renderer at a sane size.
+        resourcesReady_ = false;
+        return;
+    }
     updateCompositeImageDescriptor(); // rewires compSet_ to the new image
 
     // Buffers were recreated (fresh, unbound descriptors) and the image's

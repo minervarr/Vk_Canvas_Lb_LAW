@@ -13,7 +13,7 @@ void Renderer::Impl::createMsdfPipeline() {
     pl.pSetLayouts = &msdfSetLayout_;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &pcr;
-    vkCreatePipelineLayout(device_, &pl, nullptr, &msdfPipelineLayout_);
+    VCE_VK_CHECK_THROW(vkCreatePipelineLayout(device_, &pl, nullptr, &msdfPipelineLayout_));
 
     auto loadShader = [this](const char* path) -> VkShaderModule {
         std::vector<uint8_t> code;
@@ -22,8 +22,11 @@ void Renderer::Impl::createMsdfPipeline() {
         ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         ci.codeSize = code.size();
         ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        vkCreateShaderModule(device_, &ci, nullptr, &mod);
+        VkShaderModule mod = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(device_, &ci, nullptr, &mod) != VK_SUCCESS) {
+            LOGE("MSDF shader module creation failed: %s", path);
+            return VK_NULL_HANDLE;
+        }
         return mod;
     };
     VkShaderModule vs = loadShader("shaders/msdf_vert.spv");

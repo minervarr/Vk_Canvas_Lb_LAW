@@ -12,17 +12,19 @@ sync.
 
 ## Current position
 
-- **Phase:** 2 — `ui/` boundary (DONE)
-- **Last completed:** Phase 2 — `vk_canvas_ui`, the widget layer moved out of
-  `core/`, CPU-only geometry/state tests, the theme skeleton, and the type
-  scale moved into the base layer with an app-supplied floor.
-- **Next action:** start Phase 3 at T4.1 in `.opencode/todo.md`: checked Vulkan
-  calls, validation/sanitizer runs, and the recovery-path tests.
+- **Phase:** 3 — reliability hardening (DONE)
+- **Last completed:** Phase 3 — checked Vulkan calls and symmetric
+  init/teardown, device/surface-loss state, `vk_result_test`, the headless
+  lifecycle test, validation/sanitizer/soak stages in `tools/audit.sh`,
+  libFuzzer harnesses, and `docs/RELIABILITY.md`.
+- **Next action:** start Phase 4 at T5.1 in `.opencode/todo.md`: Release
+  function/data sections with `--gc-sections`, then measure per-feature binary
+  size and link the results into `docs/PERFORMANCE.md`.
 - **Blocking decisions:** none. Reference hardware is recorded in
   `docs/PERFORMANCE.md`; GPU smoke/probes run on this machine when the dev
   tree builds SPIR-V assets (`slangc` on PATH or `-DVCE_SLANGC=...`).
-- **Resume phrase:** "continue next phase" means start Phase 3 (reliability
-  hardening) at T4.1 in `.opencode/todo.md`. Phase 2 is green.
+- **Resume phrase:** "continue next phase" means start Phase 4 (pay-for-use and
+  performance budgets) at T5.1 in `.opencode/todo.md`. Phase 3 is green.
 
 ### How to resume after a context cleanup
 
@@ -33,10 +35,11 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0, Phase 1 and Phase 2 are green: the engine modules, the `Renderer`
-pimpl/split, GPU smoke coverage, the Vulkan-free `output_target` adapter, and
-the `ui/` toolkit boundary are all in place and audited. Phase 3 (reliability
-hardening) is next.
+Phase 0, Phase 1, Phase 2 and Phase 3 are green: the engine modules, the
+`Renderer` pimpl/split, GPU smoke coverage, the Vulkan-free `output_target`
+adapter, the `ui/` toolkit boundary, and the checked-call/recovery/audit
+hardening are all in place and audited. Phase 4 (pay-for-use and performance
+budgets) is next.
 
 ---
 
@@ -223,7 +226,7 @@ Problems that make auditing and testing harder:
 | 3 | `core/` contains uncompiled WIP files (`canvas_host`, `vulkan_state`, `compute_context`, `text_editor`, `archive`). Two include Android SDK headers, violating the core rule. | done (Phase 0) |
 | 4 | `layout.hh` and `pager.hh` include `canvas.hh` only for `Rect`/`Color`, dragging the draw API into pure geometry. | done (Phase 0) |
 | 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | done (Phase 0) |
-| 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | open (Phase 3) |
+| 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | done (Phase 3) |
 | 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 0 baseline; budgets in Phase 4) |
 | 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open (Phase 3) |
 | 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | done (Phase 2) |
@@ -308,17 +311,28 @@ dependency; App_shell portable builds without a generated header. **Met
 font-engine archive still puts libvulkan on the final link line; that is a
 transitive property of the submodule's monolithic target, not a UI include.
 
-### Phase 3 — Reliability hardening (PLANNED)
+### Phase 3 — Reliability hardening (DONE)
 
-- Apply checked Vulkan calls everywhere; make partial init and teardown
-  symmetrical.
-- Add validation, sanitizer and soak runs to the audit script.
-- Add surface-loss/resize/minimize tests and a device-loss error path.
-- Add fuzz targets (UTF-8/UTF-16, text buffer, archive parsers).
-- Document the platform contract and the thread contract.
+- [x] Apply checked Vulkan calls everywhere; make partial init and teardown
+      symmetrical. Three policies in `gpu/vk_check.hh`; the constructor catches,
+      cleans up and rethrows; init failures are reported instead of silently
+      disabling a layer.
+- [x] Add validation, sanitizer and soak runs to the audit script. Validation
+      gating also found and fixed real defects: Slang's default SPIR-V 1.5 was
+      invalid on the 1.1 device, unrequested `shaderDrawParameters`, and the
+      capture path reusing an image index across a swapchain rebuild.
+- [x] Add surface-loss/resize/minimize tests and a device-loss error path.
+      `renderer_lifecycle_test` (headless), `Renderer::deviceLost()` /
+      `surfaceLost()`, `vk_result_test`.
+- [x] Add fuzz targets (UTF-8, text buffer, HTML sidecar parser). `dev/fuzz/`,
+      built only with clang + libFuzzer; archive stays quarantined in `wip/`.
+- [x] Document the platform contract and the thread contract in
+      `docs/RELIABILITY.md`.
 
 Exit: validation-clean, leak-free, fuzz-clean for covered parsers; recovery
-paths exercised.
+paths exercised. **Verified 2026-10-31:** 18/18 CTest entries; validation zero
+issues on all four GPU binaries; ASan+UBSan full CTest leak-free; soak 5/5;
+three fuzz targets clean; `audit: ok`.
 
 ### Phase 4 — Pay-for-use and performance budgets (PLANNED)
 
@@ -406,7 +420,7 @@ framework. Add a harness, not a framework.
 | `unit` | pure logic, CPU only, no GPU/swapchain (a pure format adapter may include Vulkan headers) | Linux/Windows CI | must pass |
 | `gpu` | headless surface, real swapchain, pixel probes | local + optional CI (lavapipe) | skip (77) if unavailable |
 | `bench` | frame/startup/allocation/size measurements | local/nightly | regression report, not a hard gate at first |
-| `fuzz` | UTF-8, text buffer, archive, layout inputs | local/periodic | crash = bug |
+| `fuzz` | UTF-8, text buffer, HTML sidecar parser | clang + libFuzzer; `dev/fuzz/` | crash = bug |
 
 Harness rules:
 

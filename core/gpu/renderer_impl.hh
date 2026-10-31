@@ -8,6 +8,7 @@
 #include "image_layer.hh"
 #include "msdf.hh"
 #include "log.hh"
+#include "vk_check.hh"
 
 #include <algorithm>
 #include <atomic>
@@ -188,6 +189,18 @@ struct Renderer::Impl {
     // readbackLastFrame(). UINT32_MAX until the first draw().
     uint32_t    last_drawn_image_index_ = UINT32_MAX;
 
+    // Terminal protocol states. A lost device or surface cannot be recovered by
+    // draw(); the host must destroy the Renderer (device) or call
+    // recreate_surface() (surface). draw() stops touching Vulkan once either is
+    // set, so a caller that ignores the state gets a still frame, not UB.
+    bool        device_lost_  = false;
+    bool        surface_lost_ = false;
+
+    // Logs `what` with its VkResult and records device/surface loss. Returns
+    // true on VK_SUCCESS. Used by the frame path, where the result is neither a
+    // protocol state nor something to abort on.
+    bool check_result(VkResult result, const char* what);
+
     // The sampler conversion built for the external image. A plain Vulkan
     // object, and the thing set_external_colour() guards against being created
     // before it is told the truth — so it belongs with the description above
@@ -318,8 +331,10 @@ struct Renderer::Impl {
 
     void createMsdfPipeline();
     // `pixels` holds `layers` pages of w*h*channels, one after another, and
-    // they become the layers of one 2D array image.
-    void uploadMsdfAtlas(const uint8_t* pixels, uint32_t w, uint32_t h,
+    // they become the layers of one 2D array image. Returns false when a
+    // Vulkan allocation failed; the atlas state is then partial and the caller
+    // must not create the pipeline.
+    bool uploadMsdfAtlas(const uint8_t* pixels, uint32_t w, uint32_t h,
                          uint32_t layers, float pxRange, uint32_t channels);
 
     // Re-upload only the pages the font reports as changed, keeping the image,
@@ -369,7 +384,10 @@ struct Renderer::Impl {
     // create_swapchain(). See the definition for why it must not re-run.
     void resolve_output_target();
     void resolve_text_composite();
-    void create_swapchain();
+    // Returns false when the swapchain could not be created. The constructor
+    // turns that into an exception; recreate paths record a lost surface and
+    // leave the renderer stopped until the host recovers it.
+    bool create_swapchain();
     void create_render_pass();
     void create_framebuffers();
     void create_sync_objects();
@@ -382,6 +400,8 @@ struct Renderer::Impl {
     void recreate_swapchain();
     void destroy_swapchain_resources();
 
+    // UINT32_MAX when no type matches. Callers must check: index 0 is a real
+    // memory type, and using it on a mismatch is invalid usage, not a fallback.
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
     void cleanup();
 };

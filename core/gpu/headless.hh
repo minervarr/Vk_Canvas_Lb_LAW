@@ -23,6 +23,11 @@ public:
     VkSurfaceKHR create(VkInstance instance) override;
     VkExtent2D   extent() const override { return extent_; }
 
+    // Pretend the window was resized or minimized (0x0). Tests and capture
+    // tooling drive the renderer's recreate paths through this; the surface
+    // itself is size-less, so no Vulkan object has to change.
+    void set_extent(uint32_t width, uint32_t height) { extent_ = {width, height}; }
+
 private:
     VkExtent2D extent_;
 };

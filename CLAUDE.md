@@ -36,18 +36,22 @@ cd platform/windows
 - CMake 3.22.1+
 - FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
-- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks and all 11 unit tests. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no automated suite yet; the GPU probes exit 77 without shaders/assets. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
+- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks, 14 unit tests, 4 GPU tests, validation, ASan+UBSan, soak and libFuzzer. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no golden suite; the GPU probes exit 77 without shaders/assets and assert structural pixels. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
 
 ## Shader Compilation
 
-Shaders are written in **Slang** and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe), via two `vce_compile_slang()` calls (`cmake/VceShaders.cmake`) per platform CMakeLists: one pointing at `shaders_src/` for vk_canvas's own 6 shaders (`overlay_vert/frag`, `image_vert/frag`, `shape_vert/frag` — see "SDF Shape Pipeline" below), one pointing at `first_party/vulkan_font_engine/shaders_src/` for the shaders vk_canvas shares with the font engine (`composite_vert/frag`, `tiling`, `coverage`, plus `msdf_vert/frag` for consumers that need them — see that repo's own CLAUDE.md). These used to be hand-duplicated in both `shaders_src/` directories; that drifted silently once (a whitespace difference), so vk_canvas now sources them from the font engine's copy instead of maintaining a second one.
+Shaders are written in **Slang** and compiled to SPIR-V into `platform/android/app/src/main/assets/shaders/` (packaged into the APK) or `platform/windows/build/assets/shaders/` (next to the Windows exe), via `vce_compile_slang()` / `vce_compile_slang_stage()` (`cmake/VceShaders.cmake`) per platform CMakeLists: one call pointing at `shaders_src/` for vk_canvas's own 6 graphics shaders (`overlay_vert/frag`, `image_vert/frag`, `shape_vert/frag` — see "SDF Shape Pipeline" below), one pointing at `first_party/vulkan_font_engine/shaders_src/` for the shared graphics shaders (`composite_vert/frag`, plus `msdf_vert/frag` for consumers that need them), and one `vce_compile_slang_stage(... compute ...)` for `tiling` and `coverage`. These used to be hand-duplicated in both `shaders_src/` directories; that drifted silently once (a whitespace difference), so vk_canvas now sources them from the font engine's copy instead of maintaining a second one.
+
+The compile path is intentionally `-emit-spirv-via-glsl -profile glsl_450`: Slang's direct SPIR-V emission targets version 1.5, which a Vulkan 1.1 instance/device rejects (validation VUID-VkShaderModuleCreateInfo-pCode-08737). glslang emits SPIR-V 1.3, valid for the 1.1 floor this engine requests. The graphics stage comes from each entry point's `[shader(...)]`; compute must be named with `-stage compute`.
 
 **Note:** `platform/windows/CMakeLists.txt`'s own standalone demo build does not currently compile `msdf_vert/frag` (only `composite/tiling/coverage` from the shared set) — its demo doesn't call `Renderer::initMsdf`. A consumer app that wants MSDF text (like `matrix_player_windows`, which lists `msdf_vert`/`msdf_frag` in its own top-level `CMakeLists.txt`) must add those two names to its own `vce_compile_slang()` call.
 
 To recompile a shader manually:
 
 ```bash
-slangc.exe <shader>.slang -target spirv -o <output>.spv
+slangc <shader>.slang -entry main -target spirv -emit-spirv-via-glsl \
+    -profile glsl_450 -I <shader dir> -I <repo>/shaders_src -o <output>.spv
+# compute shaders also need: -stage compute
 ```
 
 ## Architecture

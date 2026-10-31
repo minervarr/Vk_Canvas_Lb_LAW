@@ -32,6 +32,12 @@ bool Renderer::Impl::ensureShapeVboCapacity(uint32_t frame, uint32_t verts) {
     va.allocationSize = vr.size;
     va.memoryTypeIndex = find_memory_type(vr.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (va.memoryTypeIndex == UINT32_MAX) {
+        LOGE("shape VBO: no host-visible memory type for %u vertices", want);
+        vkDestroyBuffer(device_, shapeVbo_[frame], nullptr);
+        shapeVbo_[frame] = VK_NULL_HANDLE;
+        return false;
+    }
     if (vkAllocateMemory(device_, &va, nullptr, &shapeVboMemory_[frame]) != VK_SUCCESS) {
         LOGE("shape VBO: cannot allocate %llu bytes for %u vertices",
              (unsigned long long)bytes, want);
@@ -39,8 +45,16 @@ bool Renderer::Impl::ensureShapeVboCapacity(uint32_t frame, uint32_t verts) {
         shapeVbo_[frame] = VK_NULL_HANDLE;
         return false;
     }
-    vkBindBufferMemory(device_, shapeVbo_[frame], shapeVboMemory_[frame], 0);
-    vkMapMemory(device_, shapeVboMemory_[frame], 0, bytes, 0, &shapeVboMapped_[frame]);
+    if (!vce_vk_ok(vkBindBufferMemory(device_, shapeVbo_[frame], shapeVboMemory_[frame], 0),
+                   "vkBindBufferMemory(shape VBO)", __FILE__, __LINE__)
+        || !vce_vk_ok(vkMapMemory(device_, shapeVboMemory_[frame], 0, bytes, 0, &shapeVboMapped_[frame]),
+                      "vkMapMemory(shape VBO)", __FILE__, __LINE__)) {
+        vkDestroyBuffer(device_, shapeVbo_[frame], nullptr);
+        shapeVbo_[frame] = VK_NULL_HANDLE;
+        vkFreeMemory(device_, shapeVboMemory_[frame], nullptr);
+        shapeVboMemory_[frame] = VK_NULL_HANDLE;
+        return false;
+    }
     shapeVboVerts_[frame] = want;
     return true;
 }
@@ -58,7 +72,7 @@ void Renderer::Impl::initShapes() {
     pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &pcr;
-    vkCreatePipelineLayout(device_, &pl, nullptr, &shapePipelineLayout_);
+    VCE_VK_CHECK_THROW(vkCreatePipelineLayout(device_, &pl, nullptr, &shapePipelineLayout_));
 
     auto loadShader = [this](const char* path) -> VkShaderModule {
         std::vector<uint8_t> code;
@@ -67,8 +81,9 @@ void Renderer::Impl::initShapes() {
         ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         ci.codeSize = code.size();
         ci.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        vkCreateShaderModule(device_, &ci, nullptr, &mod);
+        VkShaderModule mod = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(device_, &ci, nullptr, &mod) != VK_SUCCESS)
+            LOGE("shape shader module creation failed: %s", path);
         return mod;
     };
     VkShaderModule vs = loadShader("shaders/shape_vert.spv");

@@ -204,6 +204,8 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_pure_test(gesture_test input/gesture.cc)
     vce_add_pure_test(text_buffer_test base/text_buffer.cc)
     vce_add_pure_test(undo_redo_test base/undo_redo.cc base/text_buffer.cc)
+    # Pure mapping of VkResult to the recovery action draw() takes.
+    vce_add_pure_test(vk_result_test)
     # Canvas is an emitter; the test inspects the float records directly.
     # canvas.cc references the font engine's text helpers, so link that, not
     # the whole renderer.
@@ -271,8 +273,22 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(gpu_smoke_test PRIVATE -Wall -Wextra)
     endif()
 
+    # Renderer recovery paths: resize, minimize/restore, surface loss/regain
+    # and repeated create/destroy. Headless, so it needs no window.
+    add_executable(renderer_lifecycle_test tests/renderer_lifecycle_test.cc)
+    target_include_directories(renderer_lifecycle_test PRIVATE ${VCE_CORE_INCLUDE_DIRS})
+    target_compile_features(renderer_lifecycle_test PRIVATE cxx_std_17)
+    target_compile_definitions(renderer_lifecycle_test PRIVATE
+        VCE_LIFECYCLE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/")
+    target_link_libraries(renderer_lifecycle_test PRIVATE vk_canvas_core)
+    if(MSVC)
+        target_compile_options(renderer_lifecycle_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(renderer_lifecycle_test PRIVATE -Wall -Wextra)
+    endif()
+
     if(BUILD_TESTING)
-        foreach(gpu_test text_edge_probe shape_outline_probe gpu_smoke_test)
+        foreach(gpu_test text_edge_probe shape_outline_probe gpu_smoke_test renderer_lifecycle_test)
             add_test(NAME ${gpu_test} COMMAND $<TARGET_FILE:${gpu_test}>)
             set_tests_properties(${gpu_test} PROPERTIES
                 LABELS gpu

@@ -22,8 +22,9 @@ public:
     // Attach to an existing device + render pass. cmdPool/queue are reused
     // (borrowed, not owned) for the one-shot upload command buffer in
     // create_texture() — Renderer already owns a graphics command pool/queue
-    // by the time this is called.
-    void init(VkDevice device, VkPhysicalDevice physicalDevice,
+    // by the time this is called. Returns false when a required shader asset
+    // is missing; Vulkan allocation failures throw (constructor-only path).
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
               VkCommandPool cmdPool, VkQueue queue,
               OutputEncode encode = OutputEncode::Srgb);

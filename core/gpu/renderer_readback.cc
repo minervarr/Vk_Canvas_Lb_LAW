@@ -4,6 +4,7 @@
 
 bool Renderer::Impl::readbackLastFrame(std::vector<uint8_t>& rgba_out,
                                  uint32_t& out_w, uint32_t& out_h) {
+    if (!device_ || device_lost_ || surface_lost_) return false;
     if (last_drawn_image_index_ >= swapchain_images_.size()) return false;
 
     // The contract is tightly packed RGBA8, PNG-ready with no swizzle, which
@@ -20,7 +21,8 @@ bool Renderer::Impl::readbackLastFrame(std::vector<uint8_t>& rgba_out,
     VkImage image = swapchain_images_[last_drawn_image_index_];
 
     // All draw/present work must be finished before we touch the image.
-    vkDeviceWaitIdle(device_);
+    if (!vce_vk_ok(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle(readback)", __FILE__, __LINE__))
+        return false;
 
     const VkDeviceSize bytes = VkDeviceSize(width_) * height_ * 4;
 
@@ -43,11 +45,18 @@ bool Renderer::Impl::readbackLastFrame(std::vector<uint8_t>& rgba_out,
         ai.memoryTypeIndex = find_memory_type(
             req.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (ai.memoryTypeIndex == UINT32_MAX) {
+            LOGE("readbackLastFrame: no host-visible memory type");
+            vkDestroyBuffer(device_, staging, nullptr);
+            return false;
+        }
         if (vkAllocateMemory(device_, &ai, nullptr, &staging_mem) != VK_SUCCESS) {
             vkDestroyBuffer(device_, staging, nullptr);
             return false;
         }
-        vkBindBufferMemory(device_, staging, staging_mem, 0);
+        VCE_VK_CHECK_OR(vkBindBufferMemory(device_, staging, staging_mem, 0),
+                        { vkDestroyBuffer(device_, staging, nullptr);
+                          vkFreeMemory(device_, staging_mem, nullptr); return false; });
     }
 
     // One-shot command buffer: barrier image PRESENT_SRC -> TRANSFER_SRC,
@@ -58,12 +67,21 @@ bool Renderer::Impl::readbackLastFrame(std::vector<uint8_t>& rgba_out,
     cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(device_, &cai, &cmd);
+    if (vkAllocateCommandBuffers(device_, &cai, &cmd) != VK_SUCCESS) {
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
 
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bi);
+    if (vkBeginCommandBuffer(cmd, &bi) != VK_SUCCESS) {
+        vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
 
     auto barrier = [&](VkImageLayout from, VkImageLayout to,
                        VkAccessFlags src_access, VkAccessFlags dst_access,
@@ -99,22 +117,47 @@ bool Renderer::Impl::readbackLastFrame(std::vector<uint8_t>& rgba_out,
             VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-    vkEndCommandBuffer(cmd);
+    if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+        vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
 
     VkFenceCreateInfo fci{};
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VkFence fence = VK_NULL_HANDLE;
-    vkCreateFence(device_, &fci, nullptr, &fence);
+    if (vkCreateFence(device_, &fci, nullptr, &fence) != VK_SUCCESS) {
+        vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
 
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    vkQueueSubmit(queue_, 1, &si, fence);
-    vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+    const bool submitted =
+        vce_vk_ok(vkQueueSubmit(queue_, 1, &si, fence), "vkQueueSubmit(readback)", __FILE__, __LINE__)
+        && vce_vk_ok(vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX),
+                     "vkWaitForFences(readback)", __FILE__, __LINE__);
+    if (!submitted) {
+        vkDestroyFence(device_, fence, nullptr);
+        vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
 
     void* mapped = nullptr;
-    vkMapMemory(device_, staging_mem, 0, bytes, 0, &mapped);
+    if (vkMapMemory(device_, staging_mem, 0, bytes, 0, &mapped) != VK_SUCCESS) {
+        vkDestroyFence(device_, fence, nullptr);
+        vkFreeCommandBuffers(device_, cmd_pool_, 1, &cmd);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, staging_mem, nullptr);
+        return false;
+    }
     rgba_out.resize(size_t(bytes));
     std::memcpy(rgba_out.data(), mapped, size_t(bytes));
     vkUnmapMemory(device_, staging_mem);

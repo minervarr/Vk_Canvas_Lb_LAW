@@ -1,4 +1,5 @@
 #include "headless.hh"
+#include "vk_check.hh"
 
 #include <cstring>
 #include <vector>
@@ -6,9 +7,12 @@
 bool headless_surface_supported()
 {
     uint32_t count = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS)
+        return false;
     std::vector<VkExtensionProperties> exts(count);
-    vkEnumerateInstanceExtensionProperties(nullptr, &count, exts.data());
+    if (count > 0 &&
+        vkEnumerateInstanceExtensionProperties(nullptr, &count, exts.data()) != VK_SUCCESS)
+        return false;
     for (const auto& e : exts)
         if (std::strcmp(e.extensionName, "VK_EXT_headless_surface") == 0)
             return true;

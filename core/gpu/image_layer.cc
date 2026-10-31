@@ -1,5 +1,6 @@
 #include "image_layer.hh"
 #include "log.hh"
+#include "vk_check.hh"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -37,7 +38,7 @@ VkShaderModule ImageLayer::loadShader(const char* path) {
     return mod;
 }
 
-void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
+bool ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                        AssetReader& assets, VkRenderPass renderPass,
                        VkCommandPool cmdPool, VkQueue queue,
                        OutputEncode encode) {
@@ -56,7 +57,8 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     sli.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     sli.bindingCount = 1;
     sli.pBindings    = &b;
-    vkCreateDescriptorSetLayout(device_, &sli, nullptr, &descLayout_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorSetLayout(device_, &sli, nullptr, &descLayout_),
+                    return false);
 
     VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures};
     VkDescriptorPoolCreateInfo pci{};
@@ -65,7 +67,7 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     pci.poolSizeCount = 1;
     pci.pPoolSizes    = &ps;
     pci.maxSets       = kMaxTextures;
-    vkCreateDescriptorPool(device_, &pci, nullptr, &descPool_);
+    VCE_VK_CHECK_OR(vkCreateDescriptorPool(device_, &pci, nullptr, &descPool_), return false);
 
     // ONE range covering both stages rather than two ranges sharing an offset:
     // the shaders declare a single push block each and Slang lays it out by
@@ -85,11 +87,17 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     pli.pSetLayouts            = &descLayout_;
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges    = &pcRange;
-    vkCreatePipelineLayout(device_, &pli, nullptr, &pipelineLayout_);
+    VCE_VK_CHECK_OR(vkCreatePipelineLayout(device_, &pli, nullptr, &pipelineLayout_),
+                    return false);
 
     VkShaderModule vm = loadShader("shaders/image_vert.spv");
     VkShaderModule fm = loadShader("shaders/image_frag.spv");
-    if (!vm || !fm) { LOGE("image layer shaders missing"); return; }
+    if (!vm || !fm) {
+        LOGE("image layer shaders missing");
+        if (vm) vkDestroyShaderModule(device_, vm, nullptr);
+        if (fm) vkDestroyShaderModule(device_, fm, nullptr);
+        return false;
+    }
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -139,11 +147,17 @@ void ImageLayer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     gpci.pMultisampleState   = &ms; gpci.pColorBlendState    = &cb;
     gpci.pDynamicState       = &dy; gpci.layout = pipelineLayout_;
     gpci.renderPass          = renderPass; gpci.subpass = 0;
-    vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpci, nullptr, &pipeline_);
+    const VkResult created =
+        vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpci, nullptr, &pipeline_);
     vkDestroyShaderModule(device_, vm, nullptr);
     vkDestroyShaderModule(device_, fm, nullptr);
+    if (!vce_vk_ok(created, "vkCreateGraphicsPipelines(image)", __FILE__, __LINE__)) {
+        pipeline_ = VK_NULL_HANDLE;
+        return false;
+    }
 
     LOGI("ImageLayer ready");
+    return true;
 }
 
 TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
@@ -179,32 +193,49 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     }
     VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * bytes_per_pixel(fmt);
 
-    // Staging buffer (host-visible) holding the source pixels.
+    // Every allocation below funnels its failure through abandon(), which
+    // frees whatever this call has created so far. `rec` is declared first so
+    // the partial record is visible to it.
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    TextureRec rec{};
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    auto abandon = [&]() -> TextureHandle {
+        if (cmd) vkFreeCommandBuffers(device_, cmdPool_, 1, &cmd);
+        freeRec(rec);
+        if (staging)    vkDestroyBuffer(device_, staging, nullptr);
+        if (stagingMem) vkFreeMemory(device_, stagingMem, nullptr);
+        return kInvalidTexture;
+    };
+
+    // Staging buffer (host-visible) holding the source pixels.
     {
         VkBufferCreateInfo bi{};
         bi.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bi.size        = size;
         bi.usage       = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCreateBuffer(device_, &bi, nullptr, &staging);
+        VCE_VK_CHECK_OR(vkCreateBuffer(device_, &bi, nullptr, &staging), return abandon());
         VkMemoryRequirements reqs{};
         vkGetBufferMemoryRequirements(device_, staging, &reqs);
+        const uint32_t mem_type = findMemoryType(
+            reqs.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (mem_type == UINT32_MAX) {
+            LOGE("create_texture: no host-visible memory type for staging");
+            return abandon();
+        }
         VkMemoryAllocateInfo ai{};
         ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         ai.allocationSize  = reqs.size;
-        ai.memoryTypeIndex = findMemoryType(reqs.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device_, &ai, nullptr, &stagingMem);
-        vkBindBufferMemory(device_, staging, stagingMem, 0);
+        ai.memoryTypeIndex = mem_type;
+        VCE_VK_CHECK_OR(vkAllocateMemory(device_, &ai, nullptr, &stagingMem), return abandon());
+        VCE_VK_CHECK_OR(vkBindBufferMemory(device_, staging, stagingMem, 0), return abandon());
         void* mapped = nullptr;
-        vkMapMemory(device_, stagingMem, 0, size, 0, &mapped);
+        VCE_VK_CHECK_OR(vkMapMemory(device_, stagingMem, 0, size, 0, &mapped), return abandon());
         std::memcpy(mapped, rgba, static_cast<size_t>(size));
         vkUnmapMemory(device_, stagingMem);
     }
-
-    TextureRec rec{};
 
     // Full mip chain (mips=true): for textures uploaded larger than they're
     // drawn (fullscreen-quality art shown as a thumbnail), raw bilinear
@@ -231,16 +262,22 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
                              VK_IMAGE_USAGE_SAMPLED_BIT;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-    vkCreateImage(device_, &imgInfo, nullptr, &rec.image);
+    VCE_VK_CHECK_OR(vkCreateImage(device_, &imgInfo, nullptr, &rec.image), return abandon());
 
     VkMemoryRequirements imgReqs{};
     vkGetImageMemoryRequirements(device_, rec.image, &imgReqs);
+    const uint32_t img_type = findMemoryType(imgReqs.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (img_type == UINT32_MAX) {
+        LOGE("create_texture: no device-local memory type for the image");
+        return abandon();
+    }
     VkMemoryAllocateInfo imgAlloc{};
     imgAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     imgAlloc.allocationSize  = imgReqs.size;
-    imgAlloc.memoryTypeIndex = findMemoryType(imgReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device_, &imgAlloc, nullptr, &rec.memory);
-    vkBindImageMemory(device_, rec.image, rec.memory, 0);
+    imgAlloc.memoryTypeIndex = img_type;
+    VCE_VK_CHECK_OR(vkAllocateMemory(device_, &imgAlloc, nullptr, &rec.memory), return abandon());
+    VCE_VK_CHECK_OR(vkBindImageMemory(device_, rec.image, rec.memory, 0), return abandon());
 
     // View/sampler/descriptor set BEFORE submitting any GPU work: the only
     // fallible step (descriptor pool exhaustion) then happens while nothing
@@ -251,7 +288,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     viewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format           = vkfmt;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
-    vkCreateImageView(device_, &viewInfo, nullptr, &rec.view);
+    VCE_VK_CHECK_OR(vkCreateImageView(device_, &viewInfo, nullptr, &rec.view), return abandon());
 
     VkSamplerCreateInfo sampInfo{};
     sampInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -263,7 +300,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(device_, &sampInfo, nullptr, &rec.sampler);
+    VCE_VK_CHECK_OR(vkCreateSampler(device_, &sampInfo, nullptr, &rec.sampler), return abandon());
 
     VkDescriptorSetAllocateInfo dsAlloc{};
     dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -272,13 +309,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     dsAlloc.pSetLayouts        = &descLayout_;
     if (vkAllocateDescriptorSets(device_, &dsAlloc, &rec.descSet) != VK_SUCCESS) {
         LOGE("create_texture: descriptor pool exhausted (max %u textures live)", kMaxTextures);
-        vkDestroySampler(device_, rec.sampler, nullptr);
-        vkDestroyImageView(device_, rec.view, nullptr);
-        vkDestroyImage(device_, rec.image, nullptr);
-        vkFreeMemory(device_, rec.memory, nullptr);
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMem, nullptr);
-        return kInvalidTexture;
+        return abandon();
     }
 
     VkDescriptorImageInfo ii{rec.sampler, rec.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -296,13 +327,12 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     cbAlloc.commandPool        = cmdPool_;
     cbAlloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbAlloc.commandBufferCount = 1;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(device_, &cbAlloc, &cmd);
+    VCE_VK_CHECK_OR(vkAllocateCommandBuffers(device_, &cbAlloc, &cmd), return abandon());
 
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &begin);
+    VCE_VK_CHECK_OR(vkBeginCommandBuffer(cmd, &begin), return abandon());
 
     // All mip levels start UNDEFINED -> TRANSFER_DST (level 0 gets the copy
     // below; the rest are blit destinations in the mip-chain loop).
@@ -379,7 +409,7 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &lastToRead);
 
-    vkEndCommandBuffer(cmd);
+    VCE_VK_CHECK_OR(vkEndCommandBuffer(cmd), return abandon());
 
     // Fenced submit, no queue idle: same-queue submission order already
     // guarantees this upload completes before any later frame's command
@@ -393,13 +423,17 @@ TextureHandle ImageLayer::create_texture(const uint8_t* rgba, uint32_t w, uint32
     pu.stagingMem = stagingMem;
     VkFenceCreateInfo fci{};
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    vkCreateFence(device_, &fci, nullptr, &pu.fence);
+    VCE_VK_CHECK_OR(vkCreateFence(device_, &fci, nullptr, &pu.fence), return abandon());
 
     VkSubmitInfo submit{};
     submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers    = &cmd;
-    vkQueueSubmit(queue_, 1, &submit, pu.fence);
+    if (!vce_vk_ok(vkQueueSubmit(queue_, 1, &submit, pu.fence),
+                   "vkQueueSubmit(texture upload)", __FILE__, __LINE__)) {
+        vkDestroyFence(device_, pu.fence, nullptr);
+        return abandon();
+    }
     pendingUploads_.push_back(pu);
 
     // Opportunistically reap any earlier uploads whose fences have signaled

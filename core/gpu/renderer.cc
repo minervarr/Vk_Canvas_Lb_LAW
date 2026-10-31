@@ -2,6 +2,16 @@
 // live in renderer_api.cc; this file owns one subsystem of the frame path.
 #include "renderer_impl.hh"
 
+bool Renderer::Impl::check_result(VkResult result, const char* what) {
+    if (result == VK_SUCCESS) return true;
+    if (result == VK_ERROR_DEVICE_LOST) device_lost_ = true;
+    if (result == VK_ERROR_SURFACE_LOST_KHR) surface_lost_ = true;
+    LOGE("%s: VkResult %d%s%s", what, static_cast<int>(result),
+         device_lost_ ? " (device lost)" : "",
+         surface_lost_ ? " (surface lost)" : "");
+    return false;
+}
+
 Renderer::Impl::Impl(SurfaceProvider& surface, AssetReader& assets,
                    uint32_t desiredSwapchainImages,
                    OutputTarget requestedOutput,
@@ -10,25 +20,35 @@ Renderer::Impl::Impl(SurfaceProvider& surface, AssetReader& assets,
       desired_swapchain_images_(desiredSwapchainImages),
       requested_output_(requestedOutput),
       present_policy_(presentPolicy) {
-    VkExtent2D ext = surface_provider_.extent();
-    width_  = ext.width;
-    height_ = ext.height;
-    create_instance();
-    create_surface();
-    pick_physical_device();
-    create_logical_device();
-    resolve_output_target();
-    resolve_text_composite();
-    create_swapchain();
-    create_render_pass();
-    create_framebuffers();
-    create_command_buffers();
-    create_sync_objects();
-    overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_,
-                  output_.encode);
-    image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_,
-                      output_.encode);
-    initShapes();
+    try {
+        VkExtent2D ext = surface_provider_.extent();
+        width_  = ext.width;
+        height_ = ext.height;
+        create_instance();
+        create_surface();
+        pick_physical_device();
+        create_logical_device();
+        resolve_output_target();
+        resolve_text_composite();
+        if (!create_swapchain())
+            throw std::runtime_error("swapchain creation failed");
+        create_render_pass();
+        create_framebuffers();
+        create_command_buffers();
+        create_sync_objects();
+        if (!overlay_.init(device_, physical_dev_, assets_, render_pass_, width_, height_,
+                           output_.encode))
+            throw std::runtime_error("OverlayRasterizer::init failed (shader assets?)");
+        if (!image_layer_.init(device_, physical_dev_, assets_, render_pass_, cmd_pool_, queue_,
+                               output_.encode))
+            throw std::runtime_error("ImageLayer::init failed (shader assets?)");
+        initShapes();
+    } catch (...) {
+        // A constructor that throws never runs ~Impl. Destroy whatever the
+        // earlier stages created before unwinding, or every handle leaks.
+        cleanup();
+        throw;
+    }
 
     LOGI("Renderer ready (%ux%u)", width_, height_);
 }
@@ -44,6 +64,9 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
                     const std::vector<float>& shapeVerts,
                     const std::vector<float>& frontShapeVerts) {
     if (!device_) return;
+    // Terminal states: touching the swapchain/device again is UB. resume only
+    // through recreate_surface() (surface) or a new Renderer (device).
+    if (device_lost_ || surface_lost_) return;
     int64_t draw_t0 = now_ns();
 
     const uint32_t frame = frame_index_;
@@ -57,9 +80,16 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     // output image) is single-buffered — when this frame uses it, ALSO wait
     // out the other frame slot, restoring the old fully-serialized behavior
     // for exactly the frames that need it.
-    vkWaitForFences(device_, 1, &in_flight_fences_[frame], VK_TRUE, UINT64_MAX);
-    if (!overlay_curves.empty())
-        vkWaitForFences(device_, 1, &in_flight_fences_[1 - frame], VK_TRUE, UINT64_MAX);
+    if (!check_result(vkWaitForFences(device_, 1, &in_flight_fences_[frame], VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences")) {
+        // A fence wait failing (device lost / timeout) leaves this frame slot's
+        // state unknown; stop rather than record into it.
+        return;
+    }
+    if (!overlay_curves.empty() &&
+        !check_result(vkWaitForFences(device_, 1, &in_flight_fences_[1 - frame], VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(overlay)"))
+        return;
     int64_t t_afterwait = now_ns();
 
     // Retired textures may only be freed once EVERY submitted command buffer
@@ -205,21 +235,32 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
             // while crossing between monitors. (The failed acquire left the
             // semaphore unsignaled, so reusing it for the retry is valid.)
             recreate_swapchain();
+            if (surface_lost_) return;
             result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                            image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
         }
         // SURFACE_LOST and DEVICE_LOST leave image_index undefined. Submitting
-        // that index paints a black frame and does not come back. Skip the
-        // frame; a new window rebuilds the swapchain.
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            LOGI("acquire skipped (VkResult %d)", (int)result);
+        // that index paints a black frame and does not come back. Record the
+        // terminal state and skip; the host rebuilds the surface or renderer.
+        switch (vce_vk_classify(result)) {
+        case VceVkResult::Success:
+        case VceVkResult::Suboptimal:
+            break;  // image usable; SUBOPTIMAL triggers the rebuild on present
+        case VceVkResult::OutOfDate:
+            LOGE("acquire: still out of date after a swapchain rebuild; skipping the frame");
+            return;
+        case VceVkResult::SurfaceLost:
+            surface_lost_ = true;
+            LOGE("acquire: surface lost; call recreate_surface() or rebuild the Renderer");
+            return;
+        case VceVkResult::DeviceLost:
+            device_lost_ = true;
+            LOGE("acquire: device lost; rebuild the Renderer");
+            return;
+        case VceVkResult::Error:
+            LOGE("acquire skipped (VkResult %d)", (int)result);
             return;
         }
-        // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
-        // render and present it, and let the present side's SUBOPTIMAL trigger
-        // the recreate afterward. The old code bailed here, which both dropped
-        // the frame AND left the acquire semaphore signaled (invalid to reuse
-        // on the next acquire).
     }
     int64_t t_afteracquire = now_ns();
 
@@ -227,17 +268,33 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     // frame — wait out whichever fence last submitted it before re-recording.
     if (image_index < image_fences_.size() &&
         image_fences_[image_index] != VK_NULL_HANDLE &&
-        image_fences_[image_index] != in_flight_fences_[frame])
-        vkWaitForFences(device_, 1, &image_fences_[image_index], VK_TRUE, UINT64_MAX);
+        image_fences_[image_index] != in_flight_fences_[frame] &&
+        !check_result(vkWaitForFences(device_, 1, &image_fences_[image_index], VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(image)"))
+        return;
     if (image_index < image_fences_.size())
         image_fences_[image_index] = in_flight_fences_[frame];
 
-    vkResetFences(device_, 1, &in_flight_fences_[frame]);
-    vkResetCommandBuffer(cmd_buffers_[image_index], 0);
+    // Past this point the acquire semaphore is signaled. A failure must stop
+    // the frame AND stop the renderer: reusing a signaled binary semaphore on
+    // the next acquire is invalid, and the only clean recovery is a rebuild.
+    auto frame_failed = [this, reuse_acquired_image](VkResult r, const char* what) {
+        if (check_result(r, what)) return false;
+        // A real acquire leaves the semaphore signaled; the next acquire would
+        // reuse it, which is invalid. Only a rebuild recovers that state.
+        if (!reuse_acquired_image) device_lost_ = true;
+        return true;
+    };
+    if (frame_failed(vkResetFences(device_, 1, &in_flight_fences_[frame]), "vkResetFences"))
+        return;
+    if (frame_failed(vkResetCommandBuffer(cmd_buffers_[image_index], 0), "vkResetCommandBuffer"))
+        return;
 
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    vkBeginCommandBuffer(cmd_buffers_[image_index], &begin_info);
+    if (frame_failed(vkBeginCommandBuffer(cmd_buffers_[image_index], &begin_info),
+                     "vkBeginCommandBuffer"))
+        return;
 
     if (!overlay_curves.empty()) {
         overlay_.recordDispatch(cmd_buffers_[image_index]);
@@ -461,7 +518,8 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
             recordMsdfDraw(cmd_buffers_[image_index], frame);
         vkCmdEndRenderPass(cmd_buffers_[image_index]);
     }
-    vkEndCommandBuffer(cmd_buffers_[image_index]);
+    if (frame_failed(vkEndCommandBuffer(cmd_buffers_[image_index]), "vkEndCommandBuffer"))
+        return;
 
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -481,7 +539,9 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     submit_info.signalSemaphoreCount = present_enabled_ ? 1 : 0;
     submit_info.pSignalSemaphores = signal_sems;
 
-    vkQueueSubmit(queue_, 1, &submit_info, in_flight_fences_[frame]);
+    if (frame_failed(vkQueueSubmit(queue_, 1, &submit_info, in_flight_fences_[frame]),
+                     "vkQueueSubmit"))
+        return;
     frame_index_ = 1 - frame;
     last_drawn_image_index_ = image_index;   // for readbackLastFrame()
 
@@ -497,9 +557,24 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     VkResult present_result = VK_SUCCESS;
     if (present_enabled_) {
         present_result = vkQueuePresentKHR(queue_, &present_info);
-        if (present_result == VK_ERROR_OUT_OF_DATE_KHR ||
-            present_result == VK_SUBOPTIMAL_KHR) {
+        switch (vce_vk_classify(present_result)) {
+        case VceVkResult::Success:
+            break;
+        case VceVkResult::Suboptimal:
+        case VceVkResult::OutOfDate:
             recreate_swapchain();
+            break;
+        case VceVkResult::SurfaceLost:
+            surface_lost_ = true;
+            LOGE("present: surface lost; call recreate_surface() or rebuild the Renderer");
+            break;
+        case VceVkResult::DeviceLost:
+            device_lost_ = true;
+            LOGE("present: device lost; rebuild the Renderer");
+            break;
+        case VceVkResult::Error:
+            LOGE("present failed (VkResult %d)", (int)present_result);
+            break;
         }
     }
 
@@ -531,6 +606,8 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
 }
 
 void Renderer::Impl::cleanup() {
+    // Teardown ignores VkResult: after device loss the wait fails, and there is
+    // nothing to recover — destroying the handles is still correct.
     if (device_) vkDeviceWaitIdle(device_);
     overlay_.cleanup();
     image_layer_.cleanup();

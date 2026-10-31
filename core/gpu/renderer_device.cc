@@ -10,7 +10,8 @@ uint32_t Renderer::Impl::find_memory_type(uint32_t type_filter, VkMemoryProperty
             return i;
         }
     }
-    return 0;
+    // Index 0 is a real type; returning it here was a silent invalid bind.
+    return UINT32_MAX;
 }
 
 void Renderer::Impl::create_instance() {
@@ -27,9 +28,10 @@ void Renderer::Impl::create_instance() {
     // instance creation would fail. VK_EXT_swapchain_colorspace exposes HDR
     // colorspaces (BT2020/HLG/PQ); absence just means we fall back to SDR.
     uint32_t ext_count = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
+    VCE_VK_CHECK_THROW(vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr));
     std::vector<VkExtensionProperties> avail(ext_count);
-    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, avail.data());
+    if (ext_count > 0)
+        VCE_VK_CHECK_THROW(vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, avail.data()));
     auto has = [&](const char* name) {
         for (auto& e : avail)
             if (std::strcmp(e.extensionName, name) == 0) return true;
@@ -52,9 +54,10 @@ void Renderer::Impl::create_instance() {
     // Debug-only: request the Khronos validation layer when it is installed.
     // Missing layer is not fatal — a build machine without the SDK still runs.
     uint32_t layer_count = 0;
-    vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+    VCE_VK_CHECK_THROW(vkEnumerateInstanceLayerProperties(&layer_count, nullptr));
     std::vector<VkLayerProperties> layers(layer_count);
-    vkEnumerateInstanceLayerProperties(&layer_count, layers.data());
+    if (layer_count > 0)
+        VCE_VK_CHECK_THROW(vkEnumerateInstanceLayerProperties(&layer_count, layers.data()));
     for (const auto& layer : layers) {
         if (std::strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") == 0) {
             ci.enabledLayerCount = 1;
@@ -68,8 +71,10 @@ void Renderer::Impl::create_instance() {
     ci.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
     ci.ppEnabledExtensionNames = extensions.data();
 
-    if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS)
+    if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) {
+        instance_ = VK_NULL_HANDLE;
         throw std::runtime_error("vkCreateInstance failed");
+    }
 }
 
 void Renderer::Impl::create_surface() {
@@ -90,10 +95,10 @@ static const char* deviceTypeName(VkPhysicalDeviceType type) {
 
 void Renderer::Impl::pick_physical_device() {
     uint32_t count = 0;
-    vkEnumeratePhysicalDevices(instance_, &count, nullptr);
+    VCE_VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &count, nullptr));
     if (count == 0) throw std::runtime_error("no Vulkan physical devices");
     std::vector<VkPhysicalDevice> devs(count);
-    vkEnumeratePhysicalDevices(instance_, &count, devs.data());
+    VCE_VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &count, devs.data()));
 
     // A device is usable only if it can PRESENT to this surface. Taking devs[0]
     // used to be the whole policy, which on a machine whose first device cannot
@@ -109,9 +114,10 @@ void Renderer::Impl::pick_physical_device() {
 
     for (VkPhysicalDevice dev : devs) {
         uint32_t ext_count = 0;
-        vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, nullptr);
+        VCE_VK_CHECK_THROW(vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, nullptr));
         std::vector<VkExtensionProperties> exts(ext_count);
-        vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, exts.data());
+        if (ext_count > 0)
+            VCE_VK_CHECK_THROW(vkEnumerateDeviceExtensionProperties(dev, nullptr, &ext_count, exts.data()));
         bool has_swapchain = false;
         for (const auto& e : exts) {
             if (!std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
@@ -183,9 +189,10 @@ void Renderer::Impl::pick_physical_device() {
     caps_.max_storage_buffer_range          = props.limits.maxStorageBufferRange;
 
     uint32_t ext_count = 0;
-    vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, nullptr);
+    VCE_VK_CHECK_THROW(vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, nullptr));
     std::vector<VkExtensionProperties> exts(ext_count);
-    vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, exts.data());
+    if (ext_count > 0)
+        VCE_VK_CHECK_THROW(vkEnumerateDeviceExtensionProperties(physical_dev_, nullptr, &ext_count, exts.data()));
     for (auto& e : exts) {
         if (!std::strcmp(e.extensionName, "VK_KHR_sampler_ycbcr_conversion"))
             caps_.has_sampler_ycbcr_conversion = true;
@@ -231,21 +238,51 @@ void Renderer::Impl::create_logical_device() {
     });
 #endif
 
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(physical_dev_, &supported);
+    VkPhysicalDeviceVulkan11Features supported11{};
+    supported11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    VkPhysicalDeviceFeatures2 supported2{};
+    supported2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    supported2.pNext = &supported11;
+    vkGetPhysicalDeviceFeatures2(physical_dev_, &supported2);
+
+    // Enable only what this device reports. `samplerAnisotropy` used to be
+    // requested unconditionally, which is invalid usage on a device without it.
     VkPhysicalDeviceFeatures features{};
-    features.samplerAnisotropy = VK_TRUE;
+    features.samplerAnisotropy = supported.samplerAnisotropy;
+    features.shaderStorageImageReadWithoutFormat =
+        supported.shaderStorageImageReadWithoutFormat;
+    features.shaderStorageImageWriteWithoutFormat =
+        supported.shaderStorageImageWriteWithoutFormat;
+
+    // The compiled shaders declare the SPIR-V DrawParameters capability (any
+    // vertex shader that uses the vertex index does under glslang). It is an
+    // optional Vulkan 1.1 feature, so it has to be enabled explicitly even when
+    // the device supports it.
+    VkPhysicalDeviceVulkan11Features features11{};
+    features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    features11.shaderDrawParameters = supported11.shaderDrawParameters;
+    if (!supported11.shaderDrawParameters)
+        LOGE("Device does not support shaderDrawParameters; shaders may be rejected");
 
     VkDeviceCreateInfo ci{};
     ci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    ci.pNext                   = &features11;
     ci.queueCreateInfoCount    = 1;
     ci.pQueueCreateInfos       = &qci;
     ci.enabledExtensionCount   = static_cast<uint32_t>(dev_exts.size());
     ci.ppEnabledExtensionNames = dev_exts.data();
     ci.pEnabledFeatures        = &features;
 
-    if (vkCreateDevice(physical_dev_, &ci, nullptr, &device_) != VK_SUCCESS)
+    if (vkCreateDevice(physical_dev_, &ci, nullptr, &device_) != VK_SUCCESS) {
+        device_ = VK_NULL_HANDLE;
         throw std::runtime_error("vkCreateDevice failed");
+    }
 
     vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+    if (queue_ == VK_NULL_HANDLE)
+        throw std::runtime_error("vkGetDeviceQueue returned no queue");
 
 #if defined(__ANDROID__)
     vkGetAndroidHardwareBufferPropertiesANDROID_ =
@@ -284,10 +321,10 @@ void Renderer::Impl::resolve_output_target() {
     output_resolved_ = true;
 
     uint32_t fmt_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, nullptr);
+    VCE_VK_CHECK_THROW(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, nullptr));
     std::vector<VkSurfaceFormatKHR> formats(fmt_count);
     if (fmt_count)
-        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, formats.data());
+        VCE_VK_CHECK_THROW(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &fmt_count, formats.data()));
 
     // Log the FULL enumeration, once per process. We do not yet know what real
     // drivers expose (Samsung/Pixel/Windows ICDs all differ) and this log is

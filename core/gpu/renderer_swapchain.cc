@@ -65,7 +65,7 @@ void Renderer::Impl::resolve_text_composite() {
     LOGI("Text composite: sRGB view fmt=%d (linear blend)", (int)srgb);
 }
 
-void Renderer::Impl::create_swapchain() {
+bool Renderer::Impl::create_swapchain() {
     // swapchain_format_/_colorspace_ were fixed by resolve_output_target() in
     // the constructor and deliberately do not move across a resize — see there.
 
@@ -87,11 +87,14 @@ void Renderer::Impl::create_swapchain() {
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (present_policy_ == PresentPolicy::Latency) {
         uint32_t pm_count = 0;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, nullptr);
-        std::vector<VkPresentModeKHR> modes(pm_count);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, modes.data());
-        for (auto m : modes) {
-            if (m == VK_PRESENT_MODE_MAILBOX_KHR) { present_mode = VK_PRESENT_MODE_MAILBOX_KHR; break; }
+        if (vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, nullptr) == VK_SUCCESS
+            && pm_count > 0) {
+            std::vector<VkPresentModeKHR> modes(pm_count);
+            if (vkGetPhysicalDeviceSurfacePresentModesKHR(physical_dev_, surface_, &pm_count, modes.data()) == VK_SUCCESS) {
+                for (auto m : modes) {
+                    if (m == VK_PRESENT_MODE_MAILBOX_KHR) { present_mode = VK_PRESENT_MODE_MAILBOX_KHR; break; }
+                }
+            }
         }
     }
 
@@ -101,7 +104,9 @@ void Renderer::Impl::create_swapchain() {
     // The count is caller-configurable (constructor): each extra image is a full
     // window-sized allocation, so desktop callers request 3.
     VkSurfaceCapabilitiesKHR caps{};
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_dev_, surface_, &caps);
+    if (!vce_vk_ok(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_dev_, surface_, &caps),
+                   "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", __FILE__, __LINE__))
+        return false;
     uint32_t desired_images = desired_swapchain_images_;
     if (desired_images < 2) desired_images = 2;
     if (desired_images < caps.minImageCount) desired_images = caps.minImageCount;
@@ -180,8 +185,10 @@ void Renderer::Impl::create_swapchain() {
 
     VkSwapchainKHR created = VK_NULL_HANDLE;
     if (vkCreateSwapchainKHR(device_, &ci, nullptr, &created) != VK_SUCCESS) {
-        if (!wantMutable || render_pass_ != VK_NULL_HANDLE)
-            throw std::runtime_error("vkCreateSwapchainKHR failed");
+        if (!wantMutable || render_pass_ != VK_NULL_HANDLE) {
+            LOGE("vkCreateSwapchainKHR failed");
+            return false;
+        }
         LOGE("Text composite: mutable sRGB swapchain refused — legacy encode");
         text_mutable_refused_ = true;
         text_srgb_pass_ = false;
@@ -189,17 +196,23 @@ void Renderer::Impl::create_swapchain() {
         text_srgb_format_ = VK_FORMAT_UNDEFINED;
         ci.flags = 0;
         ci.pNext = nullptr;
-        if (vkCreateSwapchainKHR(device_, &ci, nullptr, &created) != VK_SUCCESS)
-            throw std::runtime_error("vkCreateSwapchainKHR failed");
+        if (vkCreateSwapchainKHR(device_, &ci, nullptr, &created) != VK_SUCCESS) {
+            LOGE("vkCreateSwapchainKHR failed after the mutable-format fallback");
+            return false;
+        }
     }
     swapchain_ = created;
 
     uint32_t img_count = 0;
-    vkGetSwapchainImagesKHR(device_, swapchain_, &img_count, nullptr);
+    if (!vce_vk_ok(vkGetSwapchainImagesKHR(device_, swapchain_, &img_count, nullptr),
+                   "vkGetSwapchainImagesKHR", __FILE__, __LINE__)
+        || img_count == 0)
+        return false;
     // Per-image "which frame-fence last used this image" tracking for the
     // frames-in-flight scheme; reset on every (re)create since all prior
     // work was drained first.
     image_fences_.assign(img_count, VK_NULL_HANDLE);
+    return true;
 }
 
 void Renderer::Impl::create_render_pass() {
@@ -234,8 +247,7 @@ void Renderer::Impl::create_render_pass() {
     ci.subpassCount = 1;
     ci.pSubpasses = &subpass;
 
-    if (vkCreateRenderPass(device_, &ci, nullptr, &render_pass_) != VK_SUCCESS)
-        throw std::runtime_error("vkCreateRenderPass failed");
+    VCE_VK_CHECK_THROW(vkCreateRenderPass(device_, &ci, nullptr, &render_pass_));
     if (!text_srgb_pass_) return;
 
     VkAttachmentDescription textAtt{};
@@ -280,16 +292,16 @@ void Renderer::Impl::create_render_pass() {
     tci.dependencyCount = 1;
     tci.pDependencies = &dep;
     VkRenderPass textPass = VK_NULL_HANDLE;
-    if (vkCreateRenderPass(device_, &tci, nullptr, &textPass) != VK_SUCCESS)
-        throw std::runtime_error("text sRGB render pass failed");
+    VCE_VK_CHECK_THROW(vkCreateRenderPass(device_, &tci, nullptr, &textPass));
     text_render_pass_ = textPass;
 }
 
 void Renderer::Impl::create_framebuffers() {
-    uint32_t image_count;
-    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
+    uint32_t image_count = 0;
+    VCE_VK_CHECK_THROW(vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr));
+    if (image_count == 0) throw std::runtime_error("swapchain has no images");
     swapchain_images_.resize(image_count);
-    vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
+    VCE_VK_CHECK_THROW(vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data()));
 
     swapchain_image_views_.resize(image_count);
     framebuffers_.resize(image_count);
@@ -314,7 +326,7 @@ void Renderer::Impl::create_framebuffers() {
         iv_ci.subresourceRange.baseArrayLayer = 0;
         iv_ci.subresourceRange.layerCount = 1;
 
-        vkCreateImageView(device_, &iv_ci, nullptr, &swapchain_image_views_[i]);
+        VCE_VK_CHECK_THROW(vkCreateImageView(device_, &iv_ci, nullptr, &swapchain_image_views_[i]));
 
         VkFramebufferCreateInfo fb_ci{};
         fb_ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -325,21 +337,19 @@ void Renderer::Impl::create_framebuffers() {
         fb_ci.height = height_;
         fb_ci.layers = 1;
 
-        vkCreateFramebuffer(device_, &fb_ci, nullptr, &framebuffers_[i]);
+        VCE_VK_CHECK_THROW(vkCreateFramebuffer(device_, &fb_ci, nullptr, &framebuffers_[i]));
 
         if (!text_srgb_pass_) continue;
         VkImageViewCreateInfo tv = iv_ci;
         tv.format = text_srgb_format_;
         VkImageView view = VK_NULL_HANDLE;
-        if (vkCreateImageView(device_, &tv, nullptr, &view) != VK_SUCCESS)
-            throw std::runtime_error("sRGB text view failed");
+        VCE_VK_CHECK_THROW(vkCreateImageView(device_, &tv, nullptr, &view));
         text_image_views_[i] = view;
         VkFramebufferCreateInfo tfb = fb_ci;
         tfb.renderPass = text_render_pass_;
         tfb.pAttachments = &text_image_views_[i];
         VkFramebuffer fb = VK_NULL_HANDLE;
-        if (vkCreateFramebuffer(device_, &tfb, nullptr, &fb) != VK_SUCCESS)
-            throw std::runtime_error("sRGB text framebuffer failed");
+        VCE_VK_CHECK_THROW(vkCreateFramebuffer(device_, &tfb, nullptr, &fb));
         text_framebuffers_[i] = fb;
     }
 }
@@ -350,7 +360,7 @@ void Renderer::Impl::create_command_buffers() {
     pool_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_ci.queueFamilyIndex = queue_family_;
 
-    vkCreateCommandPool(device_, &pool_ci, nullptr, &cmd_pool_);
+    VCE_VK_CHECK_THROW(vkCreateCommandPool(device_, &pool_ci, nullptr, &cmd_pool_));
 
     cmd_buffers_.resize(framebuffers_.size());
     VkCommandBufferAllocateInfo alloc_info{};
@@ -359,7 +369,7 @@ void Renderer::Impl::create_command_buffers() {
     alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
 
-    vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+    VCE_VK_CHECK_THROW(vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data()));
 }
 
 void Renderer::Impl::create_sync_objects() {
@@ -371,9 +381,9 @@ void Renderer::Impl::create_sync_objects() {
     fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     for (uint32_t f = 0; f < kFramesInFlight; f++) {
-        vkCreateSemaphore(device_, &sem_ci, nullptr, &image_available_sems_[f]);
-        vkCreateSemaphore(device_, &sem_ci, nullptr, &render_finished_sems_[f]);
-        vkCreateFence(device_, &fence_ci, nullptr, &in_flight_fences_[f]);
+        VCE_VK_CHECK_THROW(vkCreateSemaphore(device_, &sem_ci, nullptr, &image_available_sems_[f]));
+        VCE_VK_CHECK_THROW(vkCreateSemaphore(device_, &sem_ci, nullptr, &render_finished_sems_[f]));
+        VCE_VK_CHECK_THROW(vkCreateFence(device_, &fence_ci, nullptr, &in_flight_fences_[f]));
     }
 }
 
@@ -405,27 +415,42 @@ void Renderer::Impl::cleanup_hwb_resources() {
 #endif  // __ANDROID__
 
 void Renderer::Impl::destroy_swapchain_resources() {
+    // The capture seam reuses the last acquired image index while present is
+    // disabled. That index belongs to the swapchain being destroyed here; a
+    // rebuilt swapchain has not acquired anything yet.
+    last_drawn_image_index_ = UINT32_MAX;
+    if (device_ == VK_NULL_HANDLE) {
+        text_framebuffers_.clear();
+        text_image_views_.clear();
+        framebuffers_.clear();
+        swapchain_image_views_.clear();
+        swapchain_images_.clear();
+        swapchain_ = VK_NULL_HANDLE;
+        return;
+    }
     for (auto fb : text_framebuffers_)
         if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
     text_framebuffers_.clear();
     for (auto iv : text_image_views_)
         if (iv) vkDestroyImageView(device_, iv, nullptr);
     text_image_views_.clear();
-    for (auto fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
+    for (auto fb : framebuffers_) if (fb) vkDestroyFramebuffer(device_, fb, nullptr);
     framebuffers_.clear();
-    for (auto iv : swapchain_image_views_) vkDestroyImageView(device_, iv, nullptr);
+    for (auto iv : swapchain_image_views_) if (iv) vkDestroyImageView(device_, iv, nullptr);
     swapchain_image_views_.clear();
     swapchain_images_.clear();
     if (swapchain_) { vkDestroySwapchainKHR(device_, swapchain_, nullptr); swapchain_ = VK_NULL_HANDLE; }
 }
 
 bool Renderer::Impl::recreate_surface() {
+    if (device_lost_) return false;
     // See the header for what this is for. The order matters twice over:
     // everything using the old swapchain must be gone before the SURFACE it
     // was made from is destroyed, and on Android the VkSurfaceKHR must be
     // destroyed before the ANativeWindow behind it is released — which is what
     // the caller does next.
-    vkDeviceWaitIdle(device_);
+    if (!vce_vk_ok(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle", __FILE__, __LINE__))
+        return false;
     destroy_swapchain_resources();
     if (surface_ != VK_NULL_HANDLE) {
         vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -447,9 +472,12 @@ bool Renderer::Impl::recreate_surface() {
     // says it must not — so this only CHECKS.
     {
         uint32_t n = 0;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, nullptr);
+        VCE_VK_CHECK_OR(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, nullptr),
+                        return false);
         std::vector<VkSurfaceFormatKHR> formats(n);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, formats.data());
+        if (n > 0)
+            VCE_VK_CHECK_OR(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_dev_, surface_, &n, formats.data()),
+                            return false);
         bool ok = false;
         for (const VkSurfaceFormatKHR& f : formats)
             if (f.format == swapchain_format_ && f.colorSpace == swapchain_colorspace_) {
@@ -465,8 +493,17 @@ bool Renderer::Impl::recreate_surface() {
 
     width_  = ext.width;
     height_ = ext.height;
-    create_swapchain();
-    create_framebuffers();
+    try {
+        if (!create_swapchain()) {
+            surface_lost_ = true;
+            return false;
+        }
+        create_framebuffers();
+    } catch (const std::exception& e) {
+        LOGE("recreate_surface: %s", e.what());
+        surface_lost_ = true;
+        return false;
+    }
 
     // Same guard recreate_swapchain() carries, for the same reason: the image
     // count is normally deterministic for a surface, but cmd_buffers_ is
@@ -480,25 +517,42 @@ bool Renderer::Impl::recreate_surface() {
         alloc_info.commandPool = cmd_pool_;
         alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
-        vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+        if (!vce_vk_ok(vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data()),
+                       "vkAllocateCommandBuffers", __FILE__, __LINE__)) {
+            surface_lost_ = true;
+            return false;
+        }
     }
 
     overlay_.resize(width_, height_);
+    surface_lost_ = false;
     LOGI("Surface recreated (%ux%u) — device, pipelines and atlas kept", width_, height_);
     return true;
 }
 
 void Renderer::Impl::recreate_swapchain() {
+    if (device_lost_) return;
     VkExtent2D ext = surface_provider_.extent();
     if (ext.width == 0 || ext.height == 0) return;  // minimized; retry next draw()
 
-    vkDeviceWaitIdle(device_);
+    if (!vce_vk_ok(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle", __FILE__, __LINE__))
+        return;
     destroy_swapchain_resources();
 
     width_  = ext.width;
     height_ = ext.height;
-    create_swapchain();
-    create_framebuffers();
+    try {
+        if (!create_swapchain()) {
+            LOGE("recreate_swapchain: swapchain creation failed; drawing stopped until the surface is recovered");
+            surface_lost_ = true;
+            return;
+        }
+        create_framebuffers();
+    } catch (const std::exception& e) {
+        LOGE("recreate_swapchain: %s", e.what());
+        surface_lost_ = true;
+        return;
+    }
 
     // Swapchain image count is deterministic from caps.min/maxImageCount for
     // a given surface, so this is normally a no-op — guarded in case it ever
@@ -513,10 +567,15 @@ void Renderer::Impl::recreate_swapchain() {
         alloc_info.commandPool = cmd_pool_;
         alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc_info.commandBufferCount = (uint32_t)cmd_buffers_.size();
-        vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data());
+        if (!vce_vk_ok(vkAllocateCommandBuffers(device_, &alloc_info, cmd_buffers_.data()),
+                       "vkAllocateCommandBuffers", __FILE__, __LINE__)) {
+            surface_lost_ = true;
+            return;
+        }
     }
 
     overlay_.resize(width_, height_);
+    surface_lost_ = false;
     // image_layer_ has no size-dependent resources (per-texture, not per-screen).
 
     LOGI("Swapchain recreated (%ux%u)", width_, height_);

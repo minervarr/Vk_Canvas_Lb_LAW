@@ -114,6 +114,13 @@ public:
     // why this reports rather than asserts.
     bool recreate_surface();
 
+    // Terminal protocol states discovered by draw(). A lost device cannot be
+    // recovered in place: destroy and rebuild the Renderer. A lost surface is
+    // recoverable with recreate_surface() once the platform has a new window.
+    // draw() is a no-op while either is set, so ignoring these is safe.
+    bool deviceLost() const;
+    bool surfaceLost() const;
+
     // Create the text pipeline, atlas texture and vertex buffer from a TextFont
     // (MTSDF or per-size raster — see text_font.hh).
     // Must be called once after the Renderer is constructed, before any draw()

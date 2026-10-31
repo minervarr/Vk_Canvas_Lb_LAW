@@ -28,11 +28,12 @@ Files are module-relative. `base/`, `input/` and `layout/` compile into
 | text data | `base/text_buffer.*`, `base/undo_redo.*` | ~360 | stdlib | `text_buffer_test`, `undo_redo_test` | Gap buffer + edit history. No Canvas, no font, no Vulkan. |
 | draw | `draw/canvas.*` | ~1,015 | types, texture, font types | `canvas_records_test` | Emits curve records or SDF shape quads. The test inspects the floats directly. |
 | text helpers | `draw/text_util.*`, `draw/responsive_text.hh`, `draw/text_cover.hh` | ~300 | Canvas/types | indirectly via `text_cover_test`; `text_util` needs a font | Truncate/wrap/center, text-size formula, linear-light coverage math. |
-| GPU orchestration | `gpu/renderer.hh`, `gpu/renderer_impl.hh`, `gpu/renderer.cc`, `gpu/renderer_api.cc`, `gpu/renderer_{device,swapchain,camera,text,text_pipeline,shapes,readback}.cc` | ~3,000 | platform, canvas, overlay, image_layer, output_target | `gpu_smoke_test`, probes | **Split.** Public header is a pimpl; largest TU 534 lines. |
-| overlay rasterizer | `gpu/overlay.*` | ~762 | platform, output_target | probes | Compute tiling/coverage path; large resources lazy. |
-| image layer | `gpu/image_layer.*` | ~641 | platform, texture, output_target | probes | Texture upload/draw/reaper. |
+| GPU orchestration | `gpu/renderer.hh`, `gpu/renderer_impl.hh`, `gpu/renderer.cc`, `gpu/renderer_api.cc`, `gpu/renderer_{device,swapchain,camera,text,text_pipeline,shapes,readback}.cc` | ~3,050 | platform, canvas, overlay, image_layer, output_target, vk_check | `gpu_smoke_test`, `renderer_lifecycle_test`, probes | **Split.** Public header is a pimpl; largest TU 534 lines. Checked calls, device/surface-loss state. |
+| checked calls | `gpu/vk_check.hh` | ~85 | Vulkan headers | `vk_result_test` | Abort/throw/return policies plus the VkResult classifier; no device needed. |
+| overlay rasterizer | `gpu/overlay.*` | ~800 | platform, output_target, vk_check | probes | Compute tiling/coverage path; large resources lazy; init reports shader failure. |
+| image layer | `gpu/image_layer.*` | ~670 | platform, texture, output_target, vk_check | probes | Texture upload/draw/reaper; upload failures clean up after themselves. |
 | output target | `gpu/output_target.*` | ~400 | stdlib only | `output_target_test` | Vulkan-free format/colour-space resolution; the Vulkan adapter is a guarded compatibility overload. |
-| headless | `gpu/headless.*` | ~64 | platform | probes | `VK_EXT_headless_surface` provider for capture/tests. |
+| headless | `gpu/headless.*` | ~70 | platform | probes, `renderer_lifecycle_test` | `VK_EXT_headless_surface` provider for capture/tests; `set_extent()` drives resize/minimize. |
 | art texture | `gpu/art_texture.*` | ~51 | platform, texture, img_decode | none yet | Read file → decode → texture. Candidate for a CPU/GPU integration test. |
 | capture | `capture/*` | ~194 | core, Wayland | none | Dev tool, not part of the library. |
 
@@ -52,12 +53,14 @@ still carries libvulkan because the font-engine submodule's archive does.
 | pager | `ui/pager.*`, `ui/pager_draw.cc` | ~163 | types; draw half uses Canvas | `pager_test` | Page model tested without Canvas; `drawDots()` is separate. |
 | theme | `ui/theme/theme.hh` | ~70 | base types, type scale | `ui_state_test` | Colour roles, spacing/stroke/density tokens; `ui::TypeScale` aliases the base ladder. |
 
-`core/tests/` holds 10 unit binaries plus 3 GPU tests (`text_edge_probe`,
-`shape_outline_probe`, `gpu_smoke_test`); `ui/tests/` holds 3 unit binaries
-(`pager_test`, `widget_geometry_test`, `ui_state_test`). All 16 pass on this
-machine as of 2026-10-31. The text tests use the canonical `assets/fonts` face
-when checked in, otherwise the small face in the font-engine submodule; with
-neither they skip (exit 77).
+`core/tests/` holds 11 unit binaries plus 4 GPU tests (`text_edge_probe`,
+`shape_outline_probe`, `gpu_smoke_test`, `renderer_lifecycle_test`);
+`ui/tests/` holds 3 unit binaries (`pager_test`, `widget_geometry_test`,
+`ui_state_test`). All 18 pass on this machine as of 2026-10-31, and the whole
+set is leak-free under ASan+UBSan. The text tests use the canonical
+`assets/fonts` face when checked in, otherwise the small face in the font-engine
+submodule; with neither they skip (exit 77). Shaders compile to SPIR-V 1.3
+through glslang because the renderer asks for a Vulkan 1.1 device.
 
 ## Not compiled: `wip/`
 
@@ -78,7 +81,7 @@ neither they skip (exit 77).
 | Backend | Files | Status |
 |---|---|---|
 | Linux/Wayland | `platform/linux/*` | builds `vk_canvas_wayland`; no shader compilation in this target |
-| Windows | `platform/windows/*` | Win32 + `Build.bat`; compiles shaders via `VfeShaders.cmake` |
+| Windows | `platform/windows/*` | Win32 + `Build.bat`; compiles shaders via `VceShaders.cmake` |
 | Android | `platform/android/*` | Gradle + NDK; camera/HWB path lives in `core/gpu/renderer_camera.cc` behind `__ANDROID__` |
 
 ## App_shell

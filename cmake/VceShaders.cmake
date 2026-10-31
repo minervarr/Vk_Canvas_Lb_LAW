@@ -36,7 +36,7 @@ set(VCE_SLANGC "${_vce_slangc_default}"
 get_filename_component(VCE_SHARED_SHADER_INCLUDE
                        "${CMAKE_CURRENT_LIST_DIR}/../shaders_src" ABSOLUTE)
 
-function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
+function(vce_compile_slang_stage TARGET_NAME OUT_DIR SHADER_SRC_DIR STAGE)
     file(MAKE_DIRECTORY ${OUT_DIR})
     # That directory is always on the include path, whichever shader directory
     # is being compiled: output_encode.slang lives there and is included by
@@ -51,13 +51,26 @@ function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
     file(GLOB _slang_sources ${SHADER_SRC_DIR}/*.slang)
     file(GLOB _vce_shared_sources ${_vce_shared_include}/*.slang)
     list(APPEND _slang_sources ${_vce_shared_sources})
+    # SPIR-V 1.3, not Slang's direct-emission default of 1.5. The renderer asks
+    # for a Vulkan 1.1 instance/device, where 1.5 modules are invalid (the
+    # validation layer rejects them with VUID-VkShaderModuleCreateInfo-pCode-08737).
+    # Going through glslang is what pins the module version; the graphics stage
+    # comes from each entry point's [shader(...)] attribute, compute must be
+    # named because Slang cannot infer it from the signature.
+    set(_vce_stage_args -entry main)
+    if(STAGE)
+        list(APPEND _vce_stage_args -stage ${STAGE})
+    endif()
     set(_spv_outputs "")
     foreach(SHADER ${ARGN})
         add_custom_command(
             OUTPUT  ${OUT_DIR}/${SHADER}.spv
             COMMAND ${VCE_SLANGC} ${SHADER_SRC_DIR}/${SHADER}.slang
+                              ${_vce_stage_args}
                               -o ${OUT_DIR}/${SHADER}.spv
                               -target spirv
+                              -emit-spirv-via-glsl
+                              -profile glsl_450
                               -I ${SHADER_SRC_DIR}
                               -I ${_vce_shared_include}
             DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang ${_slang_sources}
@@ -66,4 +79,9 @@ function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
         list(APPEND _spv_outputs ${OUT_DIR}/${SHADER}.spv)
     endforeach()
     add_custom_target(${TARGET_NAME} ALL DEPENDS ${_spv_outputs})
+endfunction()
+
+# Graphics shaders: the stage is read from the entry point's [shader(...)].
+function(vce_compile_slang TARGET_NAME OUT_DIR SHADER_SRC_DIR)
+    vce_compile_slang_stage(${TARGET_NAME} ${OUT_DIR} ${SHADER_SRC_DIR} "" ${ARGN})
 endfunction()

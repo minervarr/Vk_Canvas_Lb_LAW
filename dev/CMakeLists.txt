@@ -32,6 +32,18 @@ option(VCE_DEV_BUILD_CAPTURE
     "Build the headless capture tool (needs the platform backend)" ON)
 option(VCE_DEV_BUILD_SHADERS
     "Compile the Slang shaders the GPU probes need" ON)
+option(VCE_DEV_SANITIZE
+    "Build the dev tree with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(VCE_DEV_BUILD_FUZZ
+    "Build the libFuzzer harnesses under dev/fuzz (clang only)" OFF)
+
+if(VCE_DEV_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "VCE_DEV_SANITIZE is for clang/gcc, not MSVC")
+    endif()
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 # GPU probes and the headless smoke test read <build>/assets/shaders. The font
 # engine owns composite/msdf/tiling/coverage; this repository owns overlay,
@@ -45,6 +57,11 @@ if(VCE_DEV_BUILD_SHADERS)
         composite_frag
         msdf_vert
         msdf_frag
+    )
+    vce_compile_slang_stage(compile_shared_compute_shaders
+        ${CMAKE_BINARY_DIR}/assets/shaders
+        ${VK_CANVAS_DIR}/first_party/vulkan_font_engine/shaders_src
+        compute
         tiling
         coverage
     )
@@ -65,9 +82,10 @@ add_subdirectory(${VK_CANVAS_DIR}/core core)
 # The probe executables read the SPIR-V at run time, so build the shaders
 # before them (the ALL target already does; this keeps a targeted build honest).
 if(VCE_DEV_BUILD_SHADERS)
-    foreach(_probe text_edge_probe shape_outline_probe gpu_smoke_test)
+    foreach(_probe text_edge_probe shape_outline_probe gpu_smoke_test renderer_lifecycle_test)
         if(TARGET ${_probe})
-            add_dependencies(${_probe} compile_shared_shaders compile_canvas_shaders)
+            add_dependencies(${_probe} compile_shared_shaders compile_shared_compute_shaders
+                             compile_canvas_shaders)
         endif()
     endforeach()
 endif()
@@ -105,3 +123,7 @@ endforeach()
 add_library(vce_core_header_check OBJECT ${_core_header_sources})
 target_link_libraries(vce_core_header_check PRIVATE vk_canvas_core)
 add_custom_target(check_headers DEPENDS vce_core_header_check)
+
+# Optional libFuzzer harnesses (clang only). They are never part of CTest;
+# tools/audit.sh runs them for a bounded time when enabled.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/fuzz fuzz)

@@ -48,7 +48,11 @@ public:
     // lazily on the first uploadCurves() with a non-zero count, so hosts on
     // the SDF shape path (Canvas::useShapes(), which never emits curve
     // records) pay nothing for the compute rasterizer they don't use.
-    void init(VkDevice device, VkPhysicalDevice physicalDevice,
+    //
+    // Returns false when a required shader asset is missing. Vulkan allocation
+    // failures throw: the only caller is Renderer's constructor, which unwinds
+    // and runs cleanup.
+    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               AssetReader& assets, VkRenderPass renderPass,
               uint32_t width, uint32_t height,
               OutputEncode encode = OutputEncode::Srgb);
@@ -121,16 +125,16 @@ private:
     VkPipelineLayout      compLayout_    = VK_NULL_HANDLE;
     VkPipeline            compPipeline_  = VK_NULL_HANDLE;
 
-    void createDescriptorLayoutAndPool();
-    void createBuffers();
+    bool createDescriptorLayoutAndPool();
+    bool createBuffers();
     // The tile/row (winding) buffers alone — the part of createBuffers() that
     // is screen-size-dependent; re-run by resize(). The curve buffer is fixed
     // at MAX_CURVES and created once by createBuffers().
-    void createTileRowBuffers();
-    void createOutputImage();
-    void createComputePipelines();
-    void writeDescriptors();
-    void createCompositePipeline(VkRenderPass renderPass);
+    bool createTileRowBuffers();
+    bool createOutputImage();
+    bool createComputePipelines();
+    bool writeDescriptors();
+    bool createCompositePipeline(VkRenderPass renderPass);
     // Rewrites just compSet_'s image binding to the current outputImageView_
     // — used standalone by resize() after the output image is recreated,
     // since createCompositePipeline() (pipeline + descriptor set + this same
@@ -146,5 +150,5 @@ private:
 
     // Lazy big-resource allocation (see init()'s comment).
     bool resourcesReady_ = false;
-    void ensureResources_();
+    bool ensureResources_();
 };
