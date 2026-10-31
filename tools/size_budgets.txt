@@ -1,0 +1,16 @@
+# Binary-size budgets checked by tools/size_report.sh (section-GC Release build,
+# stripped executable bytes). Derived from the 2026-10-31 baseline with roughly
+# 10% headroom: a failure means the linked cost of that feature subset grew
+# beyond noise, not that the number differs from the baseline byte for byte.
+#
+# These are per-machine: a different compiler, libc or font-engine revision can
+# move them. Re-baseline deliberately and record the change in
+# docs/PERFORMANCE.md; use VK_SIZE_BUDGET=0 to report without gating.
+#
+# probe                 budget
+size_layout             16000
+size_canvas_rect        26000
+size_ui_geometry        16000
+size_ui_toggle        1040000
+size_ui_all_widgets   1080000
+size_gpu_renderer       55000

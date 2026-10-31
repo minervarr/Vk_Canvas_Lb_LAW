@@ -11,6 +11,7 @@
 #   VK_AUDIT_SANITIZE=0       skip the ASan+UBSan build
 #   VK_AUDIT_SOAK=0           skip repeated lifecycle/smoke runs
 #   VK_AUDIT_FUZZ_SECONDS=0   skip libFuzzer
+#   VK_AUDIT_SIZE=0           skip the Release per-feature size report
 set -euo pipefail
 
 VK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,6 +29,7 @@ VK_AUDIT_VALIDATION="${VK_AUDIT_VALIDATION:-1}"
 VK_AUDIT_SANITIZE="${VK_AUDIT_SANITIZE:-1}"
 VK_AUDIT_SOAK="${VK_AUDIT_SOAK:-5}"
 VK_AUDIT_FUZZ_SECONDS="${VK_AUDIT_FUZZ_SECONDS:-5}"
+VK_AUDIT_SIZE="${VK_AUDIT_SIZE:-1}"
 
 GPU_TESTS="text_edge_probe shape_outline_probe gpu_smoke_test renderer_lifecycle_test"
 
@@ -50,6 +52,11 @@ cmake --build "$VK_BUILD_DIR"
 
 echo "== vk_canvas: tests"
 ctest --test-dir "$VK_BUILD_DIR" --output-on-failure
+
+if [ "$VK_AUDIT_SIZE" != 0 ]; then
+    echo "== vk_canvas: per-feature binary size"
+    "$VK_DIR/tools/size_report.sh"
+fi
 
 if [ "$VK_AUDIT_VALIDATION" != 0 ]; then
     echo "== vk_canvas: validation layer"

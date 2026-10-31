@@ -6,8 +6,21 @@
 # `vk_canvas_core` links it for one transition cycle so existing consumers keep
 # their include paths.
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/VceModules.cmake)
+
 add_library(vk_canvas_ui STATIC
-    widgets.cc
+    widgets_text_fit.cc
+    widgets_text_field.cc
+    widgets_toggle.cc
+    widgets_radio.cc
+    widgets_stepper.cc
+    widgets_slider.cc
+    widgets_segmented.cc
+    widgets_dropdown.cc
+    widgets_scroll_list.cc
+    widgets_table.cc
+    widgets_button.cc
+    widgets_group_header.cc
     textarea.cc
     plotview.cc
     pager.cc
@@ -19,12 +32,7 @@ target_include_directories(vk_canvas_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/theme
 )
 
-target_compile_features(vk_canvas_ui PUBLIC cxx_std_17)
-if(MSVC)
-    target_compile_options(vk_canvas_ui PRIVATE /utf-8)
-else()
-    target_compile_options(vk_canvas_ui PRIVATE -O2)
-endif()
+vce_canvas_module_settings(vk_canvas_ui)
 
 # draw PUBLIC-exposes Canvas and the base modules. This target's SOURCE and
 # headers are Vulkan-free (enforced by tools/check_deps.py); the link line still

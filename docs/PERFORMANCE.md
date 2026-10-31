@@ -1,9 +1,9 @@
 # Performance baseline
 
-Status: second baseline after Phase 1, 2026-10-31. The Phase 0 numbers remain in
-the tables below as the pre-split reference; the "Phase 1 re-baseline" section
-records the post-split numbers. These are **not** budgets yet; budgets are set
-in Phase 4 after the benchmark harness exists.
+Status: third baseline after Phase 4, 2026-10-31. Phase 0 and Phase 1 numbers
+remain below as historical references. Phase 4 adds the per-feature binary-size
+table, its budgets and the LTO measurement; frame numbers are still smoke
+measurements, not frame-rate claims.
 
 ## Reference machine
 
@@ -62,9 +62,9 @@ The two minimal executables answer the "unused code" question concretely:
   helpers, so the font engine comes with it: ~953 KB stripped.
 
 This is the object-file granularity effect described in the roadmap, not a
-runtime cost. Splitting `renderer.cc` and `widgets.cc` and enabling function
-sections/GC will make the archive granularity finer. Re-measure after Phase 1
-and Phase 4.
+runtime cost. Phase 4 did the split and section GC; the measured result is in
+"Phase 4 pay-for-use baseline" below (the Canvas floor drops from ~953 KB to
+~23 KB).
 
 ## Phase 1 re-baseline (2026-10-31)
 
@@ -101,6 +101,124 @@ g++ -std=c++17 -O2 -Icore/layout -Icore/base <main.cc> \
     /tmp/opencode/vk-release/core/libvk_canvas_base.a -o min_layout
 ```
 
+
+## Phase 4 pay-for-use baseline (2026-10-31)
+
+### Build policy
+
+Release-like configurations (`Release`, `RelWithDebInfo`, `MinSizeRel`) now
+compile the module targets with `-ffunction-sections -fdata-sections` and link
+consumers with `-Wl,--gc-sections` (MSVC `/Gy` + `/OPT:REF`, Apple
+`-Wl,-dead_strip`). The policy lives in `cmake/VceModules.cmake`; the option
+`VCE_CANVAS_FUNCTION_SECTIONS=OFF` reproduces the old behaviour for the
+comparison below. Debug builds stay section-free.
+
+`tools/size_report.sh` builds `dev/size/` twice (GC on/off) and checks
+`tools/size_budgets.txt`. The probes are link-only consumers and never run:
+
+| Probe | References |
+|---|---|
+| `size_layout` | `dockTop` only (`vk_canvas_base`) |
+| `size_canvas_rect` | `Canvas` constructor + `rect()` (`vk_canvas_draw`) |
+| `size_ui_geometry` | widget geometry helpers only, no Canvas (`vk_canvas_ui`) |
+| `size_ui_toggle` | one drawn widget (`vk_canvas_ui`) |
+| `size_ui_all_widgets` | every drawn widget (`vk_canvas_ui`) |
+| `size_gpu_renderer` | `Renderer::draw` forwarder (`vk_canvas_gpu`) |
+
+### Linked, stripped feature probes
+
+Archives are static; the executable is the honest app-facing number.
+
+| Probe | GC off | GC on (shipped) | GC saves | GC-on `.text` |
+|---|---:|---:|---:|---:|
+| `size_layout` | 14,472 | 14,464 | 8 | 1,633 |
+| `size_canvas_rect` | 952,888 | **22,864** | 930,024 | 15,082 |
+| `size_ui_geometry` | 981,592 | **14,592** | 967,000 | 4,143 |
+| `size_ui_toggle` | 952,888 | **936,488** | 16,400 | 893,994 |
+| `size_ui_all_widgets` | 989,792 | **969,288** | 20,504 | 927,557 |
+| `size_gpu_renderer` | 126,296 | **48,040** | 78,256 | 41,462 |
+
+Module archives grow slightly with section GC (more section headers); that is
+archive bookkeeping, not app cost:
+
+| Archive | GC off | GC on | GC-on `.text` |
+|---|---:|---:|---:|
+| `libvk_canvas_base.a` | 44,164 | 55,212 | 247 |
+| `libvk_canvas_draw.a` | 76,150 | 91,270 | 27,492 |
+| `libvk_canvas_gpu.a` | 285,552 | 319,848 | 9,351 |
+| `libvk_canvas_ui.a` | 113,646 | 127,494 | 526 |
+
+What these numbers answer:
+
+- **A primitive-only Canvas app pays ~23 KB, not ~953 KB.** Without section GC
+  the linker extracts the whole `canvas.o`, whose unused text methods reference
+  the font engine. With GC those sections are dropped before archive extraction,
+  so the font engine is linked only when text is actually referenced.
+- **Pure widget geometry costs ~14.6 KB.** Drawing text is what costs: the
+  one-widget probe is 936 KB, i.e. ~921 KB of font engine, not widget code.
+- **One widget no longer pays for every widget.** `size_ui_all_widgets` minus
+  `size_ui_toggle` is 32,800 bytes with GC (36,904 without). `ui/widgets.cc` was
+  split into one TU per widget, so the toggle probe keeps
+  `widgets_toggle.o` + shared helpers instead of a 730-line object.
+- **The Renderer entry point costs ~48 KB** plus the shared Vulkan loader.
+  Its per-subsystem TUs are already the right granularity; no further split is
+  justified by these measurements.
+
+Source, compile time and audit surface are paid regardless of what the linker
+keeps; this table measures only the binary an app ships.
+
+### Budgets
+
+`tools/size_budgets.txt` holds the gates for the GC-on column (stripped bytes),
+with roughly 10% headroom over the measurement above:
+
+| Probe | Budget |
+|---|---:|
+| `size_layout` | 16,000 |
+| `size_canvas_rect` | 26,000 |
+| `size_ui_geometry` | 16,000 |
+| `size_ui_toggle` | 1,040,000 |
+| `size_ui_all_widgets` | 1,080,000 |
+| `size_gpu_renderer` | 55,000 |
+
+`tools/audit.sh` runs the report and fails on a budget overrun. These are
+per-machine: re-baseline deliberately when the compiler, libc or font-engine
+submodule changes; `VK_SIZE_BUDGET=0` reports without gating.
+
+### LTO (optional)
+
+`VCE_CANVAS_LTO=ON` (or the dev tree's `VCE_DEV_LTO=ON`) enables CMake IPO on the
+module targets and the targets built with them. A consumer must also enable IPO
+on its final executable so the link runs through the LTO plugin.
+
+Measured on the reference machine, same sources:
+
+| Measurement | LTO off | LTO on |
+|---|---:|---:|
+| Release build, 174 targets incl. size probes (cold) | 9,704 ms | 10,121 ms (+4.3%) |
+| Debug dev tree, 249 targets (cold) | 11,944 ms | 11,818 ms (noise) |
+| `size_ui_toggle`, stripped | 936,488 | 932,392 (−0.4%) |
+| `size_ui_all_widgets`, stripped | 969,288 | 961,104 (−0.8%) |
+| `size_canvas_rect` / `size_layout` / `size_gpu_renderer` | 22,864 / 14,464 / 48,040 | unchanged (±8) |
+| `gpu_smoke_test` CPU total, median of 5 | 0.059 ms | 0.060 ms |
+| `gpu_smoke_test` fence wait / record, median | 0.002 / 0.003 ms | 0.002 / 0.004 ms |
+
+The tiny scene in `gpu_smoke_test` cannot show a frame-time win, and the
+sub-1% binary improvement does not pay for a 4% Release build-time increase.
+LTO stays opt-in; it needs a real scene measurement before anyone claims it.
+
+Commands:
+
+```bash
+Vk_Canvas_Lb_LAW/tools/size_report.sh          # table + budget gate
+VK_SIZE_BUDGET=0 Vk_Canvas_Lb_LAW/tools/size_report.sh   # report only
+
+cmake -S Vk_Canvas_Lb_LAW/dev -B /tmp/opencode/vk-lto -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DVCE_DEV_LTO=ON \
+      -DVCE_DEV_BUILD_SIZE_PROBES=ON -DVCE_DEV_BUILD_SHADERS=OFF \
+      -DVCE_DEV_BUILD_PLATFORM=OFF -DVCE_DEV_BUILD_CAPTURE=OFF
+cmake --build /tmp/opencode/vk-lto
+```
 
 ## GPU/frame timings
 

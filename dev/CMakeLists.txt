@@ -36,6 +36,17 @@ option(VCE_DEV_SANITIZE
     "Build the dev tree with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(VCE_DEV_BUILD_FUZZ
     "Build the libFuzzer harnesses under dev/fuzz (clang only)" OFF)
+option(VCE_DEV_BUILD_SIZE_PROBES
+    "Build the feature-isolated link probes used by tools/size_report.sh" OFF)
+option(VCE_DEV_LTO
+    "Build and link the dev tree with interprocedural optimization" OFF)
+
+if(VCE_DEV_LTO)
+    # The module option is defined in core/CMakeLists.txt; set it before that
+    # directory is added so its targets (and the probes/tests it defines) are
+    # compiled and linked with LTO.
+    set(VCE_CANVAS_LTO ON CACHE BOOL "Compile vk_canvas targets with IPO" FORCE)
+endif()
 
 if(VCE_DEV_SANITIZE)
     if(MSVC)
@@ -78,6 +89,12 @@ if(VCE_DEV_BUILD_SHADERS)
 endif()
 
 add_subdirectory(${VK_CANVAS_DIR}/core core)
+
+# Feature-isolated consumers for the binary-size report. They are not part of
+# CTest and are only built when the size script enables them.
+if(VCE_DEV_BUILD_SIZE_PROBES)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/size size)
+endif()
 
 # The probe executables read the SPIR-V at run time, so build the shaders
 # before them (the ALL target already does; this keeps a targeted build honest).

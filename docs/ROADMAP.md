@@ -12,19 +12,18 @@ sync.
 
 ## Current position
 
-- **Phase:** 3 — reliability hardening (DONE)
-- **Last completed:** Phase 3 — checked Vulkan calls and symmetric
-  init/teardown, device/surface-loss state, `vk_result_test`, the headless
-  lifecycle test, validation/sanitizer/soak stages in `tools/audit.sh`,
-  libFuzzer harnesses, and `docs/RELIABILITY.md`.
-- **Next action:** start Phase 4 at T5.1 in `.opencode/todo.md`: Release
-  function/data sections with `--gc-sections`, then measure per-feature binary
-  size and link the results into `docs/PERFORMANCE.md`.
-- **Blocking decisions:** none. Reference hardware is recorded in
-  `docs/PERFORMANCE.md`; GPU smoke/probes run on this machine when the dev
-  tree builds SPIR-V assets (`slangc` on PATH or `-DVCE_SLANGC=...`).
-- **Resume phrase:** "continue next phase" means start Phase 4 (pay-for-use and
-  performance budgets) at T5.1 in `.opencode/todo.md`. Phase 3 is green.
+- **Phase:** 4 — pay-for-use and performance budgets (DONE)
+- **Last completed:** Phase 4 — Release function/data sections plus
+  `--gc-sections`, per-widget toolkit TUs, feature-isolated link probes with
+  size budgets, optional LTO measurement, and the measured per-feature table in
+  `docs/PERFORMANCE.md`.
+- **Next action:** start Phase 5 at T6.1 in `.opencode/todo.md`: `ui::Theme`
+  (dark/light, token overrides, density) on top of the existing theme skeleton.
+- **Blocking decisions:** reference hardware/CI for cross-machine timing is
+  still open (Open decision 1). Size budgets are local-machine gates with
+  recorded provenance; they are not a multi-machine claim.
+- **Resume phrase:** "continue next phase" means start Phase 5 (UI toolkit
+  features) at T6.1 in `.opencode/todo.md`. Phase 4 is green.
 
 ### How to resume after a context cleanup
 
@@ -35,11 +34,11 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0, Phase 1, Phase 2 and Phase 3 are green: the engine modules, the
-`Renderer` pimpl/split, GPU smoke coverage, the Vulkan-free `output_target`
-adapter, the `ui/` toolkit boundary, and the checked-call/recovery/audit
-hardening are all in place and audited. Phase 4 (pay-for-use and performance
-budgets) is next.
+Phase 0 through Phase 4 are green: the engine modules, the `Renderer`
+pimpl/split, GPU smoke coverage, the Vulkan-free `output_target` adapter, the
+`ui/` toolkit boundary, checked-call/recovery/audit hardening, and the measured
+pay-for-use property are in place and audited. Phase 5 (UI toolkit features) is
+next.
 
 ---
 
@@ -199,9 +198,10 @@ gpu/vk_check.hh            VCE_VK_CHECK macro for fatal init paths
 
 Exit criteria: no file over ~600 lines; public header no longer includes
 `overlay.hh`, `image_layer.hh` or the font atlas internals; `Renderer` is
-non-copyable/movable through its pimpl; all probes green. **Met 2026-10-31:**
-largest file 534 lines, 14 tests pass (3 GPU, including MSDF via the
-font-engine submodule face).
+non-copyable/movable through its pimpl; all probes green. **Met 2026-10-31 at
+the time:** largest TU 534 lines, 14 tests pass (3 GPU, including MSDF via the
+font-engine submodule face). Phase 3 later grew `gpu/overlay.cc` to 677 lines;
+that is one subsystem, not a mixed TU.
 
 ## 5. Current state and audit findings (2026-10-31)
 
@@ -227,7 +227,7 @@ Problems that make auditing and testing harder:
 | 4 | `layout.hh` and `pager.hh` include `canvas.hh` only for `Rect`/`Color`, dragging the draw API into pure geometry. | done (Phase 0) |
 | 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | done (Phase 0) |
 | 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | done (Phase 3) |
-| 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 0 baseline; budgets in Phase 4) |
+| 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 4: size probes + budgets) |
 | 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open (Phase 3) |
 | 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | done (Phase 2) |
 | 10 | No dependency enforcement: core can include a platform header, or UI can include Vulkan, and nothing fails. | done (T2.1) |
@@ -335,17 +335,33 @@ paths exercised. **Verified 2026-10-31:** 18/18 CTest entries; validation zero
 issues on all four GPU binaries; ASan+UBSan full CTest leak-free; soak 5/5;
 three fuzz targets clean; `audit: ok`.
 
-### Phase 4 — Pay-for-use and performance budgets (PLANNED)
+### Phase 4 — Pay-for-use and performance budgets (DONE)
 
-- Enable function/data sections and GC sections in Release; measure.
-- Split remaining monolithic TUs so archive granularity is fine.
-- Add optional module switches only where measurements justify them.
-- Add LTO as an option; measure compile time and frame time.
-- Turn bench numbers into budgets with a loose CI regression threshold.
-- Publish the binary-size table per feature subset.
+- [x] Enable function/data sections and GC sections in Release; measure.
+      `cmake/VceModules.cmake`; `--gc-sections` cuts a primitive-only Canvas
+      app from 953 KB to 23 KB and pure widget geometry to 15 KB.
+- [x] Split remaining monolithic TUs so archive granularity is fine.
+      `ui/widgets.cc` (730 lines) is now one TU per widget plus shared helpers.
+      The whole toolkit is only 32.8 KB larger than the one-widget probe, so an
+      app using a toggle keeps one widget object, not the 730-line monolith.
+- [x] Add optional module switches only where measurements justify them.
+      None were added: section GC already removes unused primitives, and the
+      remaining archives are subsystem-sized. A module switch would add a
+      configuration matrix without a measured win.
+- [x] Add LTO as an option; measure compile time and frame time.
+      `VCE_CANVAS_LTO` / `VCE_DEV_LTO`. Release build +4.3%, binaries −0.4…−0.8%,
+      smoke-test frame CPU unchanged within noise. Opt-in, not default.
+- [x] Turn bench numbers into budgets with a loose CI regression threshold.
+      `tools/size_budgets.txt` + `tools/size_report.sh`, run by
+      `tools/audit.sh`. Timing stays report-only until a real benchmark scene
+      exists; the smoke scene is too small to gate.
+- [x] Publish the binary-size table per feature subset.
+      `docs/PERFORMANCE.md`, "Phase 4 pay-for-use baseline".
 
 Exit: a documented, measured answer to "what does an app pay for parts it does
-not use".
+not use". **Verified 2026-10-31:** `tools/audit.sh` green (18/18 CTest,
+validation, ASan+UBSan, soak, fuzz, size budgets); the probe table and LTO
+measurement are in `docs/PERFORMANCE.md`.
 
 ### Phase 5 — UI toolkit features (PLANNED)
 

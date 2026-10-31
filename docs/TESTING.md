@@ -10,17 +10,19 @@ Vk_Canvas_Lb_LAW/tools/audit.sh
 ```
 
 It runs the dependency/source-inventory check, configures and builds the Vk dev
-tree, builds the header self-containment target, runs every unit test, then the
-Phase 3 stages: validation-layer GPU runs, ASan+UBSan CTest, soak repeats and
-libFuzzer. It does the same build/test side for `App_shell` when the two
-repositories are checked out together. Build trees default to
-`/tmp/opencode/{vk-dev,app-shell-dev}` (plus `-validation`, `-sanitize`, `-fuzz`);
-override with `VK_BUILD_DIR` / `APP_SHELL_BUILD_DIR` / `VK_VALIDATION_DIR` /
-`VK_SANITIZE_DIR` / `VK_FUZZ_DIR`. Build trees are reused, never deleted.
+tree, builds the header self-containment target, runs every unit test, checks
+the Release per-feature binary-size budgets, then the Phase 3 stages:
+validation-layer GPU runs, ASan+UBSan CTest, soak repeats and libFuzzer. It does
+the same build/test side for `App_shell` when the two repositories are checked
+out together. Build trees default to
+`/tmp/opencode/{vk-dev,app-shell-dev,vk-size,vk-size-nogc}` (plus `-validation`,
+`-sanitize`, `-fuzz`); override with `VK_BUILD_DIR` / `APP_SHELL_BUILD_DIR` /
+`VK_SIZE_DIR` / `VK_SIZE_NOGC_DIR` / `VK_VALIDATION_DIR` / `VK_SANITIZE_DIR` /
+`VK_FUZZ_DIR`. Build trees are reused, never deleted.
 
 Stage switches: `VK_AUDIT_VALIDATION=0`, `VK_AUDIT_SANITIZE=0`, `VK_AUDIT_SOAK=0`,
-`VK_AUDIT_FUZZ_SECONDS=0`. A stage that cannot run prints why and is skipped;
-it is never counted as a pass.
+`VK_AUDIT_FUZZ_SECONDS=0`, `VK_AUDIT_SIZE=0`. A stage that cannot run prints why
+and is skipped; it is never counted as a pass.
 
 Run a single side manually:
 
@@ -43,7 +45,7 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 |---|---|---|---|
 | `unit` | pure logic, CPU only, no GPU/swapchain | a compiler; some tests include Vulkan headers | must pass |
 | `gpu` | headless surface, real swapchain, pixel probes | Vulkan device + built SPIR-V assets | skip `77` if unavailable |
-| `bench` | frame/startup/allocation/size | as above; planned | report, not a hard gate yet |
+| `bench` | frame/startup/allocation/size | Release build; size budgets in `tools/size_budgets.txt` | size overrun fails; timing is report-only until a real scene exists |
 | `fuzz` | UTF-8/UTF-16, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
 
 The current tree has 14 Vk `unit` tests and 4 App_shell tests. The GPU tests

@@ -4,14 +4,16 @@ Status: canonical, 2026-10-31. This is the audit index: what exists, what it
 depends on, what tests it, and whether it is compiled. Update it whenever a file
 moves, a target is split, or a test is added.
 
-Current shape: **28 compiled `.cc` files** across five engine module
-directories — `base/`, `input/`, `layout/`, `draw/`, `gpu/` — plus the `ui/`
+Current shape: **39 compiled `.cc` files** — 23 in the five engine module
+directories (`base/`, `input/`, `layout/`, `draw/`, `gpu/`) and 16 in the `ui/`
 toolkit. Engine targets: `vk_canvas_base` (base + input + layout),
 `vk_canvas_draw`, `vk_canvas_gpu`; the toolkit is `vk_canvas_ui`.
 `vk_canvas_core` remains the source-compatible umbrella (an INTERFACE target
 linking all four for one transition cycle). `tools/check_deps.py` checks the
 per-target source inventory, the layer edges between directories, and the
-platform/WIP/UI include rules.
+platform/WIP/UI include rules. Release module objects carry function/data
+sections and consumers link with section GC (`cmake/VceModules.cmake`), so an
+unused function inside a pulled object is dropped as well.
 
 ## Compiled engine
 
@@ -28,9 +30,9 @@ Files are module-relative. `base/`, `input/` and `layout/` compile into
 | text data | `base/text_buffer.*`, `base/undo_redo.*` | ~360 | stdlib | `text_buffer_test`, `undo_redo_test` | Gap buffer + edit history. No Canvas, no font, no Vulkan. |
 | draw | `draw/canvas.*` | ~1,015 | types, texture, font types | `canvas_records_test` | Emits curve records or SDF shape quads. The test inspects the floats directly. |
 | text helpers | `draw/text_util.*`, `draw/responsive_text.hh`, `draw/text_cover.hh` | ~300 | Canvas/types | indirectly via `text_cover_test`; `text_util` needs a font | Truncate/wrap/center, text-size formula, linear-light coverage math. |
-| GPU orchestration | `gpu/renderer.hh`, `gpu/renderer_impl.hh`, `gpu/renderer.cc`, `gpu/renderer_api.cc`, `gpu/renderer_{device,swapchain,camera,text,text_pipeline,shapes,readback}.cc` | ~3,050 | platform, canvas, overlay, image_layer, output_target, vk_check | `gpu_smoke_test`, `renderer_lifecycle_test`, probes | **Split.** Public header is a pimpl; largest TU 534 lines. Checked calls, device/surface-loss state. |
+| GPU orchestration | `gpu/renderer.hh`, `gpu/renderer_impl.hh`, `gpu/renderer.cc`, `gpu/renderer_api.cc`, `gpu/renderer_{device,swapchain,camera,text,text_pipeline,shapes,readback}.cc` | ~3,050 | platform, canvas, overlay, image_layer, output_target, vk_check | `gpu_smoke_test`, `renderer_lifecycle_test`, probes | **Split.** Public header is a pimpl; largest renderer TU 632 lines. Checked calls, device/surface-loss state. |
 | checked calls | `gpu/vk_check.hh` | ~85 | Vulkan headers | `vk_result_test` | Abort/throw/return policies plus the VkResult classifier; no device needed. |
-| overlay rasterizer | `gpu/overlay.*` | ~800 | platform, output_target, vk_check | probes | Compute tiling/coverage path; large resources lazy; init reports shader failure. |
+| overlay rasterizer | `gpu/overlay.*` | ~800 | platform, output_target, vk_check | probes | Compute tiling/coverage path; large resources lazy; init reports shader failure. Largest engine TU (677 lines) but one subsystem. |
 | image layer | `gpu/image_layer.*` | ~670 | platform, texture, output_target, vk_check | probes | Texture upload/draw/reaper; upload failures clean up after themselves. |
 | output target | `gpu/output_target.*` | ~400 | stdlib only | `output_target_test` | Vulkan-free format/colour-space resolution; the Vulkan adapter is a guarded compatibility overload. |
 | headless | `gpu/headless.*` | ~70 | platform | probes, `renderer_lifecycle_test` | `VK_EXT_headless_surface` provider for capture/tests; `set_extent()` drives resize/minimize. |
@@ -47,11 +49,27 @@ still carries libvulkan because the font-engine submodule's archive does.
 
 | Module | Files | Lines | Depends on | Tests | Notes |
 |---|---|---|---|---|---|
-| widgets | `ui/widgets.*` | ~1,083 | canvas, frame_input | `widget_geometry_test`, `ui_state_test` | Immediate-mode, caller-owned state; pure geometry helpers are tested without a Canvas. |
+| widget contract | `ui/widgets.hh` | 353 | canvas, frame_input | all widget tests | Public structs, styles, geometry/draw declarations. |
+| widget helpers | `ui/widgets_internal.hh`, `ui/widgets_text_fit.cc` | ~45 | canvas, text_util | indirectly | Shared `vcenter`/`drawLabelFit` and the opt-in `applyTextFit` policy. |
+| text field | `ui/widgets_text_field.cc` | 295 | canvas, keys | `ui_state_test` | UTF-8-safe editing, click mapping, draw. |
+| toggle | `ui/widgets_toggle.cc` | 27 | canvas | `widget_geometry_test` | Switch row. |
+| radio | `ui/widgets_radio.cc` | 47 | canvas | none yet (draw path) | Content-fitted pill, dot row. |
+| stepper | `ui/widgets_stepper.cc` | 35 | canvas | `widget_geometry_test` | − value + cluster. |
+| slider | `ui/widgets_slider.cc` | 57 | canvas | `widget_geometry_test` | Geometry + value mapping. |
+| segmented | `ui/widgets_segmented.cc` | 35 | canvas | `widget_geometry_test` | N-way exclusive row. |
+| dropdown | `ui/widgets_dropdown.cc` | 43 | canvas | none yet (draw path) | Closed field + chevron. |
+| scroll list | `ui/widgets_scroll_list.cc` | 68 | canvas | `widget_geometry_test` (height only) | Windowed rows, pill/underline styles. |
+| table | `ui/widgets_table.cc` | 121 | canvas | `widget_geometry_test` (header) | Sortable header, windowed body. |
+| button/group | `ui/widgets_button.cc`, `ui/widgets_group_header.cc` | ~61 | canvas, text_util | none yet (draw path) | Fit/two-line button; section label. |
 | text area | `ui/textarea.*` | ~253 | canvas, font | none yet | Scrollable, wrapped text view. |
 | plot view | `ui/plotview.*` | ~345 | canvas | none yet | Plot widget. |
 | pager | `ui/pager.*`, `ui/pager_draw.cc` | ~163 | types; draw half uses Canvas | `pager_test` | Page model tested without Canvas; `drawDots()` is separate. |
 | theme | `ui/theme/theme.hh` | ~70 | base types, type scale | `ui_state_test` | Colour roles, spacing/stroke/density tokens; `ui::TypeScale` aliases the base ladder. |
+
+Splitting `widgets.cc` into one TU per widget is what makes the one-widget
+`size_ui_toggle` probe 32.8 KB smaller than `size_ui_all_widgets`
+(`docs/PERFORMANCE.md`); it also gives each widget an independently auditable
+file. The font engine, not widget code, dominates any text-drawing binary.
 
 `core/tests/` holds 11 unit binaries plus 4 GPU tests (`text_edge_probe`,
 `shape_outline_probe`, `gpu_smoke_test`, `renderer_lifecycle_test`);

@@ -26,15 +26,30 @@ set(VCE_CORE_LAYOUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/layout)
 set(VCE_CORE_DRAW_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/draw)
 set(VCE_CORE_GPU_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/gpu)
 
-# Shared per-module compile settings. Sources contain UTF-8 comments, so cl
-# needs /utf-8; the historical -O2 in Debug is preserved deliberately.
-function(vce_canvas_module target)
-    target_compile_features(${target} PUBLIC cxx_std_17)
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /utf-8)
-    else()
-        target_compile_options(${target} PRIVATE -O2)
+# Shared per-module compile settings (UTF-8, section GC, IPO). Sources contain
+# UTF-8 comments, so cl needs /utf-8; the historical -O2 in Debug is preserved
+# deliberately.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/VceModules.cmake)
+
+# Opt-in LTO for consumers that add this directory. The final executable and
+# shared library must also enable IPO (CMake's INTERPROCEDURAL_OPTIMIZATION) to
+# link the bitcode; the dev tree's VCE_DEV_LTO does that for every target.
+option(VCE_CANVAS_LTO
+    "Compile vk_canvas targets with interprocedural optimization" OFF)
+if(VCE_CANVAS_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT VCE_CANVAS_IPO_SUPPORTED LANGUAGES CXX)
+    if(NOT VCE_CANVAS_IPO_SUPPORTED)
+        message(FATAL_ERROR "VCE_CANVAS_LTO requested but IPO is unsupported: "
+                            "${VCE_CANVAS_IPO_SUPPORTED}")
     endif()
+    # Directory scope: module targets, UI (added below) and the dev probes/tests
+    # all need it so the final link also runs through the LTO plugin.
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+
+function(vce_canvas_module target)
+    vce_canvas_module_settings(${target})
 endfunction()
 
 # ── base: value types, text data, input, layout ──────────────────────────────
