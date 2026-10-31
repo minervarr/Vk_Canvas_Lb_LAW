@@ -55,13 +55,14 @@ slangc.exe <shader>.slang -target spirv -o <output>.spv
 One platform-agnostic engine core plus thin per-platform backends:
 
 ```
-core/                      # vk_canvas_core STATIC lib — no platform SDK includes
-  platform.hh              # the seam: AssetReader / SurfaceProvider / FrameWaker + DeviceCaps
-  renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
-  art_texture.*            # decode-a-file-into-a-texture helper (uses img_decode_kit)
-  text_util.*              # truncate/wrap/center helpers on top of Canvas (see below)
-  text_buffer.* undo_redo.* pager.* plotview.* gesture.*   (compiled)
-  layout.* animated_float.* frame_input.* output_target.*   (compiled)
+core/                      # three module targets + the vk_canvas_core umbrella
+  base/                    # types, texture, log, animated_float, text_buffer, undo_redo
+  input/                   # input, keys, frame_input, gesture
+  layout/                  # layout
+  draw/                    # canvas, text_util, text_cover, responsive_text,
+                           #   widgets, textarea, plotview, pager (widgets move to ui/ later)
+  gpu/                     # renderer, overlay, image_layer, output_target,
+                           #   headless, art_texture, platform.hh (the seam)
 wip/                       # unported prototypes, not compiled, no supported API
                            #   canvas_host vulkan_state compute_context
                            #   text_editor archive font_weight
@@ -74,7 +75,7 @@ platform/
                            #   NDK glue + CMake entry, app/ module (manifest + assets)
   windows/                 # self-contained Win32 backend (raw windows.h, no GLFW):
                            #   Build.bat + build_msvc.ps1 + standalone CMakeLists
-  linux/                   # planned Wayland backend (README only)
+  linux/                   # raw-Wayland backend (wayland-client + xkbcommon)
 first_party/
   vulkan_font_engine/      # submodule: core/ (vk_font_core lib) + third_party/ (FreeType, msdfgen) + platform/android/ demo
   img_decode_kit/          # submodule-like dep (own core/CMakeLists.txt, no vk_canvas
@@ -86,9 +87,9 @@ first_party/
 ```
 
 Rules of the structure:
-- **Core never includes platform SDK headers.** Platform needs go through `core/platform.hh`: `AssetReader` (shader/font bytes), `SurfaceProvider` (instance extensions + VkSurfaceKHR creation + extent), `FrameWaker` (wake the render loop). Android implements these in `platform/android/android_platform.{hh,cc}`.
+- **Core never includes platform SDK headers.** Platform needs go through `core/gpu/platform.hh`: `AssetReader` (shader/font bytes), `SurfaceProvider` (instance extensions + VkSurfaceKHR creation + extent), `FrameWaker` (wake the render loop). Android implements these in `platform/android/android_platform.{hh,cc}`.
 - **Feature use is capability-driven, never platform-hardcoded.** `Renderer` fills a `DeviceCaps` struct at physical-device selection; optional techniques gate on caps so mobile limits never cap PC.
-- The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/renderer.cc` under `#if defined(__ANDROID__)`.
+- The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/gpu/renderer.cc` under `#if defined(__ANDROID__)`.
 - Each platform folder owns its CMake entry: `platform/android/CMakeLists.txt` (reached via `platform/android/app/build.gradle` → `externalNativeBuild.cmake.path`) and `platform/windows/CMakeLists.txt` (standalone project, reached via its `Build.bat`). Both `add_subdirectory` `core/`; there is no root CMakeLists.
 
 ### Device and queue selection
@@ -116,14 +117,14 @@ discovering it as "the UI runs at 2 fps".
 | `platform/android/main.cc` | Android NDK `android_main()` entry |
 | `platform/android/app.hh/cc` | ALooper event loop, window lifecycle, seam wiring, test scene |
 | `platform/android/android_platform.*` | Android impls of the platform.hh seams |
-| `core/renderer.hh/cc` | Vulkan instance/device/swapchain; two frames in flight (see below); draws curve buffer, SDF shape quads, and MSDF text quads each frame |
-| `core/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame. Its screen-size GPU resources (curve/tile/row buffers, output image — the expensive part) are allocated **lazily on first non-empty `uploadCurves()`** — a host that only uses `Canvas::useShapes()` (see below) never allocates them at all |
-| `core/canvas.hh/cc` | Immediate-mode scene builder. Two output modes per primitive: default emits 20-float curve records (compute-rasterized); `useShapes()` reroutes rect/rectOutline/segment/polyline/triangle into SDF shape quads instead (see "SDF Shape Pipeline") |
-| `core/art_texture.hh/cc` | `createTextureFromImageFile()`: read a file via `AssetReader` → decode+scale via img_decode_kit → upload as a `Renderer` texture, one call. `mips` parameter (default true) — pass false when the texture is drawn at ≥ its decode size (never minified): skips the mip chain, ~33% less VRAM, no per-upload blit pass |
-| `core/layout.hh/cc` | Resolution-robust layout math (pure, no Vulkan): `UiScale` (proportional scale — floored, uncapped, plus `cappedFactor` for vertically stacking layouts), `clampScroll`, `dockTop/Bottom/Left/Right` (carve strips off a container Rect in place), `centerIn`, `RowCursor`/`ColumnCursor` (gap-chaining). Compute layout from the surface size every frame with these instead of hardcoding pixels. Geometry sibling of `responsive_text.hh` (which stays the text-size formula) |
-| `core/animated_float.hh/cc` | `AnimatedFloat` + `easeLinear`/`easeInOutCubic`: per-frame interpolation primitive (call `update(dt)` each frame, read `value()`). Clamps at the target on overshoot; `set()` restarts from the current value. The renderer deliberately has no animation concept — callers own these |
-| `core/frame_input.hh/cc` | `FrameInput`: per-frame edge-detected input state implementing `input.hh`'s `InputSink` (`pointerWentDown`/`pointerWentUp` true only on the transition frame, `wheelDelta` accumulated per frame, `keysWentDown` keycode queue). Call `beginFrame()` once per frame *before* pumping platform events. Saves every consumer hand-rolling event→immediate-mode accumulation |
-| `core/text_util.hh/cc` | `truncateToWidth`/`splitTwoLines`/`wrapText` (measure-based, UTF-8-safe, work with any `FontStyle`), `textCenteredStyled` (correct MSDF-measured centering — `Canvas::textCentered` measures the *curve* font and mis-centers MSDF-rendered text), `stripHtmlToPlain` (flatten simple HTML sidecar files to readable paragraphs) |
+| `core/gpu/renderer.hh/cc` | Vulkan instance/device/swapchain; two frames in flight (see below); draws curve buffer, SDF shape quads, and MSDF text quads each frame |
+| `core/gpu/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame. Its screen-size GPU resources (curve/tile/row buffers, output image — the expensive part) are allocated **lazily on first non-empty `uploadCurves()`** — a host that only uses `Canvas::useShapes()` (see below) never allocates them at all |
+| `core/draw/canvas.hh/cc` | Immediate-mode scene builder. Two output modes per primitive: default emits 20-float curve records (compute-rasterized); `useShapes()` reroutes rect/rectOutline/segment/polyline/triangle into SDF shape quads instead (see "SDF Shape Pipeline") |
+| `core/gpu/art_texture.hh/cc` | `createTextureFromImageFile()`: read a file via `AssetReader` → decode+scale via img_decode_kit → upload as a `Renderer` texture, one call. `mips` parameter (default true) — pass false when the texture is drawn at ≥ its decode size (never minified): skips the mip chain, ~33% less VRAM, no per-upload blit pass |
+| `core/layout/layout.hh/cc` | Resolution-robust layout math (pure, no Vulkan): `UiScale` (proportional scale — floored, uncapped, plus `cappedFactor` for vertically stacking layouts), `clampScroll`, `dockTop/Bottom/Left/Right` (carve strips off a container Rect in place), `centerIn`, `RowCursor`/`ColumnCursor` (gap-chaining). Compute layout from the surface size every frame with these instead of hardcoding pixels. Geometry sibling of `responsive_text.hh` (which stays the text-size formula) |
+| `core/base/animated_float.hh/cc` | `AnimatedFloat` + `easeLinear`/`easeInOutCubic`: per-frame interpolation primitive (call `update(dt)` each frame, read `value()`). Clamps at the target on overshoot; `set()` restarts from the current value. The renderer deliberately has no animation concept — callers own these |
+| `core/input/frame_input.hh/cc` | `FrameInput`: per-frame edge-detected input state implementing `input.hh`'s `InputSink` (`pointerWentDown`/`pointerWentUp` true only on the transition frame, `wheelDelta` accumulated per frame, `keysWentDown` keycode queue). Call `beginFrame()` once per frame *before* pumping platform events. Saves every consumer hand-rolling event→immediate-mode accumulation |
+| `core/draw/text_util.hh/cc` | `truncateToWidth`/`splitTwoLines`/`wrapText` (measure-based, UTF-8-safe, work with any `FontStyle`), `textCenteredStyled` (correct MSDF-measured centering — `Canvas::textCentered` measures the *curve* font and mis-centers MSDF-rendered text), `stripHtmlToPlain` (flatten simple HTML sidecar files to readable paragraphs) |
 | `font.hh/cc`, `glyphs.hh/cc`, `msdf.*` | (from submodule) FreeType wrapper / fallback glyphs / MSDF-or-MTSDF atlas — see the font engine's own CLAUDE.md |
 
 ### SDF Shape Pipeline (the "MSDF for primitives" fast path)
@@ -142,7 +143,7 @@ The shape VBO **grows** (`ensureShapeVboCapacity`, same doubling as the MSDF tex
 
 ### Submodule
 
-`first_party/vulkan_font_engine` — GPU font rendering library, organized like this repo (platform-agnostic `core/` + `platform/android/` demo + root `shaders_src/` + `cmake/VfeShaders.cmake`). Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader, `CurveRasterizer` + `MsdfTextRenderer` GPU units) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. The engine owns the `AssetReader` seam definition (`core/asset_reader.hh`), which our `core/platform.hh` includes — asset loading through it is fully cross-platform (APK assets on Android, files on desktop).
+`first_party/vulkan_font_engine` — GPU font rendering library, organized like this repo (platform-agnostic `core/` + `platform/android/` demo + root `shaders_src/` + `cmake/VfeShaders.cmake`). Its `core/` builds a `vk_font_core` static library (FreeType integration, msdfgen, fallback glyphs, MSDF atlas reader, `CurveRasterizer` + `MsdfTextRenderer` GPU units) that our `core/CMakeLists.txt` consumes via `add_subdirectory` + link; FreeType/msdfgen are its nested submodules under `third_party/`. The engine-specific shaders and the CurveRecord format live here. The engine owns the `AssetReader` seam definition (`core/asset_reader.hh`), which our `core/gpu/platform.hh` includes — asset loading through it is fully cross-platform (APK assets on Android, files on desktop).
 
 ### Per-frame consumer pattern
 
@@ -166,9 +167,9 @@ Everything draws with a full `Color {r,g,b,a}` (`canvas.hh`); a grayscale look i
 
 ## UI capture (headless PNG snapshots — dev tooling)
 
-`core/headless.hh` + `core/capture/` render UI states off-screen and write lossless PNGs — no window, no compositor. It's built on three pieces:
+`core/gpu/headless.hh` + `core/capture/` render UI states off-screen and write lossless PNGs — no window, no compositor. It's built on three pieces:
 
-- **`HeadlessSurfaceProvider`** (`core/headless.hh`) — a `SurfaceProvider` backed by `VK_EXT_headless_surface`. The whole `Renderer` path (swapchain, render pass, pipelines, `draw()`) runs unchanged; the swapchain just presents to nothing. Check `headless_surface_supported()` first (the extension is per-ICD; Mesa lavapipe has it).
+- **`HeadlessSurfaceProvider`** (`core/gpu/headless.hh`) — a `SurfaceProvider` backed by `VK_EXT_headless_surface`. The whole `Renderer` path (swapchain, render pass, pipelines, `draw()`) runs unchanged; the swapchain just presents to nothing. Check `headless_surface_supported()` first (the extension is per-ICD; Mesa lavapipe has it).
 - **`Renderer::readbackLastFrame(rgba_out, w, h)`** — copies the last `draw()`n image to host memory as tightly-packed RGBA8 (the target is `VK_FORMAT_R8G8B8A8_UNORM`, so bytes are PNG-ready, no swizzle). Swapchain images carry `TRANSFER_SRC` usage for this; harmless to the windowed path. Not a hot path (waits for device idle).
 - **`vkc::capture_main(argc, argv, scenarios, cfg)`** (`core/capture/capture.hh`, built as `vk_canvas_capture`) — the generic runner. An app supplies `Scenario{path, render}` entries (`render` draws one state into a Renderer) and a `CaptureConfig{init}` (one-time setup, e.g. `initMsdf`); the runner renders each and writes `<out>/<path>.png`, creating the directory tree. Flags: `--out DIR`, `--frame WxH` (default = primary monitor mode, queried via a windowless `WaylandDisplay`), `--scale N` (1..8 supersample), `--only SUBSTR`, `--list`.
 

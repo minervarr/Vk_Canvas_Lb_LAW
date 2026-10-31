@@ -68,14 +68,15 @@ the `gpu` label is Phase 3 work.
 3. Include only the module under test where possible. Pure tests compile the
    module `.cc` directly; they do not link `vk_canvas_core` unless the module's
    own symbols need the font/renderer half.
-4. Register it in `core/CMakeLists.txt` with the `vce_add_pure_test` helper:
+4. Register it in `core/CMakeLists.txt` with the `vce_add_pure_test` helper,
+   passing the module-relative source path:
 
    ```cmake
-   vce_add_pure_test(my_module_test my_module.cc)
+   vce_add_pure_test(my_module_test base/my_module.cc)
    ```
 
-   The helper adds the include path, C++17, warnings, the `unit` label and
-   `add_test` when `BUILD_TESTING` is on.
+   The helper adds the module include roots, C++17, warnings, the `unit` label
+   and `add_test` when `BUILD_TESTING` is on.
 5. If the module has a Canvas half, split it (see `pager.cc` /
    `pager_draw.cc`) instead of dragging Canvas into a logic test.
 6. Run `tools/audit.sh`; update `docs/MODULES.md` with the new test.

@@ -53,7 +53,7 @@ real; the rules apply now and are checked by `tools/check_deps.py`. See
 
 1. The host owns the platform window and a `Renderer`. It implements the
    `SurfaceProvider`, `AssetReader` and `FrameWaker` seams from
-   `core/platform.hh`.
+   `core/gpu/platform.hh`.
 2. The application builds a frame into reusable buffers: curve records
    (`Canvas` default path), SDF shape vertices (`Canvas::useShapes`), MSDF text
    quads, background/foreground `ImageDraw` lists.
@@ -116,20 +116,20 @@ Phase 3 applies the policy; the roadmap tracks it.
 
 ## Public-header boundaries
 
-- `core/canvas.hh` and `core/types.hh` are draw-level headers and must not pull
-  Vulkan or platform SDKs.
-- `core/renderer.hh` is a GPU-level header; it exposes Vulkan types and the
+- `core/base/types.hh` is a base-level header and `core/draw/canvas.hh` is a
+  draw-level header; neither may pull Vulkan or platform SDKs.
+- `core/gpu/renderer.hh` is a GPU-level header; it exposes Vulkan types and the
   platform seam. `ui/` must not include it.
-- `core/platform.hh` is the only core header allowed to depend on Vulkan's
+- `core/gpu/platform.hh` is the only core header allowed to depend on Vulkan's
   platform surface types; it is implemented by the backends.
 - `App_shell/host.hh` and `app_view.hh` are the program seam; they use portable
   `LayoutRect`/`ColorRef`, not Win32 types.
 
 ## Known deviations (tracked in the roadmap)
 
-- `core/renderer.cc` is a 2,849-line monolith; the public header exposes 60+
+- `core/gpu/renderer.cc` is a 2,849-line monolith; the public header exposes 60+
   members. Phase 1 pimpls and splits it.
-- `core/log.hh` and `core/renderer.hh` contain guarded platform includes (the
+- `core/base/log.hh` and `core/gpu/renderer.hh` contain guarded platform includes (the
   logging shim and the Android camera path). They are allowlisted in
   `check_deps.py` and scheduled to move behind the seam.
 - `core/` still mixes widgets and generic logic; Phase 2 moves the widget layer

@@ -10,7 +10,7 @@ system `wayland-protocols` XML.
 
 What each file provides:
 
-- `wayland_platform.hh/cc` — the `core/platform.hh` seams:
+- `wayland_platform.hh/cc` — the `core/gpu/platform.hh` seams:
   `FileAssetReader` (assets/ next to the executable, via `/proc/self/exe`),
   `WaylandSurfaceProvider` (`VK_KHR_wayland_surface` +
   `vkCreateWaylandSurfaceKHR`; extent = the window's configured size × buffer
@@ -21,10 +21,10 @@ What each file provides:
   scale/name; Wayland has no "primary" — index 0 by convention), and
   `dispatch(timeout_ms)`, the `MsgWaitForMultipleObjects` equivalent: poll on
   {display fd, waker eventfd, key-repeat timerfd}. Seat events are translated
-  into the engine's `InputSink` (`core/input.hh`) — the counterpart of
+  into the engine's `InputSink` (`core/input/input.hh`) — the counterpart of
   `win32_translate_input` — routed by focused surface via `set_sink()`;
   surfaces without a sink drop input (how a read-only mirror window ignores
-  clicks). Key codes are xkb keysyms mapped into `core/keys.hh`'s space; key
+  clicks). Key codes are xkb keysyms mapped into `core/input/keys.hh`'s space; key
   repeat is client-side on Wayland, re-emitted from a timerfd armed per the
   compositor's `repeat_info`.
 - `wayland_window.hh/cc` — one xdg toplevel. A Wayland window has no size

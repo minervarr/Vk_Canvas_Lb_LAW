@@ -4,7 +4,7 @@ Raw `windows.h`, no GLFW/Qt. Self-contained: `Build.bat` → `build_msvc.ps1`
 (vswhere → vcvars64 → Ninja → cl) → `build/vk_canvas.exe`, with shaders
 compiled to `build/assets/shaders/` next to the exe.
 
-Implements the `core/platform.hh` seams:
+Implements the `core/gpu/platform.hh` seams:
 
 - `Win32SurfaceProvider` — reports `VK_KHR_surface` + `VK_KHR_win32_surface`,
   creates via `vkCreateWin32SurfaceKHR` (defines `VK_USE_PLATFORM_WIN32_KHR`

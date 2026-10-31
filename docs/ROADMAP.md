@@ -12,17 +12,18 @@ sync.
 
 ## Current position
 
-- **Phase:** 1 — Module boundaries and renderer split (not started)
-- **Last completed:** Phase 0 — foundation, harness, tests, WIP quarantine,
-  value types, owner semantics, first baseline
-- **Next action:** create the module CMake targets (`base`, `draw`, `gpu`) and
-  move the compiled files with `git mv`, keeping include names stable
+- **Phase:** 1 — Module boundaries and renderer split (in progress; T2.1 done)
+- **Last completed:** T2.1 — five physical module directories, three module
+  targets, compatibility umbrella; `audit: ok` with 11 + 4 tests.
+- **Next action:** T2.2 — pimpl `Renderer` and split
+  `core/gpu/renderer.cc` along device / swapchain / camera / text / shapes /
+  readback, then add the headless draw-path smoke test and `VCE_VK_CHECK`.
 - **Blocking decisions:** none. Reference hardware is recorded in
   `docs/PERFORMANCE.md`; GPU frame timings remain unmeasured until the dev tree
   builds SPIR-V assets.
-- **Resume phrase:** "continue next phase" means start Phase 1 at T2.1 in
-  `.opencode/todo.md`: create the module CMake targets and move the compiled
-  files with `git mv`. Do not start Phase 2 (`ui/`) until Phase 1 is green.
+- **Resume phrase:** "continue next phase" means resume Phase 1 at T2.2 in
+  `.opencode/todo.md`: pimpl and split the renderer. Do not start Phase 2
+  (`ui/`) until Phase 1 is green.
 
 ### How to resume after a context cleanup
 
@@ -34,8 +35,9 @@ cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
 Phase 0 is green: `tools/audit.sh` passes, 11 Vk + 4 App_shell unit tests pass,
-and the baseline is recorded. Phase 1 (module targets + renderer split) is next;
-do not start Phase 2 (`ui/`) until Phase 1 is green.
+and the baseline is recorded. Phase 1 is in progress: T2.1 (module directories
+and targets) is done and audited; T2.2 (renderer pimpl/split) is next. Do not
+start Phase 2 (`ui/`) until Phase 1 is green.
 
 ---
 
@@ -212,16 +214,16 @@ Problems that make auditing and testing harder:
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | No CTest harness; only `text_cover_test` is wired on Linux; the rest are manual `g++` commands. `App_shell` tests need a consumer and a generated header. | open |
-| 2 | `core/renderer.cc` is 2,849 lines; `renderer.hh` exposes 60+ members and mixes device, swapchain, Android camera, MSDF, shapes and frame logic. One object file pulls all of it. | open |
-| 3 | `core/` contains uncompiled WIP files (`canvas_host`, `vulkan_state`, `compute_context`, `text_editor`, `archive`). Two include Android SDK headers, violating the core rule. | open |
-| 4 | `layout.hh` and `pager.hh` include `canvas.hh` only for `Rect`/`Color`, dragging the draw API into pure geometry. | open |
-| 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | open |
-| 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | open |
-| 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | open |
-| 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open |
-| 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | open |
-| 10 | No dependency enforcement: core can include a platform header, or UI can include Vulkan, and nothing fails. | open |
+| 1 | No CTest harness; only `text_cover_test` is wired on Linux; the rest are manual `g++` commands. `App_shell` tests need a consumer and a generated header. | done (Phase 0) |
+| 2 | `core/gpu/renderer.cc` is 2,849 lines; `renderer.hh` exposes 60+ members and mixes device, swapchain, Android camera, MSDF, shapes and frame logic. One object file pulls all of it. | open (T2.2) |
+| 3 | `core/` contains uncompiled WIP files (`canvas_host`, `vulkan_state`, `compute_context`, `text_editor`, `archive`). Two include Android SDK headers, violating the core rule. | done (Phase 0) |
+| 4 | `layout.hh` and `pager.hh` include `canvas.hh` only for `Rect`/`Color`, dragging the draw API into pure geometry. | done (Phase 0) |
+| 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | done (Phase 0) |
+| 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | open (Phase 3) |
+| 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 0 baseline; budgets in Phase 4) |
+| 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open (Phase 3) |
+| 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | open (Phase 2) |
+| 10 | No dependency enforcement: core can include a platform header, or UI can include Vulkan, and nothing fails. | done (T2.1) |
 
 ## 6. Roadmap
 
@@ -242,7 +244,7 @@ Problems that make auditing and testing harder:
 - [x] Split `Pager::drawDots` into `pager_draw.cc` (logic vs draw)
 - [x] Move WIP to `wip/` with a README; remove Android SDK includes from
       `core/`
-- [x] Extract `core/types.hh` (`Rect`, `Color`); break `layout.hh` and
+- [x] Extract `core/base/types.hh` (`Rect`, `Color`); break `layout.hh` and
       `pager.hh` from `canvas.hh`
 - [x] Delete copy semantics on Vulkan owners; add static-assert test.
       Copying an owner was never a supported operation; this turns a latent
@@ -255,19 +257,24 @@ behaviour change in any compiled module. **Verified 2026-10-31:** 11 Vk unit
 tests + 4 App_shell tests pass; `audit: ok`; baseline in
 `docs/PERFORMANCE.md`.
 
-### Phase 1 — Module boundaries and renderer split (PLANNED)
+### Phase 1 — Module boundaries and renderer split (IN PROGRESS)
 
-- Create module CMake targets (`base`, `draw`, `gpu`, compatibility `core`).
-- Move files with `git mv`; keep include names stable through target include
-  dirs. Update `App_shell`'s manual `${VK_CANVAS_DIR}/core` include path to link
-  the module target instead; internal CMake churn, not a consumer break.
-- Pimpl `Renderer`; split `renderer.cc` along device/swapchain/camera/text/
-  shapes/readback boundaries.
-- Decouple `output_target.hh` from `vulkan.h` with a local format description
-  and a compatibility overload; the renderer adapts at the boundary.
-- Add a headless smoke test for every draw path (shapes, MSDF, images, overlay
-  curves, clipping, rotation) and a `FrameStats` smoke test.
-- Add `VCE_VK_CHECK` and validation-layer Debug configuration.
+- [x] Create the module CMake targets (`vk_canvas_base`, `vk_canvas_draw`,
+      `vk_canvas_gpu`, compatibility `vk_canvas_core`) and move the compiled
+      files with `git mv`.
+- [x] Keep include names stable through each target's PUBLIC include directory.
+      `App_shell` keeps its portable "links nothing" property: it carries the
+      five module include roots itself instead of linking an engine target.
+- [x] Map directories to modules in `tools/check_deps.py` and enforce the
+      base/input/layout -> draw -> gpu edges plus the platform/WIP/UI rules.
+- [ ] Pimpl `Renderer`; split `renderer.cc` along device/swapchain/camera/text/
+      shapes/readback boundaries.
+- [ ] Decouple `output_target.hh` from `vulkan.h` with a local format
+      description and a compatibility overload; the renderer adapts at the
+      boundary.
+- [ ] Add a headless smoke test for every draw path (shapes, MSDF, images,
+      overlay curves, clipping, rotation) and a `FrameStats` smoke test.
+- [ ] Add `VCE_VK_CHECK` and validation-layer Debug configuration.
 
 Exit: files under budget; public surface smaller; tests green; a minimal
 consumer links only the modules it uses.

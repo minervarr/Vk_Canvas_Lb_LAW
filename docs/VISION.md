@@ -47,7 +47,7 @@ not the current demo or the first app.
 
 ## Principles
 
-- Keep `core/` portable. Platform needs go through `core/platform.hh`; the two
+- Keep `core/` portable. Platform needs go through `core/gpu/platform.hh`; the two
   guarded exceptions (`log.hh`, `renderer.hh`'s Android camera half) are
   documented and scheduled for removal in Phase 1.
 - Prefer a small explicit interface over a clever abstraction. A boundary that

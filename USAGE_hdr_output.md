@@ -99,7 +99,7 @@ range", so its threshold derives from `OUTPUT_ENCODE`.
 
 | # | Item | Files | Size |
 |---|---|---|---|
-| 1 | Pure selector: `pickTarget(span<VkSurfaceFormatKHR>, bool ext, OutputTarget)` — no Vulkan calls inside | `core/output_target.{hh,cc}` new | ~60 L + ~120 L test |
+| 1 | Pure selector: `pickTarget(span<VkSurfaceFormatKHR>, bool ext, OutputTarget)` — no Vulkan calls inside | `core/gpu/output_target.{hh,cc}` new | ~60 L + ~120 L test |
 | 2 | Unit test, assert-style like `layout_test` (runs desktop, <1 s): preference tables, missing-ext, empty-list, duplicate formats | `core/tests/output_target_test.cc` | — |
 | 3 | Wire selector into `create_swapchain()` behind the ctor flag; fix stale comment `renderer.hh:155-157`; add `hdrActive()`/`activeTarget()` | `renderer.cc/hh` | ~30 L |
 | 4 | Shared `shaders_src/output_encode.slang` (+ PQ OETF constants); `OUTPUT_ENCODE` spec-constant threaded through all pipeline creations | 6 vk_canvas shaders + font-engine's `msdf/composite` consumers note | ~80 L |
@@ -169,7 +169,7 @@ Items 1–5 and 7 are implemented, default-off. What that means concretely:
 
 | # | Item | State |
 |---|---|---|
-| 1 | `pickTarget()` selector | done — `core/output_target.{hh,cc}`, pure, no Vulkan calls |
+| 1 | `pickTarget()` selector | done — `core/gpu/output_target.{hh,cc}`, pure, no Vulkan calls |
 | 2 | Unit test | done — `core/tests/output_target_test.cc`, wired into the Windows test list. **Run and passing** |
 | 3 | Selector wired into `create_swapchain()`; ctor flag; `hdrActive()`/`activeTarget()`/`activeEncode()`; stale comment fixed | done. The full surface-format enumeration is logged every run — that log is how the Open questions below get answered |
 | 4 | `shaders_src/output_encode.slang`; `OUTPUT_ENCODE` spec constant on the image, shape and overlay pipelines | done for vk_canvas's own shaders. **Not** done for the font engine's — see the gap below |
@@ -229,7 +229,7 @@ photograph actually uses — could never emit a value above display white. The
 swapchain would be requested, granted and then fed nothing but SDR-range
 pixels; the feature would have been inert in exactly the case it exists for.
 `rolloff()` now takes the ceiling, which is `outputClipThreshold(headroom)`.
-The curve moved to `rolloffCurve()` in `core/output_target.cc` as the C++
+The curve moved to `rolloffCurve()` in `core/gpu/output_target.cc` as the C++
 authority (same arrangement as `pqEncode()`), and `output_target_test` now
 proves at `ceiling == 1.0` it is **bit-identical** to the old curve across
 2.4M samples — the regression proof for every SDR consumer — plus
@@ -252,7 +252,7 @@ What *is* checked: the C++ all syntax-checks, and `output_target_test` passes,
 now including golden ST.2084 values against the PQ constants
 (100 nits → 0.508078, 1000 → 0.751827, 10000 → 1.0) plus monotonicity over the
 full range. That tests the PQ **math**, on the C++ side, where `pqEncode()` in
-`core/output_target.cc` is the authority; `output_encode.slang` mirrors it by
+`core/gpu/output_target.cc` is the authority; `output_encode.slang` mirrors it by
 inspection and is still untested as a shader.
 
 Treat items 4 and 5 as written-but-untested until a build machine (and then an
