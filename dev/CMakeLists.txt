@@ -23,6 +23,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CTest)
 
+option(APP_SHELL_DEV_BUILD_FUZZ
+    "Build the libFuzzer harness under dev/fuzz (clang only)" OFF)
+
 set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Vk_Canvas_Lb_LAW CACHE PATH
     "Vk_Canvas source root (the directory containing core/)")
 # app_shell no longer consumes a generated min-text-size header; its test
@@ -51,3 +54,7 @@ endforeach()
 add_library(app_shell_header_check OBJECT ${_app_shell_header_sources})
 target_link_libraries(app_shell_header_check PRIVATE app_shell)
 add_custom_target(check_headers DEPENDS app_shell_header_check)
+
+# Optional libFuzzer harness (clang only); tools/audit.sh runs it for a bounded
+# time when enabled. Never part of CTest.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/fuzz fuzz)
