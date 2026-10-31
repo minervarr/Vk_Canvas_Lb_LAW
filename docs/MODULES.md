@@ -4,11 +4,12 @@ Status: canonical, 2026-10-31. This is the audit index: what exists, what it
 depends on, what tests it, and whether it is compiled. Update it whenever a file
 moves, a target is split, or a test is added.
 
-Current shape: **27 compiled `.cc` files** across five physical module
-directories — `base/`, `input/`, `layout/`, `draw/`, `gpu/` — built as three
-static targets: `vk_canvas_base` (base + input + layout), `vk_canvas_draw`
-and `vk_canvas_gpu`. `vk_canvas_core` remains the source-compatible umbrella
-(an INTERFACE target linking all three). `tools/check_deps.py` checks the
+Current shape: **28 compiled `.cc` files** across five engine module
+directories — `base/`, `input/`, `layout/`, `draw/`, `gpu/` — plus the `ui/`
+toolkit. Engine targets: `vk_canvas_base` (base + input + layout),
+`vk_canvas_draw`, `vk_canvas_gpu`; the toolkit is `vk_canvas_ui`.
+`vk_canvas_core` remains the source-compatible umbrella (an INTERFACE target
+linking all four for one transition cycle). `tools/check_deps.py` checks the
 per-target source inventory, the layer edges between directories, and the
 platform/WIP/UI include rules.
 
@@ -33,17 +34,28 @@ Files are module-relative. `base/`, `input/` and `layout/` compile into
 | output target | `gpu/output_target.*` | ~400 | stdlib only | `output_target_test` | Vulkan-free format/colour-space resolution; the Vulkan adapter is a guarded compatibility overload. |
 | headless | `gpu/headless.*` | ~64 | platform | probes | `VK_EXT_headless_surface` provider for capture/tests. |
 | art texture | `gpu/art_texture.*` | ~51 | platform, texture, img_decode | none yet | Read file → decode → texture. Candidate for a CPU/GPU integration test. |
-| widgets | `draw/widgets.*` | ~1,083 | canvas, frame_input | none yet (geometry helpers are pure) | **UI layer.** Phase 2 moves to `ui/widgets`. Split before moving. |
-| text area | `draw/textarea.*` | ~253 | canvas, font | none yet | **UI layer.** Scrollable, wrapped text view. |
-| plot view | `draw/plotview.*` | ~345 | canvas | none yet | **UI layer.** Plot widget. |
-| pager | `draw/pager.*`, `draw/pager_draw.cc` | ~163 | types; draw half uses Canvas | `pager_test` | Page model is tested without Canvas; `drawDots()` is separate. |
 | capture | `capture/*` | ~194 | core, Wayland | none | Dev tool, not part of the library. |
 
-`core/tests/` holds 11 unit binaries plus 3 GPU tests (`text_edge_probe`,
-`shape_outline_probe`, `gpu_smoke_test`). All 14 pass on this machine as of
-2026-10-31. The text tests use the canonical `assets/fonts` face when checked
-in, otherwise the small face in the font-engine submodule; with neither they
-skip (exit 77).
+## `ui/` toolkit
+
+Built as `vk_canvas_ui`, which links `vk_canvas_draw` and `vk_canvas_base` and
+never Vulkan. `vk_canvas_core` still links it for the transition cycle; new
+consumers link `vk_canvas_ui` explicitly.
+
+| Module | Files | Lines | Depends on | Tests | Notes |
+|---|---|---|---|---|---|
+| widgets | `ui/widgets.*` | ~1,083 | canvas, frame_input | `widget_geometry_test`, `ui_state_test` | Immediate-mode, caller-owned state; pure geometry helpers are tested without a Canvas. |
+| text area | `ui/textarea.*` | ~253 | canvas, font | none yet | Scrollable, wrapped text view. |
+| plot view | `ui/plotview.*` | ~345 | canvas | none yet | Plot widget. |
+| pager | `ui/pager.*`, `ui/pager_draw.cc` | ~163 | types; draw half uses Canvas | `pager_test` | Page model tested without Canvas; `drawDots()` is separate. |
+| theme | `ui/theme/theme.hh` | ~70 | base types, type scale | `ui_state_test` | Colour roles, spacing/stroke/density tokens; `ui::TypeScale` aliases the base ladder. |
+
+`core/tests/` holds 10 unit binaries plus 3 GPU tests (`text_edge_probe`,
+`shape_outline_probe`, `gpu_smoke_test`); `ui/tests/` holds 3 unit binaries
+(`pager_test`, `widget_geometry_test`, `ui_state_test`). All 16 pass on this
+machine as of 2026-10-31. The text tests use the canonical `assets/fonts` face
+when checked in, otherwise the small face in the font-engine submodule; with
+neither they skip (exit 77).
 
 ## Not compiled: `wip/`
 
@@ -65,16 +77,16 @@ skip (exit 77).
 |---|---|---|
 | Linux/Wayland | `platform/linux/*` | builds `vk_canvas_wayland`; no shader compilation in this target |
 | Windows | `platform/windows/*` | Win32 + `Build.bat`; compiles shaders via `VfeShaders.cmake` |
-| Android | `platform/android/*` | Gradle + NDK; camera/HWB path lives in `renderer.cc` behind `__ANDROID__` |
+| Android | `platform/android/*` | Gradle + NDK; camera/HWB path lives in `core/gpu/renderer_camera.cc` behind `__ANDROID__` |
 
 ## App_shell
 
 `App_shell` is a separate repository. Portable target: `ui_metrics`,
 `ui_orientation`, `utf16_utf8`, `app_paths` (desktop). Hosts: Win32, Wayland,
 Android. The four CPU-only tests are wired through `App_shell/dev/` and all pass
-under `ctest` as of 2026-10-31. `ui_metrics` currently depends on
-`layout.hh` and a build-generated `ui_min_text_size.gen.h`; Phase 2 moves the
-type scale to `ui/theme` and removes the generated-header coupling.
+under `ctest` as of 2026-10-31. `ui_metrics` now includes only the base-layer
+`type_scale.hh`; `computeUiMetrics(shortSide, minReadablePx)` takes the app's
+font-derived floor, so no generated header is required.
 
 ## Updating this index
 

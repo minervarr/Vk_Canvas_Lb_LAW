@@ -30,7 +30,7 @@ consumer provides the target, its license is the consumer's responsibility.
 |---|---|---|
 | Wayland `xdg-shell` and `idle-inhibit` stubs | system `wayland-protocols` XML, `wayland-scanner` | generated at build time, not committed |
 | SPIR-V shaders | `shaders_src/*.slang` and the font engine's shared shaders | compiled per platform by the consuming build; `slangc` from the Vulkan SDK |
-| `ui_min_text_size.gen.h` | `vulkan_font_engine/tools/min_text_size` + the app's fonts | per-application build artifact; the dev test harness uses a stub |
+| `ui_min_text_size.gen.h` | `vulkan_font_engine/tools/min_text_size` + the app's fonts | optional per-application artifact; App_shell now takes the floor as an argument |
 | `CompositePush` check | `cmake/check_composite_pc.cmake` | compares `renderer.cc` and the shared shader's push block at build time |
 
 ## Fonts and test assets

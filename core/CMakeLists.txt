@@ -50,6 +50,7 @@ add_library(vk_canvas_base STATIC
     input/frame_input.cc
     input/gesture.cc
     layout/layout.cc
+    layout/type_scale.cc
     base/text_buffer.cc
     base/undo_redo.cc
 )
@@ -71,11 +72,6 @@ endif()
 add_library(vk_canvas_draw STATIC
     draw/canvas.cc
     draw/text_util.cc
-    draw/widgets.cc
-    draw/textarea.cc
-    draw/plotview.cc
-    draw/pager.cc
-    draw/pager_draw.cc
 )
 vce_canvas_module(vk_canvas_draw)
 target_include_directories(vk_canvas_draw PUBLIC
@@ -151,13 +147,20 @@ add_dependencies(vk_canvas_gpu vk_canvas_check_composite_pc)
 #
 # Existing consumers link exactly this name. It is an INTERFACE target now, so
 # it carries include paths and link dependencies without merging the modules
-# back into one archive.
+# back into one archive. The UI layer is linked here for one transition cycle;
+# new consumers should link `vk_canvas_ui` explicitly and the engine modules
+# they actually use.
+if(NOT TARGET vk_canvas_ui)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../ui ${CMAKE_BINARY_DIR}/ui)
+endif()
+
 add_library(vk_canvas_core INTERFACE)
 target_compile_features(vk_canvas_core INTERFACE cxx_std_17)
 target_link_libraries(vk_canvas_core INTERFACE
     vk_canvas_base
     vk_canvas_draw
     vk_canvas_gpu
+    vk_canvas_ui
 )
 
 # Pure-logic tests. They compile their module source directly, so they never
@@ -201,9 +204,6 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_pure_test(gesture_test input/gesture.cc)
     vce_add_pure_test(text_buffer_test base/text_buffer.cc)
     vce_add_pure_test(undo_redo_test base/undo_redo.cc base/text_buffer.cc)
-    # pager.cc is the page model; pager_draw.cc is the Canvas half and stays
-    # out of this test on purpose.
-    vce_add_pure_test(pager_test draw/pager.cc)
     # Canvas is an emitter; the test inspects the float records directly.
     # canvas.cc references the font engine's text helpers, so link that, not
     # the whole renderer.

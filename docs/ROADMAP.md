@@ -12,17 +12,17 @@ sync.
 
 ## Current position
 
-- **Phase:** 1 — Module boundaries and renderer split (DONE)
-- **Last completed:** Phase 1 — module targets (T2.1), `Renderer` pimpl and
-  subsystem split + GPU smoke coverage + validation switch (T2.2), and the
-  Vulkan-free `output_target` adapter (T2.3).
-- **Next action:** start Phase 2 at T3.1 in `.opencode/todo.md`: create the
-  `ui/` target and move the widget layer out of `core/draw`.
+- **Phase:** 2 — `ui/` boundary (DONE)
+- **Last completed:** Phase 2 — `vk_canvas_ui`, the widget layer moved out of
+  `core/`, CPU-only geometry/state tests, the theme skeleton, and the type
+  scale moved into the base layer with an app-supplied floor.
+- **Next action:** start Phase 3 at T4.1 in `.opencode/todo.md`: checked Vulkan
+  calls, validation/sanitizer runs, and the recovery-path tests.
 - **Blocking decisions:** none. Reference hardware is recorded in
-  `docs/PERFORMANCE.md`; GPU smoke/probes now run on this machine when the dev
+  `docs/PERFORMANCE.md`; GPU smoke/probes run on this machine when the dev
   tree builds SPIR-V assets (`slangc` on PATH or `-DVCE_SLANGC=...`).
-- **Resume phrase:** "continue next phase" means start Phase 2 (`ui/`) at T3.1
-  in `.opencode/todo.md`. Phase 1 is green.
+- **Resume phrase:** "continue next phase" means start Phase 3 (reliability
+  hardening) at T4.1 in `.opencode/todo.md`. Phase 2 is green.
 
 ### How to resume after a context cleanup
 
@@ -33,10 +33,10 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0 is green. Phase 1 is green: module directories and targets, the
-`Renderer` pimpl/split, GPU smoke coverage, the validation switch, and the
-Vulkan-free `output_target` adapter are all in place and audited. Phase 2
-(`ui/`) is next.
+Phase 0, Phase 1 and Phase 2 are green: the engine modules, the `Renderer`
+pimpl/split, GPU smoke coverage, the Vulkan-free `output_target` adapter, and
+the `ui/` toolkit boundary are all in place and audited. Phase 3 (reliability
+hardening) is next.
 
 ---
 
@@ -226,7 +226,7 @@ Problems that make auditing and testing harder:
 | 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | open (Phase 3) |
 | 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 0 baseline; budgets in Phase 4) |
 | 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open (Phase 3) |
-| 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | open (Phase 2) |
+| 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | done (Phase 2) |
 | 10 | No dependency enforcement: core can include a platform header, or UI can include Vulkan, and nothing fails. | done (T2.1) |
 
 ## 6. Roadmap
@@ -286,18 +286,27 @@ tests + 4 App_shell tests pass; `audit: ok`; baseline in
 Exit: files under budget; public surface smaller; tests green; a minimal
 consumer links only the modules it uses.
 
-### Phase 2 — `ui/` boundary (PLANNED)
+### Phase 2 — `ui/` boundary (DONE)
 
-- Create `ui/` target; move `widgets`, `textarea`, `plotview`, `pager`.
-- Keep old include paths working through the umbrella target for one cycle.
-- Add CPU-only widget geometry tests (record inspection) and a UI-state test.
-- Add `ui/theme` skeleton: colour roles, type roles, spacing/stroke tokens.
-- Move the type-scale logic out of `app_shell/ui_metrics` into `ui/theme`;
-  pass the minimum legible size in as an app value instead of a generated
-  header.
+- [x] Create the `ui/` target (`vk_canvas_ui`); move `widgets`, `textarea`,
+      `plotview` and `pager` out of `core/draw`.
+- [x] Keep old include paths working through the compatibility umbrella for
+      one cycle. `vk_canvas_core` links `vk_canvas_ui`; new code links
+      `vk_canvas_ui` explicitly.
+- [x] Add CPU-only widget geometry tests (pure geometry) and a text-field
+      UI-state test; both link `vk_canvas_ui`, not the renderer.
+- [x] Add `ui/theme`: colour roles, type roles, spacing/stroke/density tokens.
+- [x] Move the type-scale logic out of `app_shell/ui_metrics` into the base
+      layer (`core/layout/type_scale.hh`); `ui/theme` re-exports it as
+      `ui::TypeScale`. App_shell takes `minReadablePx` as an argument and
+      builds without a generated header.
 
-Exit: `core/` contains no widgets; `ui/` has no Vulkan dependency; App_shell
-portable builds without a generated header.
+Exit: `core/` contains no widgets; `ui/` source and headers have no Vulkan
+dependency; App_shell portable builds without a generated header. **Met
+2026-10-31:** 16 CTest entries (13 unit + 3 gpu), `audit: ok`;
+`check_deps.py` enforces the UI inventory and the no-GPU include rule. The
+font-engine archive still puts libvulkan on the final link line; that is a
+transitive property of the submodule's monolithic target, not a UI include.
 
 ### Phase 3 — Reliability hardening (PLANNED)
 

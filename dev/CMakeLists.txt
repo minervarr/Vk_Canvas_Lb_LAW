@@ -82,19 +82,20 @@ endif()
 
 # ── Header self-containment ──────────────────────────────────────────────────
 #
-# One translation unit per public engine header, each including only that
+# One translation unit per public engine/UI header, each including only that
 # header (by its bare name, the source-compatible form callers use). If a
 # header depends on another header it does not include, this fails to compile.
 # Building the `check_headers` target is the check; no test executable is
 # needed. capture/ is a consumer tool, not part of the engine's public surface.
-file(GLOB_RECURSE _core_headers RELATIVE ${VK_CANVAS_DIR}/core
-    ${VK_CANVAS_DIR}/core/*.hh)
-list(FILTER _core_headers EXCLUDE REGEX "^capture/")
+file(GLOB_RECURSE _core_headers ${VK_CANVAS_DIR}/core/*.hh)
+file(GLOB_RECURSE _ui_headers ${VK_CANVAS_DIR}/ui/*.hh)
+set(_engine_headers ${_core_headers} ${_ui_headers})
+list(FILTER _engine_headers EXCLUDE REGEX "/capture/")
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/header_check)
 set(_core_header_sources)
-foreach(_header ${_core_headers})
+foreach(_header ${_engine_headers})
     get_filename_component(_header_name "${_header}" NAME)
-    string(MAKE_C_IDENTIFIER "${_header}" _header_id)
+    string(MAKE_C_IDENTIFIER "${_header_name}" _header_id)
     set(_header_src ${CMAKE_CURRENT_BINARY_DIR}/header_check/${_header_id}.cc)
     file(GENERATE OUTPUT ${_header_src}
         CONTENT "#include \"${_header_name}\"\n")

@@ -28,6 +28,9 @@ INCLUDE_RE = re.compile(r'^\s*#\s*include\s+[<"]([^">]+)[">]', re.MULTILINE)
 MODULE_RE = re.compile(
     r"add_library\s*\(\s*(vk_canvas_(?:base|draw|gpu))\s+STATIC(.*?)\)", re.S
 )
+UI_MODULE_RE = re.compile(
+    r"add_library\s*\(\s*vk_canvas_ui\s+STATIC(.*?)\)", re.S
+)
 
 # Physical module -> the CMake target that owns it. base also owns input/ and
 # layout/: they are separate directories to keep the dependency arrows honest,
@@ -94,11 +97,14 @@ WIP_HEADERS = {
 
 UI_FORBIDDEN = {
     "renderer.hh",
+    "renderer_impl.hh",
     "overlay.hh",
     "image_layer.hh",
     "platform.hh",
     "headless.hh",
     "art_texture.hh",
+    "output_target.hh",
+    "vk_check.hh",
 }
 
 
@@ -140,6 +146,8 @@ def core_header_layers() -> dict[str, str]:
     for directory in ALLOWED_LAYERS:
         for path in repo_files(CORE / directory, (".hh",)):
             owners.setdefault(path.name, directory)
+    for path in repo_files(UI, (".hh",)):
+        owners.setdefault(path.name, "ui")
     return owners
 
 
@@ -178,6 +186,7 @@ def check_module_includes(errors: list[str]) -> None:
 def check_ui_includes(errors: list[str]) -> None:
     if not UI.is_dir():
         return
+    owners = core_header_layers()
     for path in repo_files(UI, (".hh", ".cc")):
         rel = path.relative_to(ROOT).as_posix()
         for inc in includes_of(path):
@@ -185,9 +194,18 @@ def check_ui_includes(errors: list[str]) -> None:
                 errors.append(
                     f"{rel}: ui must not include the GPU/platform layer ({inc!r})"
                 )
+            if inc.startswith("vulkan/") or inc == "vulkan.h":
+                errors.append(
+                    f"{rel}: ui must not include Vulkan ({inc!r})"
+                )
             if is_platform_include(inc):
                 errors.append(
                     f"{rel}: ui must not include a platform SDK header ({inc!r})"
+                )
+            owner = owners.get(Path(inc).name)
+            if owner == "gpu":
+                errors.append(
+                    f"{rel}: ui must not include the gpu layer ({inc!r})"
                 )
 
 
@@ -252,11 +270,42 @@ def check_core_inventory(errors: list[str]) -> int:
     return sum(len(s) for s in listed.values())
 
 
+def check_ui_inventory(errors: list[str]) -> int:
+    cmake = UI / "CMakeLists.txt"
+    if not UI.is_dir():
+        return 0
+    if not cmake.is_file():
+        errors.append("ui/CMakeLists.txt is missing")
+        return 0
+    text = cmake.read_text(encoding="utf-8", errors="replace")
+    match = UI_MODULE_RE.search(text)
+    if not match:
+        errors.append("ui/CMakeLists.txt: vk_canvas_ui source list not found")
+        return 0
+
+    listed = {
+        token.strip()
+        for token in match.group(1).split()
+        if token.strip().endswith(".cc")
+    }
+    actual = {
+        p.relative_to(UI).as_posix()
+        for p in repo_files(UI, (".cc",))
+        if p.relative_to(UI).parts[0] != "tests"
+    }
+    for name in sorted(actual - listed):
+        errors.append(f"ui/{name}: not in vk_canvas_ui source list")
+    for name in sorted(listed - actual):
+        errors.append(f"ui/{name}: listed in CMake but missing on disk")
+    return len(actual)
+
+
 def main() -> int:
     errors: list[str] = []
     check_module_includes(errors)
     check_ui_includes(errors)
     compiled = check_core_inventory(errors)
+    compiled += check_ui_inventory(errors)
 
     if errors:
         print("check_deps: FAILED", file=sys.stderr)
@@ -265,9 +314,10 @@ def main() -> int:
         return 1
 
     core_files = len(repo_files(CORE, (".hh", ".cc")))
+    ui_files = len(repo_files(UI, (".hh", ".cc")))
     print(
-        f"check_deps: ok ({core_files} core files, {compiled} compiled sources "
-        f"across {len(MODULES)} module targets)"
+        f"check_deps: ok ({core_files} core + {ui_files} ui files, "
+        f"{compiled} compiled sources across {len(MODULES) + 1} module targets)"
     )
     return 0
 

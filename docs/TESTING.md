@@ -39,7 +39,7 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `bench` | frame/startup/allocation/size | as above; planned | report, not a hard gate yet |
 | `fuzz` | UTF-8/UTF-16, text buffer, archive parsers | sanitizer build; planned | crash = bug |
 
-The current tree has 11 Vk `unit` tests and 4 App_shell tests. The GPU tests
+The current tree has 13 Vk `unit` tests and 4 App_shell tests. The GPU tests
 (`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`) are registered with
 the `gpu` label and `SKIP_RETURN_CODE 77`; the dev superbuild compiles the
 Slang shaders into `<build>/assets/shaders` when `slangc` is found (override
@@ -48,7 +48,7 @@ with `-DVCE_SLANGC=/path/to/slangc` or disable with
 `assets/fonts` face when checked in, otherwise the face in the font-engine
 submodule; with neither they skip (77).
 
-## Current Vk unit tests
+## Current unit tests
 
 | Test | Module | What it pins |
 |---|---|---|
@@ -60,27 +60,33 @@ submodule; with neither they skip (77).
 | `gesture_test` | `gesture.*` | tap/pan/fling/cancel/long-press ordering |
 | `text_buffer_test` | `text_buffer.*` | gap buffer, cursor, line indexing, out-of-range views |
 | `undo_redo_test` | `undo_redo.*` | insert/erase undo/redo, coalescing, redo invalidation |
-| `pager_test` | `pager.*` | clamp, settle, fling, page rects, zero viewport |
+| `pager_test` | `ui/pager.*` | clamp, settle, fling, page rects, zero viewport |
+| `widget_geometry_test` | `ui/widgets.*` geometry | toggle/stepper/slider/segment/table rects |
+| `ui_state_test` | `ui/widgets.*` text state + theme | insertion, deletion, selection, IME, type scale |
 | `canvas_records_test` | `canvas.*` | curve records, SDF packing, images, clipping |
 | `owner_semantics_test` | `Renderer`/`OverlayRasterizer`/`ImageLayer` | compile-time non-copyability |
 
 ## Adding a test
 
-1. Put it in `Vk_Canvas_Lb_LAW/core/tests/<module>_test.cc` (or
-   `App_shell/tests/`). One binary per module or tightly-related group.
+1. Put it in `Vk_Canvas_Lb_LAW/core/tests/<module>_test.cc`,
+   `Vk_Canvas_Lb_LAW/ui/tests/<module>_test.cc`, or `App_shell/tests/`.
+   One binary per module or tightly-related group.
 2. Start with `#undef NDEBUG` so `assert()` survives a Release build.
 3. Include only the module under test where possible. Pure tests compile the
    module `.cc` directly; they do not link `vk_canvas_core` unless the module's
    own symbols need the font/renderer half.
-4. Register it in `core/CMakeLists.txt` with the `vce_add_pure_test` helper,
-   passing the module-relative source path:
+4. Register it in `core/CMakeLists.txt` with `vce_add_pure_test` (engine) or in
+   `ui/CMakeLists.txt` with `vce_add_ui_test` (toolkit), passing the
+   module-relative source path:
 
    ```cmake
    vce_add_pure_test(my_module_test base/my_module.cc)
+   vce_add_ui_test(my_widget_test)
    ```
 
-   The helper adds the module include roots, C++17, warnings, the `unit` label
-   and `add_test` when `BUILD_TESTING` is on.
+   The helpers add the include roots, C++17, warnings, the `unit` label and
+   `add_test` when `BUILD_TESTING` is on. UI tests link `vk_canvas_ui`, which
+   links draw+font but never Vulkan.
 5. If the module has a Canvas half, split it (see `pager.cc` /
    `pager_draw.cc`) instead of dragging Canvas into a logic test.
 6. Run `tools/audit.sh`; update `docs/MODULES.md` with the new test.
@@ -106,7 +112,8 @@ submodule; with neither they skip (77).
   loss. The normal draw paths (overlay, shapes, images, clip, rotation) are in
   `gpu_smoke_test`.
 - `OverlayRasterizer` and `ImageLayer` resource ownership/teardown under stress.
-- `widgets`, `textarea`, `plotview`, `art_texture`.
+- `textarea`, `plotview` and `art_texture`; widget geometry and text-field
+  state are covered, but their draw calls are not pixel-tested.
 - Platform hosts (Win32/Wayland/Android) and the Java half.
 - Exact pixel output across drivers; the GPU tests assert structure, not hashes.
 - `App_shell`'s `Host`/`AppView` integration and Android JNI paths.

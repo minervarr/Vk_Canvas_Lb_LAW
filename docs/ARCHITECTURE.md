@@ -27,9 +27,9 @@ consumer app
 | `app_shell` portable | base (generic types only) | UI, GPU |
 | platform hosts | gpu, platform SDKs | UI policy |
 
-The current tree is flatter than this target. Phase 1 makes the module targets
-real; the rules apply now and are checked by `tools/check_deps.py`. See
-[`ROADMAP.md`](ROADMAP.md) for the migration.
+The module targets are real (Phase 1) and `ui/` is its own target (Phase 2).
+`tools/check_deps.py` enforces the directory edges, the per-target source
+inventory and the UI/gpu rules. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Repository and build topology
 
@@ -37,14 +37,15 @@ real; the rules apply now and are checked by `tools/check_deps.py`. See
   `platform/windows/CMakeLists.txt`, `platform/linux/CMakeLists.txt` and
   `platform/android/` own their builds. Consumers add `core/` plus exactly one
   backend.
-- `dev/CMakeLists.txt` is a development superbuild: it adds `core`, the Linux
-  backend, capture and the tests so one configure/build/test covers the tree.
-  It is not a library entry point.
+- `dev/CMakeLists.txt` is a development superbuild: it adds `core` (which adds
+  `ui/` through the umbrella), the Linux backend, capture and the tests so one
+  configure/build/test covers the tree. It is not a library entry point.
 - `App_shell` is a separate repository. Its portable target links nothing;
   each host links one platform backend. It must not learn application concepts.
-- Shaders are Slang, compiled per platform by the consuming build. The Linux
-  backend currently builds the window/protocol layer, not the shaders; probes
-  skip (`exit 77`) when the SPIR-V assets are absent.
+- Shaders are Slang, compiled per platform by the consuming build. The dev
+  superbuild compiles them with `slangc` (`VCE_DEV_BUILD_SHADERS`); the Linux
+  backend itself builds the window/protocol layer. Probes skip (`exit 77`)
+  when the SPIR-V assets are absent.
 - `vulkan_font_engine` is a submodule with nested FreeType/msdfgen submodules.
   `img_decode_kit` is checked in. Both are independent of `vk_canvas` at the
   include level; `art_texture.cc` is the thin Vulkan-aware wrapper.
@@ -138,7 +139,8 @@ Phase 3 applies the policy; the roadmap tracks it.
 - `core/base/log.hh` and `core/gpu/renderer.hh` contain guarded platform includes (the
   logging shim and the Android camera path). They are allowlisted in
   `check_deps.py` and scheduled to move behind the seam.
-- `core/` still mixes widgets and generic logic; Phase 2 moves the widget layer
-  to `ui/`.
-- `App_shell/ui_metrics.hh` includes a build-generated header; Phase 2 moves
-  the type scale to `ui/theme` and passes the floor in as an app value.
+- Validation runs still report shader-module SPIR-V version warnings from the
+  installed `slangc`; the draws are correct on this driver. Phase 3 pins the
+  target or upgrades the instance version.
+- Checked Vulkan calls are introduced (`VCE_VK_CHECK`) but not applied across
+  every init/teardown path yet; that is Phase 3.
