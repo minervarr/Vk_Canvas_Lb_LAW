@@ -195,6 +195,7 @@ private:
     // art decode wakes a blocked pump().
     std::mutex         eventsMu_;
     std::vector<Event> events_;
+    std::vector<Event> pendingEvents_;   // reused by drainEvents()
     int                eventFd_ = -1;
     int                timerFd_ = -1;
 

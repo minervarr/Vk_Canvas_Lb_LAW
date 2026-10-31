@@ -720,12 +720,14 @@ void AndroidHost::drainEvents() {
         uint64_t sink = 0;
         while (read(eventFd_, &sink, sizeof(sink)) > 0) {}
     }
-    std::vector<Event> pending;
+    // Reuse the member buffer: a local vector swap freed its capacity every
+    // drain, so each producer post reallocated the next frame.
     {
         std::lock_guard<std::mutex> lk(eventsMu_);
-        pending.swap(events_);
+        pendingEvents_.swap(events_);
     }
-    for (auto& e : pending) dispatchAppEvent(e);
+    for (auto& e : pendingEvents_) dispatchAppEvent(e);
+    pendingEvents_.clear();
 }
 
 void AndroidHost::dispatchAppEvent(const Event& e) {

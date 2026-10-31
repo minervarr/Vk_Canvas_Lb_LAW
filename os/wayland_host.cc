@@ -214,13 +214,15 @@ public:
         if (read(seekTimerFd_, &expirations, sizeof(expirations)) > 0)
             owner_->onTimer(timerId_);
 
-        // Drain cross-thread app events posted via postAppEvent().
-        std::vector<Event> pending;
+        // Drain cross-thread app events posted via postAppEvent(). Keep the
+        // buffer as a member: a local vector swap destroyed its capacity every
+        // pump, so a producer posting events reallocated on the next frame.
         {
             std::lock_guard<std::mutex> lk(eventsMu_);
-            pending.swap(events_);
+            pendingEvents_.swap(events_);
         }
-        for (auto& e : pending) dispatchAppEvent(e);
+        for (auto& e : pendingEvents_) dispatchAppEvent(e);
+        pendingEvents_.clear();
     }
 
     bool quitRequested() const override { return quit_; }
@@ -397,6 +399,7 @@ private:
 
     std::mutex eventsMu_;
     std::vector<Event> events_;
+    std::vector<Event> pendingEvents_;   // reused by pump()
 
     bool lastDownValid_ = false;
     std::chrono::steady_clock::time_point lastDownTime_;
