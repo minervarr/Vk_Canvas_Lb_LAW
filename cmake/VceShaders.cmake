@@ -20,7 +20,11 @@ if(DEFINED ENV{VULKAN_SDK})
         set(_vce_slangc_default "$ENV{VULKAN_SDK}/bin/slangc")
     endif()
 else()
-    set(_vce_slangc_default "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe")
+    # Linux distributions ship slangc on PATH without a Vulkan SDK tree.
+    find_program(_vce_slangc_default NAMES slangc)
+    if(NOT _vce_slangc_default)
+        set(_vce_slangc_default "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe")
+    endif()
 endif()
 set(VCE_SLANGC "${_vce_slangc_default}"
     CACHE FILEPATH "Path to the Slang compiler (slangc) from the Vulkan SDK")

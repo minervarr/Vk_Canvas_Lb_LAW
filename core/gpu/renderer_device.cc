@@ -47,6 +47,24 @@ void Renderer::Impl::create_instance() {
     VkInstanceCreateInfo ci{};
     ci.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ci.pApplicationInfo        = &app_info;
+
+#if defined(VCE_VK_VALIDATION)
+    // Debug-only: request the Khronos validation layer when it is installed.
+    // Missing layer is not fatal — a build machine without the SDK still runs.
+    uint32_t layer_count = 0;
+    vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+    std::vector<VkLayerProperties> layers(layer_count);
+    vkEnumerateInstanceLayerProperties(&layer_count, layers.data());
+    for (const auto& layer : layers) {
+        if (std::strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") == 0) {
+            ci.enabledLayerCount = 1;
+            static const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+            ci.ppEnabledLayerNames = &kValidationLayer;
+            LOGI("Validation layer enabled");
+            break;
+        }
+    }
+#endif // VCE_VK_VALIDATION
     ci.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
     ci.ppEnabledExtensionNames = extensions.data();
 
@@ -280,8 +298,8 @@ void Renderer::Impl::resolve_output_target() {
         LOGI("  [%u] format=%d colorspace=%d", i, formats[i].format, formats[i].colorSpace);
 
     output_ = pickTarget(formats, ext_swapchain_colorspace_, requested_output_);
-    swapchain_format_     = output_.format;
-    swapchain_colorspace_ = output_.colorspace;
+    swapchain_format_     = outputFormatToVk(output_.format);
+    swapchain_colorspace_ = outputColorSpaceToVk(output_.colorspace);
 
     if (output_.fellBack)
         LOGE("Swapchain: %s requested but unsupported here — falling back to SDR 8-bit sRGB",
@@ -292,5 +310,5 @@ void Renderer::Impl::resolve_output_target() {
              "that mode", outputTargetName(output_.target));
     LOGI("Swapchain: target=%s encode=%s fmt=%d colorspace=%d hdr=%d",
          outputTargetName(output_.target), outputEncodeName(output_.encode),
-         swapchain_format_, swapchain_colorspace_, output_.hdr ? 1 : 0);
+         (int)swapchain_format_, (int)swapchain_colorspace_, output_.hdr ? 1 : 0);
 }

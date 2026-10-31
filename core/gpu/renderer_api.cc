@@ -71,6 +71,8 @@ uint32_t Renderer::swapchainImageCount() const {
     return static_cast<uint32_t>(impl_->swapchain_images_.size());
 }
 
+const FrameStats& Renderer::lastFrameStats() const { return impl_->last_stats_; }
+
 void Renderer::notifyResized() { impl_->recreate_swapchain(); }
 
 void Renderer::set_frame_waker(FrameWaker* waker) { impl_->waker_ = waker; }

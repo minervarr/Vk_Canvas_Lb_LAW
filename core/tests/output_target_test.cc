@@ -1,3 +1,5 @@
+// Pure: no Vulkan device, header or link dependency. The renderer converts the
+// local SurfaceFormat to VkSurfaceFormatKHR at the swapchain boundary.
 // Asserts must stay live even though the library builds Release (NDEBUG).
 #undef NDEBUG
 #include <cassert>
@@ -7,14 +9,14 @@
 
 #include "output_target.hh"
 
-static std::vector<VkSurfaceFormatKHR> sdrOnly() {
-  return {{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-          {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+static std::vector<SurfaceFormat> sdrOnly() {
+  return {{OutputFormat::B8G8R8A8Unorm, OutputColorSpace::SrgbNonlinear},
+          {OutputFormat::R8G8B8A8Unorm, OutputColorSpace::SrgbNonlinear}};
 }
 
 static bool isSdrPin(const OutputSelection& s) {
-  return s.format == VK_FORMAT_R8G8B8A8_UNORM &&
-         s.colorspace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
+  return s.format == OutputFormat::R8G8B8A8Unorm &&
+         s.colorspace == OutputColorSpace::SrgbNonlinear &&
          s.target == OutputTarget::SdrSrgb && s.encode == OutputEncode::Srgb &&
          !s.hdr && !s.degraded;
 }
@@ -24,10 +26,10 @@ int main() {
   // request resolves to exactly the pre-HDR pin, whatever the device
   // enumerates and whether or not the colorspace extension is around.
   {
-    std::vector<VkSurfaceFormatKHR> rich = {
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
-        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT},
-        {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    std::vector<SurfaceFormat> rich = {
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear},
+        {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::Hdr10St2084},
+        {OutputFormat::R8G8B8A8Unorm, OutputColorSpace::SrgbNonlinear}};
     OutputSelection s = pickTarget(rich, true, OutputTarget::SdrSrgb);
     assert(isSdrPin(s) && !s.fellBack);  // not a fallback — what was asked for
     assert(isSdrPin(pickTarget(rich, false, OutputTarget::SdrSrgb)));
@@ -37,13 +39,13 @@ int main() {
 
   // ExtendedLinearScrgb: FP16 + EXTENDED_SRGB_LINEAR is the first preference.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_BT2020_LINEAR_EXT},
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::R8G8B8A8Unorm, OutputColorSpace::SrgbNonlinear},
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::Bt2020Linear},
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear}};
     OutputSelection s = pickTarget(f, true, OutputTarget::ExtendedLinearScrgb);
-    assert(s.format == VK_FORMAT_R16G16B16A16_SFLOAT);
-    assert(s.colorspace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT);
+    assert(s.format == OutputFormat::R16G16B16A16Sfloat);
+    assert(s.colorspace == OutputColorSpace::ExtendedSrgbLinear);
     assert(s.encode == OutputEncode::LinearScRgb);
     assert(s.hdr && !s.fellBack && !s.degraded);
     assert(s.target == OutputTarget::ExtendedLinearScrgb);
@@ -51,35 +53,35 @@ int main() {
 
   // ...and BT2020_LINEAR is the second, taken only when the first is absent.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_BT2020_LINEAR_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::Bt2020Linear}};
     OutputSelection s = pickTarget(f, true, OutputTarget::ExtendedLinearScrgb);
-    assert(s.colorspace == VK_COLOR_SPACE_BT2020_LINEAR_EXT);
+    assert(s.colorspace == OutputColorSpace::Bt2020Linear);
     assert(s.hdr && !s.fellBack);
   }
 
   // Hdr10PQ: ST2084 preferred; PASS_THROUGH accepted but flagged degraded.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_PASS_THROUGH_EXT},
-        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::PassThrough},
+        {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::Hdr10St2084}};
     OutputSelection s = pickTarget(f, true, OutputTarget::Hdr10PQ);
-    assert(s.colorspace == VK_COLOR_SPACE_HDR10_ST2084_EXT);
+    assert(s.colorspace == OutputColorSpace::Hdr10St2084);
     assert(s.encode == OutputEncode::PQ && s.hdr && !s.degraded);
 
-    std::vector<VkSurfaceFormatKHR> pt = {
-        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_PASS_THROUGH_EXT}};
+    std::vector<SurfaceFormat> pt = {
+        {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::PassThrough}};
     OutputSelection d = pickTarget(pt, true, OutputTarget::Hdr10PQ);
-    assert(d.colorspace == VK_COLOR_SPACE_PASS_THROUGH_EXT);
+    assert(d.colorspace == OutputColorSpace::PassThrough);
     assert(d.hdr && d.degraded && !d.fellBack);
   }
 
   // Format and colorspace must match as a *pair*: the right format under the
   // wrong colorspace (or vice versa) is not a match.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-        {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::SrgbNonlinear},
+        {OutputFormat::R8G8B8A8Unorm, OutputColorSpace::ExtendedSrgbLinear}};
     OutputSelection s = pickTarget(f, true, OutputTarget::ExtendedLinearScrgb);
     assert(isSdrPin(s) && s.fellBack);
   }
@@ -87,9 +89,9 @@ int main() {
   // Missing VK_EXT_swapchain_colorspace: fall back even if the list claims HDR
   // pairs — those enums are only valid with the instance extension enabled.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
-        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear},
+        {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::Hdr10St2084}};
     OutputSelection a = pickTarget(f, false, OutputTarget::ExtendedLinearScrgb);
     OutputSelection b = pickTarget(f, false, OutputTarget::Hdr10PQ);
     assert(isSdrPin(a) && a.fellBack);
@@ -104,11 +106,11 @@ int main() {
     assert(isSdrPin(s) && s.fellBack);
   }
 
-  // Legacy "any format" reply (a single VK_FORMAT_UNDEFINED entry) advertises
+  // Legacy "any format" reply (a single OutputFormat::Undefined entry) advertises
   // no colorspace but SRGB_NONLINEAR, so HDR requests fall back.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::Undefined, OutputColorSpace::SrgbNonlinear}};
     assert(isSdrPin(pickTarget(f, true, OutputTarget::SdrSrgb)));
     OutputSelection s = pickTarget(f, true, OutputTarget::Hdr10PQ);
     assert(isSdrPin(s) && s.fellBack);
@@ -117,21 +119,21 @@ int main() {
   // A stray UNDEFINED among real entries is NOT the legacy reply (that is
   // defined as a single-entry list), so the genuine pairs after it still count.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::Undefined, OutputColorSpace::SrgbNonlinear},
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear}};
     OutputSelection s = pickTarget(f, true, OutputTarget::ExtendedLinearScrgb);
     assert(s.hdr && !s.fellBack);
-    assert(s.colorspace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT);
+    assert(s.colorspace == OutputColorSpace::ExtendedSrgbLinear);
   }
 
   // Duplicate entries are harmless — first match still wins, same result.
   {
-    std::vector<VkSurfaceFormatKHR> f = {
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
-        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT}};
+    std::vector<SurfaceFormat> f = {
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear},
+        {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear}};
     OutputSelection s = pickTarget(f, true, OutputTarget::ExtendedLinearScrgb);
-    assert(s.hdr && s.colorspace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT);
+    assert(s.hdr && s.colorspace == OutputColorSpace::ExtendedSrgbLinear);
   }
 
   // ── PQ (ST 2084) golden values ────────────────────────────────────────────

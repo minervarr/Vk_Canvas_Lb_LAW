@@ -19,6 +19,17 @@
 
 class TextFont;
 
+// Per-draw CPU timings, refreshed at the end of Renderer::draw(). GPU frame
+// time is not included yet: the same queue-submission policy makes it a
+// separate instrumentation step (timestamps need a query pool). These numbers
+// are for spotting a stall, not for a benchmark claim.
+struct FrameStats {
+    uint64_t draw_count = 0;
+    double   cpu_total_ms = 0.0;   // whole draw() call
+    double   cpu_wait_ms = 0.0;    // waiting for this frame's fence
+    double   cpu_record_ms = 0.0;  // uploads + command recording + acquire
+};
+
 class Renderer {
 public:
     // Owns Vulkan handles and their teardown. Copying one would duplicate the
@@ -169,6 +180,9 @@ public:
     // change, so every image in the swapchain's rotation receives it — else
     // the images skipped in between would present stale content.
     uint32_t swapchainImageCount() const;
+
+    // The timings of the last completed draw(). Zeroed until the first draw().
+    const FrameStats& lastFrameStats() const;
 
     // Force an immediate swapchain rebuild at the surface's current extent.
     // draw() otherwise only discovers a resize lazily, via VK_SUBOPTIMAL_KHR

@@ -119,16 +119,22 @@ Phase 3 applies the policy; the roadmap tracks it.
 - `core/base/types.hh` is a base-level header and `core/draw/canvas.hh` is a
   draw-level header; neither may pull Vulkan or platform SDKs.
 - `core/gpu/renderer.hh` is a GPU-level header; it exposes Vulkan types and the
-  platform seam. `ui/` must not include it.
-- `core/gpu/platform.hh` is the only core header allowed to depend on Vulkan's
-  platform surface types; it is implemented by the backends.
+  platform seam, and hides its state behind `std::unique_ptr<Impl>`. `ui/` must
+  not include it.
+- `core/gpu/output_target.hh` is Vulkan-free: local `OutputFormat` /
+  `OutputColorSpace` plus a compatibility overload that appears only when
+  vulkan.h was included first. `core/gpu/platform.hh` is the only core header
+  allowed to depend on Vulkan's platform surface types; it is implemented by
+  the backends.
 - `App_shell/host.hh` and `app_view.hh` are the program seam; they use portable
   `LayoutRect`/`ColorRef`, not Win32 types.
 
 ## Known deviations (tracked in the roadmap)
 
-- `core/gpu/renderer.cc` is a 2,849-line monolith; the public header exposes 60+
-  members. Phase 1 pimpls and splits it.
+- `core/gpu/renderer.cc` is no longer a monolith: the pimpl splits it into
+  device / swapchain / camera / text / shapes / readback TUs, largest 534
+  lines. The remaining deviations are checked-call coverage (Phase 3) and
+  shader-module validation warnings from the installed `slangc`.
 - `core/base/log.hh` and `core/gpu/renderer.hh` contain guarded platform includes (the
   logging shim and the Android camera path). They are allowlisted in
   `check_deps.py` and scheduled to move behind the seam.

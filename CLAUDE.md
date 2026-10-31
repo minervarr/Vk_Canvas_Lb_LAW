@@ -89,7 +89,7 @@ first_party/
 Rules of the structure:
 - **Core never includes platform SDK headers.** Platform needs go through `core/gpu/platform.hh`: `AssetReader` (shader/font bytes), `SurfaceProvider` (instance extensions + VkSurfaceKHR creation + extent), `FrameWaker` (wake the render loop). Android implements these in `platform/android/android_platform.{hh,cc}`.
 - **Feature use is capability-driven, never platform-hardcoded.** `Renderer` fills a `DeviceCaps` struct at physical-device selection; optional techniques gate on caps so mobile limits never cap PC.
-- The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/gpu/renderer.cc` under `#if defined(__ANDROID__)`.
+- The Android-only camera path (AHardwareBuffer import + ycbcr conversion) lives in `core/gpu/renderer_camera.cc` under `#if defined(__ANDROID__)`.
 - Each platform folder owns its CMake entry: `platform/android/CMakeLists.txt` (reached via `platform/android/app/build.gradle` → `externalNativeBuild.cmake.path`) and `platform/windows/CMakeLists.txt` (standalone project, reached via its `Build.bat`). Both `add_subdirectory` `core/`; there is no root CMakeLists.
 
 ### Device and queue selection
@@ -117,7 +117,7 @@ discovering it as "the UI runs at 2 fps".
 | `platform/android/main.cc` | Android NDK `android_main()` entry |
 | `platform/android/app.hh/cc` | ALooper event loop, window lifecycle, seam wiring, test scene |
 | `platform/android/android_platform.*` | Android impls of the platform.hh seams |
-| `core/gpu/renderer.hh/cc` | Vulkan instance/device/swapchain; two frames in flight (see below); draws curve buffer, SDF shape quads, and MSDF text quads each frame |
+| `core/gpu/renderer.hh` + `renderer_*.cc` | Pimpl public interface (`renderer.hh`), private state (`renderer_impl.hh`), and the device / swapchain / camera / text / shapes / readback TUs. Vulkan instance/device/swapchain; two frames in flight (see below); draws curve buffer, SDF shape quads, and MSDF text quads each frame |
 | `core/gpu/overlay.hh/cc` | Tiling + coverage compute rasteriser, composites over the frame. Its screen-size GPU resources (curve/tile/row buffers, output image — the expensive part) are allocated **lazily on first non-empty `uploadCurves()`** — a host that only uses `Canvas::useShapes()` (see below) never allocates them at all |
 | `core/draw/canvas.hh/cc` | Immediate-mode scene builder. Two output modes per primitive: default emits 20-float curve records (compute-rasterized); `useShapes()` reroutes rect/rectOutline/segment/polyline/triangle into SDF shape quads instead (see "SDF Shape Pipeline") |
 | `core/gpu/art_texture.hh/cc` | `createTextureFromImageFile()`: read a file via `AssetReader` → decode+scale via img_decode_kit → upload as a `Renderer` texture, one call. `mips` parameter (default true) — pass false when the texture is drawn at ≥ its decode size (never minified): skips the mip chain, ~33% less VRAM, no per-upload blit pass |

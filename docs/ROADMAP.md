@@ -12,18 +12,17 @@ sync.
 
 ## Current position
 
-- **Phase:** 1 — Module boundaries and renderer split (in progress; T2.1 done)
-- **Last completed:** T2.1 — five physical module directories, three module
-  targets, compatibility umbrella; `audit: ok` with 11 + 4 tests.
-- **Next action:** T2.2 — pimpl `Renderer` and split
-  `core/gpu/renderer.cc` along device / swapchain / camera / text / shapes /
-  readback, then add the headless draw-path smoke test and `VCE_VK_CHECK`.
+- **Phase:** 1 — Module boundaries and renderer split (DONE)
+- **Last completed:** Phase 1 — module targets (T2.1), `Renderer` pimpl and
+  subsystem split + GPU smoke coverage + validation switch (T2.2), and the
+  Vulkan-free `output_target` adapter (T2.3).
+- **Next action:** start Phase 2 at T3.1 in `.opencode/todo.md`: create the
+  `ui/` target and move the widget layer out of `core/draw`.
 - **Blocking decisions:** none. Reference hardware is recorded in
-  `docs/PERFORMANCE.md`; GPU frame timings remain unmeasured until the dev tree
-  builds SPIR-V assets.
-- **Resume phrase:** "continue next phase" means resume Phase 1 at T2.2 in
-  `.opencode/todo.md`: pimpl and split the renderer. Do not start Phase 2
-  (`ui/`) until Phase 1 is green.
+  `docs/PERFORMANCE.md`; GPU smoke/probes now run on this machine when the dev
+  tree builds SPIR-V assets (`slangc` on PATH or `-DVCE_SLANGC=...`).
+- **Resume phrase:** "continue next phase" means start Phase 2 (`ui/`) at T3.1
+  in `.opencode/todo.md`. Phase 1 is green.
 
 ### How to resume after a context cleanup
 
@@ -34,10 +33,10 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0 is green: `tools/audit.sh` passes, 11 Vk + 4 App_shell unit tests pass,
-and the baseline is recorded. Phase 1 is in progress: T2.1 (module directories
-and targets) is done and audited; T2.2 (renderer pimpl/split) is next. Do not
-start Phase 2 (`ui/`) until Phase 1 is green.
+Phase 0 is green. Phase 1 is green: module directories and targets, the
+`Renderer` pimpl/split, GPU smoke coverage, the validation switch, and the
+Vulkan-free `output_target` adapter are all in place and audited. Phase 2
+(`ui/`) is next.
 
 ---
 
@@ -181,20 +180,24 @@ Notes:
 Renderer split target (after pimpl):
 
 ```
-gpu/renderer.hh            small public interface + unique_ptr<Impl>
-gpu/renderer.cc            ctor/dtor/draw/public methods
+gpu/renderer.hh            small public interface + unique_ptr<Impl> (public surface)
+gpu/renderer.cc            Impl ctor/dtor, draw(), cleanup
+gpu/renderer_api.cc        public Renderer forwarders (the only Impl accessor)
 gpu/renderer_impl.hh       private state shared by the TUs below
 gpu/renderer_device.cc     instance, surface, physical/logical device, queue, caps
 gpu/renderer_swapchain.cc  swapchain, render passes, framebuffers, sync, text composite
 gpu/renderer_camera.cc     external images, AHB/YCbCr, colour description (Android)
-gpu/renderer_text.cc       MSDF/MTSDF atlas, text VBO, text pipeline
+gpu/renderer_text.cc       MSDF/MTSDF atlas, text VBO, atlas updates
+gpu/renderer_text_pipeline.cc  text pipeline, record, cleanup
 gpu/renderer_shapes.cc     SDF shape VBO/pipeline
-gpu/renderer_readback.cc   readback, timings, FrameStats
+gpu/renderer_readback.cc   readback
+gpu/vk_check.hh            VCE_VK_CHECK macro for fatal init paths
 ```
 
 Exit criteria: no file over ~600 lines; public header no longer includes
 `overlay.hh`, `image_layer.hh` or the font atlas internals; `Renderer` is
-non-copyable/movable through its pimpl; all probes green.
+non-copyable/movable through its pimpl; all probes green. **Met 2026-10-31:**
+largest file 534 lines, 14 tests pass (3 GPU, 1 skips without a font).
 
 ## 5. Current state and audit findings (2026-10-31)
 
@@ -215,7 +218,7 @@ Problems that make auditing and testing harder:
 | # | Finding | Status |
 |---|---|---|
 | 1 | No CTest harness; only `text_cover_test` is wired on Linux; the rest are manual `g++` commands. `App_shell` tests need a consumer and a generated header. | done (Phase 0) |
-| 2 | `core/gpu/renderer.cc` is 2,849 lines; `renderer.hh` exposes 60+ members and mixes device, swapchain, Android camera, MSDF, shapes and frame logic. One object file pulls all of it. | open (T2.2) |
+| 2 | `core/gpu/renderer.cc` is 2,849 lines; `renderer.hh` exposes 60+ members and mixes device, swapchain, Android camera, MSDF, shapes and frame logic. One object file pulls all of it. | done (Phase 1: pimpl + 9 TUs) |
 | 3 | `core/` contains uncompiled WIP files (`canvas_host`, `vulkan_state`, `compute_context`, `text_editor`, `archive`). Two include Android SDK headers, violating the core rule. | done (Phase 0) |
 | 4 | `layout.hh` and `pager.hh` include `canvas.hh` only for `Rect`/`Color`, dragging the draw API into pure geometry. | done (Phase 0) |
 | 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | done (Phase 0) |
@@ -257,7 +260,7 @@ behaviour change in any compiled module. **Verified 2026-10-31:** 11 Vk unit
 tests + 4 App_shell tests pass; `audit: ok`; baseline in
 `docs/PERFORMANCE.md`.
 
-### Phase 1 — Module boundaries and renderer split (IN PROGRESS)
+### Phase 1 — Module boundaries and renderer split (DONE)
 
 - [x] Create the module CMake targets (`vk_canvas_base`, `vk_canvas_draw`,
       `vk_canvas_gpu`, compatibility `vk_canvas_core`) and move the compiled
@@ -267,14 +270,17 @@ tests + 4 App_shell tests pass; `audit: ok`; baseline in
       five module include roots itself instead of linking an engine target.
 - [x] Map directories to modules in `tools/check_deps.py` and enforce the
       base/input/layout -> draw -> gpu edges plus the platform/WIP/UI rules.
-- [ ] Pimpl `Renderer`; split `renderer.cc` along device/swapchain/camera/text/
-      shapes/readback boundaries.
-- [ ] Decouple `output_target.hh` from `vulkan.h` with a local format
-      description and a compatibility overload; the renderer adapts at the
-      boundary.
-- [ ] Add a headless smoke test for every draw path (shapes, MSDF, images,
-      overlay curves, clipping, rotation) and a `FrameStats` smoke test.
-- [ ] Add `VCE_VK_CHECK` and validation-layer Debug configuration.
+- [x] Pimpl `Renderer`; split `renderer.cc` along device/swapchain/camera/text/
+      shapes/readback boundaries. Largest TU is 534 lines.
+- [x] Decouple `output_target.hh` from `vulkan.h` with the local
+      `SurfaceFormat`/`OutputFormat` description; the Vulkan compatibility
+      overload is available after vulkan.h and the renderer converts at the
+      swapchain boundary.
+- [x] Add a headless smoke test for every draw path (shapes, MSDF, images,
+      overlay curves, clipping, rotation) and a `FrameStats` smoke test. MSDF
+      skips until a face is present; the other paths run.
+- [x] Add `VCE_VK_CHECK` and an opt-in validation-layer Debug configuration
+      (`-DVCE_VK_VALIDATION=ON`).
 
 Exit: files under budget; public surface smaller; tests green; a minimal
 consumer links only the modules it uses.

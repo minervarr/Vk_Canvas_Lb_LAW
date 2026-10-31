@@ -39,10 +39,13 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `bench` | frame/startup/allocation/size | as above; planned | report, not a hard gate yet |
 | `fuzz` | UTF-8/UTF-16, text buffer, archive parsers | sanitizer build; planned | crash = bug |
 
-The current 11 Vk tests and 4 App_shell tests are all `unit`. The probes
-(`text_edge_probe`, `shape_outline_probe`) are built but not yet registered with
-CTest; they exit 77 when the shaders/assets are missing. Registering them with
-the `gpu` label is Phase 3 work.
+The current tree has 11 Vk `unit` tests and 4 App_shell tests. The GPU tests
+(`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`) are registered with
+the `gpu` label and `SKIP_RETURN_CODE 77`; the dev superbuild compiles the
+Slang shaders into `<build>/assets/shaders` when `slangc` is found (override
+with `-DVCE_SLANGC=/path/to/slangc` or disable with
+`-DVCE_DEV_BUILD_SHADERS=OFF`). `text_edge_probe` still skips without a font at
+`assets/fonts/newcomputermodern/NewCM10-Regular.otf`.
 
 ## Current Vk unit tests
 
@@ -98,22 +101,25 @@ the `gpu` label is Phase 3 work.
 
 ## What is not tested yet
 
-- `Renderer` lifecycle, swapchain recreation, surface loss, device loss.
-- `OverlayRasterizer` and `ImageLayer` resource ownership/teardown.
+- `Renderer` lifecycle edge cases: swapchain recreation, surface loss, device
+  loss. The normal draw paths (overlay, shapes, images, clip, rotation) are in
+  `gpu_smoke_test`.
+- `OverlayRasterizer` and `ImageLayer` resource ownership/teardown under stress.
 - `widgets`, `textarea`, `plotview`, `art_texture`.
 - Platform hosts (Win32/Wayland/Android) and the Java half.
-- Shader output and the curve/shape pipelines under a real GPU.
+- Exact pixel output across drivers; the GPU tests assert structure, not hashes.
 - `App_shell`'s `Host`/`AppView` integration and Android JNI paths.
 
-These are Phase 1/3 work. Until then, changes to those areas need a written
+These gaps are Phase 2/3 work. Until then, changes to those areas need a written
 manual verification note in the commit or PR, and must not claim automated
 coverage.
 
 ## Limitations
 
-- The dev tree builds the Linux backend but not the SPIR-V assets; the probes
-  skip on this machine. Record that in a test result instead of treating a skip
-  as a pass.
+- The dev tree now compiles the SPIR-V assets with `slangc`; the shape and
+  smoke tests run on this machine. `text_edge_probe` and the MSDF section of
+  `gpu_smoke_test` still skip when no font is checked in. Record a skip instead
+  of treating it as a pass.
 - No CI workflow is checked in yet. `tools/audit.sh` is the intended CI entry
   point; adding the workflow is part of the foundation work.
 - There is no benchmark or sanitizer build configuration yet; Phase 3/4 add

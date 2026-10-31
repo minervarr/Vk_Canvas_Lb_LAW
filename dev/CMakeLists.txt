@@ -30,8 +30,47 @@ option(VCE_DEV_BUILD_PLATFORM
     "Build the Linux/Wayland backend" ON)
 option(VCE_DEV_BUILD_CAPTURE
     "Build the headless capture tool (needs the platform backend)" ON)
+option(VCE_DEV_BUILD_SHADERS
+    "Compile the Slang shaders the GPU probes need" ON)
+
+# GPU probes and the headless smoke test read <build>/assets/shaders. The font
+# engine owns composite/msdf/tiling/coverage; this repository owns overlay,
+# image and shape.
+if(VCE_DEV_BUILD_SHADERS)
+    include(${VK_CANVAS_DIR}/cmake/VceShaders.cmake)
+    vce_compile_slang(compile_shared_shaders
+        ${CMAKE_BINARY_DIR}/assets/shaders
+        ${VK_CANVAS_DIR}/first_party/vulkan_font_engine/shaders_src
+        composite_vert
+        composite_frag
+        msdf_vert
+        msdf_frag
+        tiling
+        coverage
+    )
+    vce_compile_slang(compile_canvas_shaders
+        ${CMAKE_BINARY_DIR}/assets/shaders
+        ${VK_CANVAS_DIR}/shaders_src
+        overlay_vert
+        overlay_frag
+        image_vert
+        image_frag
+        shape_vert
+        shape_frag
+    )
+endif()
 
 add_subdirectory(${VK_CANVAS_DIR}/core core)
+
+# The probe executables read the SPIR-V at run time, so build the shaders
+# before them (the ALL target already does; this keeps a targeted build honest).
+if(VCE_DEV_BUILD_SHADERS)
+    foreach(_probe text_edge_probe shape_outline_probe gpu_smoke_test)
+        if(TARGET ${_probe})
+            add_dependencies(${_probe} compile_shared_shaders compile_canvas_shaders)
+        endif()
+    endforeach()
+endif()
 
 if(VCE_DEV_BUILD_PLATFORM)
     add_subdirectory(${VK_CANVAS_DIR}/platform/linux linux)

@@ -182,32 +182,45 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
 #endif  // __ANDROID__
     int64_t t_afterbind = now_ns();
 
+    // Capture seam: with present disabled the acquired image is never handed
+    // back to the compositor, so acquiring again would exhaust the swapchain
+    // after imageCount frames. Re-render into the image already acquired —
+    // readbackLastFrame() wants exactly that image, and its contents are
+    // overwritten every frame.
+    const bool reuse_acquired_image =
+        !present_enabled_ && last_drawn_image_index_ != UINT32_MAX &&
+        last_drawn_image_index_ < swapchain_images_.size();
     uint32_t image_index;
-    VkResult result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
-                                            image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        // The swapchain died mid-transition (monitor move, mode change).
-        // Recreate and retry the acquire IN THIS CALL instead of returning:
-        // dropping the frame presented one whole interval of stale,
-        // wrong-extent content — the "blinking horizontal black bars" seen
-        // while crossing between monitors. (The failed acquire left the
-        // semaphore unsignaled, so reusing it for the retry is valid.)
-        recreate_swapchain();
+    VkResult result = VK_SUCCESS;
+    if (reuse_acquired_image) {
+        image_index = last_drawn_image_index_;
+    } else {
         result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                        image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            // The swapchain died mid-transition (monitor move, mode change).
+            // Recreate and retry the acquire IN THIS CALL instead of returning:
+            // dropping the frame presented one whole interval of stale,
+            // wrong-extent content — the "blinking horizontal black bars" seen
+            // while crossing between monitors. (The failed acquire left the
+            // semaphore unsignaled, so reusing it for the retry is valid.)
+            recreate_swapchain();
+            result = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
+                                           image_available_sems_[frame], VK_NULL_HANDLE, &image_index);
+        }
+        // SURFACE_LOST and DEVICE_LOST leave image_index undefined. Submitting
+        // that index paints a black frame and does not come back. Skip the
+        // frame; a new window rebuilds the swapchain.
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            LOGI("acquire skipped (VkResult %d)", (int)result);
+            return;
+        }
+        // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
+        // render and present it, and let the present side's SUBOPTIMAL trigger
+        // the recreate afterward. The old code bailed here, which both dropped
+        // the frame AND left the acquire semaphore signaled (invalid to reuse
+        // on the next acquire).
     }
-    // SURFACE_LOST and DEVICE_LOST leave image_index undefined. Submitting
-    // that index paints a black frame and does not come back. Skip the
-    // frame; a new window rebuilds the swapchain.
-    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        LOGI("acquire skipped (VkResult %d)", (int)result);
-        return;
-    }
-    // VK_SUBOPTIMAL_KHR from acquire: the image is still perfectly usable —
-    // render and present it, and let the present side's SUBOPTIMAL trigger
-    // the recreate afterward. The old code bailed here, which both dropped
-    // the frame AND left the acquire semaphore signaled (invalid to reuse
-    // on the next acquire).
     int64_t t_afteracquire = now_ns();
 
     // The acquired image's command buffer may belong to the OTHER in-flight
@@ -454,14 +467,18 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     VkSemaphore wait_sems[] = {image_available_sems_[frame]};
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    submit_info.waitSemaphoreCount = 1;
+    submit_info.waitSemaphoreCount = reuse_acquired_image ? 0 : 1;
     submit_info.pWaitSemaphores = wait_sems;
     submit_info.pWaitDstStageMask = wait_stages;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &cmd_buffers_[image_index];
 
+    // The render-finished semaphore exists only for vkQueuePresentKHR. With
+    // present suppressed nobody waits on it, and re-signaling a binary
+    // semaphore that is still signaled is invalid (and stalls the next
+    // submit). Leave it alone on the capture path.
     VkSemaphore signal_sems[] = {render_finished_sems_[frame]};
-    submit_info.signalSemaphoreCount = 1;
+    submit_info.signalSemaphoreCount = present_enabled_ ? 1 : 0;
     submit_info.pSignalSemaphores = signal_sems;
 
     vkQueueSubmit(queue_, 1, &submit_info, in_flight_fences_[frame]);
@@ -489,6 +506,10 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
     // ── Instrumentation: per-frame phase breakdown on slow frames ───────────
     int64_t t_end = now_ns();
     int64_t total = t_end - draw_t0;
+    last_stats_.draw_count = ++draw_count_;
+    last_stats_.cpu_total_ms = (double)total / 1'000'000.0;
+    last_stats_.cpu_wait_ms = (double)(t_afterwait - draw_t0) / 1'000'000.0;
+    last_stats_.cpu_record_ms = (double)(t_afteracquire - t_afterwait) / 1'000'000.0;
     if (total > 50'000'000LL) {
         LOGI("SLOW draw %lldms: wait=%lld upload=%lld bind=%lld acquire=%lld rest=%lld",
              (long long)(total / 1'000'000),

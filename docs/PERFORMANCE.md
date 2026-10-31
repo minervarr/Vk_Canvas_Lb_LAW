@@ -1,8 +1,9 @@
 # Performance baseline
 
-Status: first baseline, 2026-10-31. These numbers exist so later changes can be
-compared against something real. They are **not** budgets yet; budgets are set
-in Phase 4 after the renderer split and the benchmark harness exist.
+Status: second baseline after Phase 1, 2026-10-31. The Phase 0 numbers remain in
+the tables below as the pre-split reference; the "Phase 1 re-baseline" section
+records the post-split numbers. These are **not** budgets yet; budgets are set
+in Phase 4 after the benchmark harness exists.
 
 ## Reference machine
 
@@ -65,25 +66,72 @@ runtime cost. Splitting `renderer.cc` and `widgets.cc` and enabling function
 sections/GC will make the archive granularity finer. Re-measure after Phase 1
 and Phase 4.
 
+## Phase 1 re-baseline (2026-10-31)
+
+The umbrella is now an INTERFACE target, so there is no single
+`libvk_canvas_core.a`. The release archives are measured per module.
+
+| Measurement | Result |
+|---|---|
+| Dev configure, Release, no platform/capture | 0.39 s |
+| Dev build, Release cold, no platform/capture | 9.3 s |
+| `libvk_canvas_base.a`, Release | 42,202 bytes (text 16,810 / data 128) |
+| `libvk_canvas_draw.a`, Release | 162,410 bytes (text 89,278 / data 16) |
+| `libvk_canvas_gpu.a`, Release | 217,866 bytes (text 84,227 / data 200) |
+| Module archives, total | 422,478 bytes (text 190,315 / data 344) |
+| Minimal layout-only executable, stripped | 14,472 bytes |
+| Minimal Canvas + font executable, stripped | 952,888 bytes |
+| Full CTest run, Debug (14 tests) | 0.24 s; 11 unit + 3 gpu, 1 skipped |
+
+The minimal binaries are unchanged from Phase 0, which is the useful result:
+splitting the renderer did not change what a small consumer pays. The module
+archive total is ~9% larger than the old single archive for the same code; that
+is archive bookkeeping, not runtime cost, and Phase 4 measures the linked
+result.
+
+Commands:
+
+```bash
+cmake -S Vk_Canvas_Lb_LAW/dev -B /tmp/opencode/vk-release -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DVCE_DEV_BUILD_PLATFORM=OFF \
+      -DVCE_DEV_BUILD_CAPTURE=OFF
+cmake --build /tmp/opencode/vk-release
+# minimal layout consumer
+g++ -std=c++17 -O2 -Icore/layout -Icore/base <main.cc> \
+    /tmp/opencode/vk-release/core/libvk_canvas_base.a -o min_layout
+```
+
+
 ## GPU/frame timings
 
-Not measured in this baseline. The probes are built, but the dev tree has no
-compiled SPIR-V assets:
+Measured after Phase 1: the dev tree compiles the SPIR-V assets (see
+`VCE_DEV_BUILD_SHADERS`), `VK_EXT_headless_surface` is available, and the
+selected device is the Intel UHD iGPU.
 
-```
-text_edge_probe       exit 77: shaders missing under <build>/assets/
-shape_outline_probe   exit 77: shape shader missing under <build>/assets/
-```
+| Test | Result |
+|---|---|
+| `shape_outline_probe` | pass, 0.07 s wall (includes Renderer init) |
+| `gpu_smoke_test` | pass, 5 frames in 0.07 s; last frame CPU total 0.033 ms, fence wait 0.001 ms, record 0.001 ms |
+| `text_edge_probe` | skip (77): no font at `assets/fonts/newcomputermodern/NewCM10-Regular.otf` |
 
-To measure later:
+`gpu_smoke_test` covers overlay curves, shapes, images, clipping, rotation and
+FrameStats. MSDF runs only when a face is supplied. These are smoke numbers,
+not a frame-rate claim: the frames are tiny (192x128) and the scene is one
+primitive per frame.
 
-1. Compile the shaders into the build tree (the Windows backend does this via
-   `VceShaders.cmake`; the Linux dev tree needs the same step or a prebuilt
-   `assets/shaders` directory).
-2. Ensure `VK_EXT_headless_surface` is available (it is on this machine) and a
-   GPU/ICD is selected.
-3. Run the probes and a benchmark scene with `FrameStats` (Phase 1) for CPU
-   build/submit and GPU timestamps per pass.
+The shader modules still produce validation warnings
+(`VUID-VkShaderModuleCreateInfo-pCode-08737/08740`) because the installed
+`slangc` emits a newer SPIR-V version than the 1.1 instance advertises. The
+draws are correct on this driver, but "validation-clean" is not yet true; that
+is Phase 3 work.
+
+To measure a real scene later:
+
+1. Build with `-DVCE_DEV_BUILD_SHADERS=ON` (default) and a reachable `slangc`.
+2. Run with `-DVCE_VK_VALIDATION=ON` while bringing up a path; expect the
+   shader-module warnings above until the SPIR-V target is pinned.
+3. Add a benchmark scene (shape count, glyph count, images, resolution) and
+   use `Renderer::lastFrameStats()` plus GPU timestamps per pass.
 4. Record the GPU/ICD used. Driver choice changes the result; never compare
    timings across ICDs silently.
 

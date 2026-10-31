@@ -5,49 +5,49 @@
 namespace {
 
 struct Candidate {
-    VkFormat        format;
-    VkColorSpaceKHR colorspace;
+    OutputFormat     format;
+    OutputColorSpace colorspace;
     OutputEncode    encode;
     bool            degraded;  // supported, but not what we'd choose first
 };
 
 // Preference tables from USAGE_hdr_output.md — first supported pair wins.
 const Candidate kExtendedLinear[] = {
-    {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT,
+    {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::ExtendedSrgbLinear,
      OutputEncode::LinearScRgb, false},
-    {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_BT2020_LINEAR_EXT,
+    {OutputFormat::R16G16B16A16Sfloat, OutputColorSpace::Bt2020Linear,
      OutputEncode::LinearScRgb, false},
 };
 
 const Candidate kHdr10[] = {
-    {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT,
+    {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::Hdr10St2084,
      OutputEncode::PQ, false},
     // Passthrough means the compositor does NOT interpret our colorspace; we
     // still write PQ and hope the panel is in PQ mode. Log loudly if used.
-    {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_PASS_THROUGH_EXT,
+    {OutputFormat::A2B10G10R10UnormPack32, OutputColorSpace::PassThrough,
      OutputEncode::PQ, true},
 };
 
 OutputSelection sdrPin() {
     OutputSelection s{};
-    s.format     = VK_FORMAT_R8G8B8A8_UNORM;
-    s.colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    s.format     = OutputFormat::R8G8B8A8Unorm;
+    s.colorspace = OutputColorSpace::SrgbNonlinear;
     s.target     = OutputTarget::SdrSrgb;
     s.encode     = OutputEncode::Srgb;
     s.hdr        = false;
     return s;
 }
 
-bool supports(const VkSurfaceFormatKHR* formats, size_t count,
-              VkFormat f, VkColorSpaceKHR cs) {
+bool supports(const SurfaceFormat* formats, size_t count,
+              OutputFormat f, OutputColorSpace cs) {
     // The legacy "any format" reply is defined as a list of EXACTLY ONE entry
     // whose format is UNDEFINED: the surface has no preference and the caller
     // may pick freely. It never advertises an HDR colorspace, so only the SDR
     // pin matches. Scoped to count == 1 deliberately — a driver that emits a
     // stray UNDEFINED among real entries is non-conformant, and treating that
     // as the legacy reply would throw away every genuine pair after it.
-    if (count == 1 && formats[0].format == VK_FORMAT_UNDEFINED)
-        return cs == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    if (count == 1 && formats[0].format == OutputFormat::Undefined)
+        return cs == OutputColorSpace::SrgbNonlinear;
 
     for (size_t i = 0; i < count; ++i)
         if (formats[i].format == f && formats[i].colorSpace == cs) return true;
@@ -55,7 +55,7 @@ bool supports(const VkSurfaceFormatKHR* formats, size_t count,
 }
 
 OutputSelection tryTable(const Candidate* table, size_t n,
-                         const VkSurfaceFormatKHR* formats, size_t count,
+                         const SurfaceFormat* formats, size_t count,
                          OutputTarget requested) {
     for (size_t i = 0; i < n; ++i) {
         if (!supports(formats, count, table[i].format, table[i].colorspace))
@@ -76,7 +76,7 @@ OutputSelection tryTable(const Candidate* table, size_t n,
 
 }  // namespace
 
-OutputSelection pickTarget(const VkSurfaceFormatKHR* formats, size_t count,
+OutputSelection pickTarget(const SurfaceFormat* formats, size_t count,
                            bool extColorspace, OutputTarget requested) {
     if (requested == OutputTarget::SdrSrgb) return sdrPin();
 

@@ -114,6 +114,8 @@ struct Renderer::Impl {
     // Perf instrumentation (logged once per second).
     int64_t pv_prev_ns_ = 0, pv_window_ns_ = 0, pv_max_gap_ns_ = 0; int pv_frames_ = 0;
     int64_t dr_window_ns_ = 0, dr_max_ns_ = 0; int dr_frames_ = 0;
+    FrameStats last_stats_{};
+    uint64_t   draw_count_ = 0;
 
     VkInstance       instance_       = VK_NULL_HANDLE;
     VkSurfaceKHR     surface_        = VK_NULL_HANDLE;

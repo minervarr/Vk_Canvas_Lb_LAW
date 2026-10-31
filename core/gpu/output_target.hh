@@ -1,6 +1,6 @@
 #pragma once
-#include <vulkan/vulkan.h>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 // Swapchain output target selection — pure logic, no Vulkan calls.
@@ -51,9 +51,34 @@ enum class OutputEncode {
     PQ = 2,         // tone-map to target range, then ST 2084 OETF
 };
 
+// The engine's own format/colorspace description. Deliberately Vulkan-free:
+// the picker is pure logic and is tested without a device. The renderer
+// converts to Vulkan at the swapchain boundary (see the compatibility block at
+// the bottom, available when a translation unit has already included vulkan.h).
+enum class OutputFormat : uint32_t {
+    Undefined = 0,
+    R8G8B8A8Unorm,
+    B8G8R8A8Unorm,
+    R16G16B16A16Sfloat,
+    A2B10G10R10UnormPack32,
+};
+
+enum class OutputColorSpace : uint32_t {
+    SrgbNonlinear = 0,
+    ExtendedSrgbLinear,
+    Bt2020Linear,
+    Hdr10St2084,
+    PassThrough,
+};
+
+struct SurfaceFormat {
+    OutputFormat      format     = OutputFormat::Undefined;
+    OutputColorSpace  colorSpace = OutputColorSpace::SrgbNonlinear;
+};
+
 struct OutputSelection {
-    VkFormat        format     = VK_FORMAT_R8G8B8A8_UNORM;
-    VkColorSpaceKHR colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    OutputFormat     format     = OutputFormat::R8G8B8A8Unorm;
+    OutputColorSpace colorspace = OutputColorSpace::SrgbNonlinear;
     OutputTarget    target     = OutputTarget::SdrSrgb;
     OutputEncode    encode     = OutputEncode::Srgb;
     bool            hdr        = false;
@@ -66,17 +91,17 @@ struct OutputSelection {
     bool            degraded   = false;
 };
 
-// Resolve `requested` against one vkGetPhysicalDeviceSurfaceFormatsKHR
-// enumeration. `extColorspace` is whether VK_EXT_swapchain_colorspace was
-// enabled at instance level — without it, only SRGB_NONLINEAR is meaningful,
-// so every HDR request falls back regardless of what the list claims.
+// Resolve `requested` against one surface format enumeration. `extColorspace`
+// is whether VK_EXT_swapchain_colorspace was enabled at instance level —
+// without it, only SRGB_NONLINEAR is meaningful, so every HDR request falls
+// back regardless of what the list claims.
 //
-// A single {VK_FORMAT_UNDEFINED, ...} entry (the legacy "any format" reply)
-// is treated as "the SDR pin is available", nothing more.
-OutputSelection pickTarget(const VkSurfaceFormatKHR* formats, size_t count,
+// A single {Undefined, ...} entry (the legacy "any format" reply) is treated
+// as "the SDR pin is available", nothing more.
+OutputSelection pickTarget(const SurfaceFormat* formats, size_t count,
                            bool extColorspace, OutputTarget requested);
 
-inline OutputSelection pickTarget(const std::vector<VkSurfaceFormatKHR>& formats,
+inline OutputSelection pickTarget(const std::vector<SurfaceFormat>& formats,
                                   bool extColorspace, OutputTarget requested) {
     return pickTarget(formats.data(), formats.size(), extColorspace, requested);
 }
@@ -127,6 +152,10 @@ const char* outputEncodeName(OutputEncode e);
 // shaders_src/output_encode.slang declares. Hold one alive across the
 // vkCreateGraphicsPipelines call — `info` points into this object, so it is
 // deliberately non-copyable and non-movable.
+//
+// Only available after vulkan.h has been included: it is the adapter at the
+// renderer boundary, not part of the pure selection model.
+#if defined(VK_VERSION_1_0)
 struct OutputEncodeSpec {
     int32_t                  value;
     VkSpecializationMapEntry entry{};
@@ -146,3 +175,70 @@ struct OutputEncodeSpec {
 
     const VkSpecializationInfo* get() const { return &info; }
 };
+
+// ── Vulkan adapter (compatibility overload) ─────────────────────────────────
+//
+// Available only when vulkan.h was included first, which is the case in every
+// renderer TU. The pure picker above is what a platform-neutral test uses; the
+// renderer converts the enumeration and the chosen pair here.
+
+inline OutputFormat outputFormatFromVk(VkFormat f) {
+    switch (f) {
+        case VK_FORMAT_R8G8B8A8_UNORM:           return OutputFormat::R8G8B8A8Unorm;
+        case VK_FORMAT_B8G8R8A8_UNORM:           return OutputFormat::B8G8R8A8Unorm;
+        case VK_FORMAT_R16G16B16A16_SFLOAT:      return OutputFormat::R16G16B16A16Sfloat;
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return OutputFormat::A2B10G10R10UnormPack32;
+        case VK_FORMAT_UNDEFINED:                return OutputFormat::Undefined;
+        default:                                 return OutputFormat::Undefined;
+    }
+}
+
+inline OutputColorSpace outputColorSpaceFromVk(VkColorSpaceKHR c) {
+    switch (c) {
+        case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:      return OutputColorSpace::SrgbNonlinear;
+        case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT: return OutputColorSpace::ExtendedSrgbLinear;
+        case VK_COLOR_SPACE_BT2020_LINEAR_EXT:        return OutputColorSpace::Bt2020Linear;
+        case VK_COLOR_SPACE_HDR10_ST2084_EXT:         return OutputColorSpace::Hdr10St2084;
+        case VK_COLOR_SPACE_PASS_THROUGH_EXT:         return OutputColorSpace::PassThrough;
+        default:                                      return OutputColorSpace::SrgbNonlinear;
+    }
+}
+
+inline VkFormat outputFormatToVk(OutputFormat f) {
+    switch (f) {
+        case OutputFormat::R8G8B8A8Unorm:           return VK_FORMAT_R8G8B8A8_UNORM;
+        case OutputFormat::B8G8R8A8Unorm:           return VK_FORMAT_B8G8R8A8_UNORM;
+        case OutputFormat::R16G16B16A16Sfloat:      return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case OutputFormat::A2B10G10R10UnormPack32:  return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        default:                                    return VK_FORMAT_UNDEFINED;
+    }
+}
+
+inline VkColorSpaceKHR outputColorSpaceToVk(OutputColorSpace c) {
+    switch (c) {
+        case OutputColorSpace::SrgbNonlinear:    return VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        case OutputColorSpace::ExtendedSrgbLinear: return VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+        case OutputColorSpace::Bt2020Linear:      return VK_COLOR_SPACE_BT2020_LINEAR_EXT;
+        case OutputColorSpace::Hdr10St2084:       return VK_COLOR_SPACE_HDR10_ST2084_EXT;
+        case OutputColorSpace::PassThrough:       return VK_COLOR_SPACE_PASS_THROUGH_EXT;
+    }
+    return VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+}
+
+inline OutputSelection pickTarget(const VkSurfaceFormatKHR* formats, size_t count,
+                                  bool extColorspace, OutputTarget requested) {
+    std::vector<SurfaceFormat> converted;
+    converted.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        converted.push_back({ outputFormatFromVk(formats[i].format),
+                              outputColorSpaceFromVk(formats[i].colorSpace) });
+    }
+    return pickTarget(converted, extColorspace, requested);
+}
+
+inline OutputSelection pickTarget(const std::vector<VkSurfaceFormatKHR>& formats,
+                                  bool extColorspace, OutputTarget requested) {
+    return pickTarget(formats.data(), formats.size(), extColorspace, requested);
+}
+
+#endif // VK_VERSION_1_0

@@ -102,8 +102,17 @@ add_library(vk_canvas_gpu STATIC
     gpu/headless.cc
     gpu/art_texture.cc
     gpu/platform.hh
+    gpu/vk_check.hh
 )
 vce_canvas_module(vk_canvas_gpu)
+
+# Opt-in: request VK_LAYER_KHRONOS_validation (Debug runs). The layer must be
+# installed; a missing layer is reported and skipped.
+option(VCE_VK_VALIDATION
+    "Enable the Khronos validation layer when the Renderer creates its instance" OFF)
+if(VCE_VK_VALIDATION)
+    target_compile_definitions(vk_canvas_gpu PRIVATE VCE_VK_VALIDATION)
+endif()
 target_include_directories(vk_canvas_gpu PUBLIC
     ${VCE_CORE_GPU_DIR}
 )
@@ -187,9 +196,7 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_pure_test(animated_float_test base/animated_float.cc)
     vce_add_pure_test(frame_input_test input/frame_input.cc)
     vce_add_pure_test(output_target_test gpu/output_target.cc)
-    # output_target.hh includes <vulkan/vulkan.h> for VkFormat/VkColorSpaceKHR;
-    # the test itself never calls the Vulkan API.
-    target_link_libraries(output_target_test PRIVATE Vulkan::Vulkan)
+    # output_target.hh is Vulkan-free now; the test is pure and links no loader.
 
     vce_add_pure_test(gesture_test input/gesture.cc)
     vce_add_pure_test(text_buffer_test base/text_buffer.cc)
@@ -236,5 +243,30 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(shape_outline_probe PRIVATE /W3 /utf-8)
     else()
         target_compile_options(shape_outline_probe PRIVATE -Wall -Wextra)
+    endif()
+
+    # Headless smoke test for overlay curves, shapes, images, clipping,
+    # rotation, MSDF (when a font is supplied) and FrameStats. Exit 77 without
+    # a headless surface or the built shaders.
+    add_executable(gpu_smoke_test tests/gpu_smoke_test.cc)
+    target_include_directories(gpu_smoke_test PRIVATE ${VCE_CORE_INCLUDE_DIRS})
+    target_compile_features(gpu_smoke_test PRIVATE cxx_std_17)
+    target_compile_definitions(gpu_smoke_test PRIVATE
+        GPU_SMOKE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/"
+        GPU_SMOKE_FONT="${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+    target_link_libraries(gpu_smoke_test PRIVATE vk_canvas_core)
+    if(MSVC)
+        target_compile_options(gpu_smoke_test PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(gpu_smoke_test PRIVATE -Wall -Wextra)
+    endif()
+
+    if(BUILD_TESTING)
+        foreach(gpu_test text_edge_probe shape_outline_probe gpu_smoke_test)
+            add_test(NAME ${gpu_test} COMMAND $<TARGET_FILE:${gpu_test}>)
+            set_tests_properties(${gpu_test} PROPERTIES
+                LABELS gpu
+                SKIP_RETURN_CODE 77)
+        endforeach()
     endif()
 endif()
