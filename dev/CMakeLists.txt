@@ -25,14 +25,9 @@ include(CTest)
 
 set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Vk_Canvas_Lb_LAW CACHE PATH
     "Vk_Canvas source root (the directory containing core/)")
-set(APP_SHELL_TEST_MIN_TEXT_SIZE "16.0f" CACHE STRING
-    "Stub value for kMinReadableTextSizePx in the dev/test build")
-
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated)
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/ui_min_text_size.gen.h.in
-    ${CMAKE_BINARY_DIR}/generated/ui_min_text_size.gen.h
-    @ONLY)
+# app_shell no longer consumes a generated min-text-size header; its test
+# supplies the legibility floor as a value. ui_min_text_size.gen.h.in stays in
+# the tree for apps that still use app_shell_generate_min_text_size().
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. app_shell)
 

@@ -21,17 +21,17 @@ set(APP_SHELL_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE INTERNAL "app_shell source r
 set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vk_canvas CACHE PATH
     "Where vk_canvas lives; app_shell needs its core headers and one backend")
 
-# Also pushed to the parent: the CONSUMER calls
-# app_shell_generate_min_text_size(), because the font list is the consumer's.
+# The min-text-size generator remains available for apps that want to measure
+# their own fonts (cmake/AppShellMinTextSize.cmake), but app_shell itself no
+# longer consumes its header: UiMetrics takes the floor as an argument.
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} PARENT_SCOPE)
 
 # ── The portable half ────────────────────────────────────────────────────────
 #
-# ui_metrics.cc is the only file here that includes anything of vk_canvas's
-# (layout.hh, for UiScale) and the only one that needs the generated
-# ui_min_text_size.gen.h — which is why the include directories below carry both
-# and why a consumer must add_dependencies(... generate_ui_min_text_size).
+# ui_metrics.cc is the only portable file that includes anything of vk_canvas's
+# (layout/type_scale.hh, the base-layer type scale). It links no engine target
+# and needs no build-generated header.
 # app_paths.cc is the DESKTOP answer to exeDir()/stateDir(): probe the OS for
 # where the binary is, and $HOME for where to write. Neither question means
 # anything on Android, where both are handed to the app for free — so there the
@@ -58,8 +58,7 @@ target_include_directories(app_shell PUBLIC
     ${VK_CANVAS_DIR}/core/layout
     ${VK_CANVAS_DIR}/core/draw
     ${VK_CANVAS_DIR}/core/gpu
-    ${VK_CANVAS_DIR}/first_party/vulkan_font_engine/core
-    ${CMAKE_BINARY_DIR}/generated)
+    ${VK_CANVAS_DIR}/first_party/vulkan_font_engine/core)
 
 target_compile_features(app_shell PUBLIC cxx_std_17)
 
@@ -163,21 +162,15 @@ endif()
 # a test can never quietly start depending on Vulkan; ui_metrics_test is the one
 # that needs an include path at all, for layout.hh and the generated floor.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
-    add_executable(ui_metrics_test tests/ui_metrics_test.cc ui_metrics.cc)
+    add_executable(ui_metrics_test tests/ui_metrics_test.cc ui_metrics.cc
+        ${VK_CANVAS_DIR}/core/layout/type_scale.cc)
     target_include_directories(ui_metrics_test PRIVATE
         ${APP_SHELL_DIR}
         ${VK_CANVAS_DIR}/core/base
         ${VK_CANVAS_DIR}/core/input
         ${VK_CANVAS_DIR}/core/layout
         ${VK_CANVAS_DIR}/core/draw
-        ${VK_CANVAS_DIR}/core/gpu
-        ${CMAKE_BINARY_DIR}/generated)
-    # A consumer normally calls app_shell_generate_min_text_size() before this
-    # file, which defines the target. The dev superbuild supplies a stub header
-    # instead, so the test must not require the target to exist.
-    if(TARGET generate_ui_min_text_size)
-        add_dependencies(ui_metrics_test generate_ui_min_text_size)
-    endif()
+        ${VK_CANVAS_DIR}/core/gpu)
 
     add_executable(ui_orientation_test tests/ui_orientation_test.cc ui_orientation.cc)
     target_include_directories(ui_orientation_test PRIVATE ${APP_SHELL_DIR})

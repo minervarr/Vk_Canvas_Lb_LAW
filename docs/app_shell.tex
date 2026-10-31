@@ -670,7 +670,7 @@ struct UiMetrics {
     float stroke(float authored) const;  // snapped to whole device pixels
 };
 
-UiMetrics computeUiMetrics(float contentShortSide);
+UiMetrics computeUiMetrics(float contentShortSide, float minReadablePx);
 \end{lstlisting}
 
 Two decisions here are load-bearing.
@@ -695,11 +695,18 @@ reference size.
 blurred across two --- continuous scaling would put it at $1.33$\,px on a 1440p
 screen.
 
-\paragraph{The generated header.} \texttt{ui\_metrics.hh} includes
-\texttt{ui\_min\_text\_size.gen.h}, produced at build time from \emph{the
-consuming application's own fonts}: the emitted floor is the worst case across
-them. It is therefore a per-application number and not a library constant. See
-Section~\ref{sec:mintext}.
+\paragraph{The legibility floor is an argument.} The type scale lives in the
+engine's base layer (\texttt{core/layout/type\_scale.hh}); \texttt{ui\_metrics.hh}
+includes it and no longer includes a generated header.
+\texttt{computeUiMetrics()} takes \texttt{minReadablePx}, the worst-case floor
+measured from \emph{the consuming application's own fonts}. It is therefore a
+per-application number and not a library constant. The generator in
+Section~\ref{sec:mintext} remains available for an app that wants that number
+emitted as a constant.
+
+The functions are compiled in \texttt{core/layout/type\_scale.cc}; a consumer
+that calls them links\/compiles \texttt{vk\_canvas\_base}. \texttt{app\_shell}
+itself still links no engine target.
 
 \subsection{\texttt{ui\_orientation} --- which way round the window is}
 
@@ -925,8 +932,9 @@ add_dependencies(app_shell generate_ui_min_text_size)
 \end{lstlisting}
 
 This emits \texttt{ui\_min\_text\_size.gen.h} into the build tree's
-\texttt{generated/} directory, which \texttt{ui\_metrics.hh}
-includes. The value is derived from the listed
+\texttt{generated/} directory. It is optional: pass the constant to
+\texttt{computeUiMetrics()} yourself, or include the header if the app wants
+the generated name. The value is derived from the listed
 faces' own outline geometry: the smallest device-pixel size at which their
 strokes are still above what antialiased rendering can represent.
 
@@ -940,11 +948,12 @@ Two constraints:
   execute on the build machine. An Android build copies the header out of a
   desktop build tree instead, which means a desktop build must have happened
   first.
-\item The dependency must be stated by the consumer --- \\
-  \texttt{add\_dependencies(app\_shell generate\_ui\_min\_text\_size)} --- \\
-  because the target does not exist yet when CMake reads this library's own
-  \texttt{CMakeLists.txt}. The consumer owns the font list, so the consumer owns
-  the ordering.
+\item If the app includes the generated header, the ordering is the
+  consumer's to state (\texttt{add\_dependencies(app\_shell
+  generate\_ui\_min\_text\_size)}) because the target does not exist yet when
+  CMake reads this library's own \texttt{CMakeLists.txt}. app\_shell itself no
+  longer includes the header, so it does not need that dependency. The consumer
+  owns the font list, so the consumer owns the ordering.
 \end{itemize}
 
 %======================================================================

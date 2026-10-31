@@ -236,21 +236,28 @@ no client-side "float at this size" request — so the same binary floats at
 
 ---
 
-## `ui_metrics` and the header it includes
+## `ui_metrics` and the type scale
 
-`ui_metrics.hh` includes `ui_min_text_size.gen.h`, generated at build time from
-**the consuming app's own fonts**: the emitted floor is the worst case across
-them, so it is a per-application number and not a library constant.
+The type scale now lives in the engine's base layer
+(`Vk_Canvas_Lb_LAW/core/layout/type_scale.hh`); `ui_metrics.hh` includes it and
+no longer includes a generated header. `computeUiMetrics(shortSide,
+minReadablePx)` takes the app's font-derived legibility floor as a value, so
+App_shell builds without a consumer, a font or a generator.
 
-The recipe is `cmake/AppShellMinTextSize.cmake`; the consumer calls
-`app_shell_generate_min_text_size(<its faces>)` and then
-`add_dependencies(app_shell generate_ui_min_text_size)`. It cannot run under a
+`cmake/AppShellMinTextSize.cmake` remains available for an app that wants the
+floor emitted as `ui_min_text_size.gen.h`. It cannot run under a
 cross-compiler, so an Android build copies the header out of a desktop build
-tree — see any consumer's `android/CMakeLists.txt`.
+tree — see any consumer's `android/CMakeLists.txt`. App_shell itself no longer
+needs `add_dependencies(app_shell generate_ui_min_text_size)`.
 
 `ui_metrics` takes the window's **short side**, not its height. Identical for
 any window wider than tall, but a 1080x1920 monitor would otherwise scale 1.78x
 because the screen is TALL, not big.
+
+`computeUiMetrics()` and `UiMetrics::stroke()` are defined in
+`core/layout/type_scale.cc`. A consumer that calls them links
+`vk_canvas_base` (or compiles that one TU, as `ui_metrics_test` does).
+`app_shell` itself still links no engine target.
 
 ---
 

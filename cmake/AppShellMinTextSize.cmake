@@ -1,8 +1,11 @@
 # ── app_shell_generate_min_text_size(<font files...>) ────────────────────────
 #
-# Emits ${CMAKE_BINARY_DIR}/generated/ui_min_text_size.gen.h, which
-# ui_metrics.hh includes, and defines the target `generate_ui_min_text_size`
-# that any consumer of app_shell's UiMetrics must add_dependencies() on.
+# Emits ${CMAKE_BINARY_DIR}/generated/ui_min_text_size.gen.h and defines the
+# target `generate_ui_min_text_size`. app_shell itself no longer includes the
+# header: computeUiMetrics(shortSide, minReadablePx) takes the floor as a value.
+# An app that wants the generated constant can include the header and pass its
+# kMinReadableTextSizePx; add_dependencies(... generate_ui_min_text_size) only
+# for that use, not for app_shell itself.
 #
 # The value it computes is the smallest device-pixel size at which the given
 # faces can still be rendered legibly — derived from their own outline geometry
