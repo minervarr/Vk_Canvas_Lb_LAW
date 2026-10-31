@@ -197,7 +197,8 @@ gpu/vk_check.hh            VCE_VK_CHECK macro for fatal init paths
 Exit criteria: no file over ~600 lines; public header no longer includes
 `overlay.hh`, `image_layer.hh` or the font atlas internals; `Renderer` is
 non-copyable/movable through its pimpl; all probes green. **Met 2026-10-31:**
-largest file 534 lines, 14 tests pass (3 GPU, 1 skips without a font).
+largest file 534 lines, 14 tests pass (3 GPU, including MSDF via the
+font-engine submodule face).
 
 ## 5. Current state and audit findings (2026-10-31)
 

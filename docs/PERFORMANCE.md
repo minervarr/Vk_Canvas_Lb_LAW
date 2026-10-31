@@ -81,7 +81,7 @@ The umbrella is now an INTERFACE target, so there is no single
 | Module archives, total | 422,478 bytes (text 190,315 / data 344) |
 | Minimal layout-only executable, stripped | 14,472 bytes |
 | Minimal Canvas + font executable, stripped | 952,888 bytes |
-| Full CTest run, Debug (14 tests) | 0.24 s; 11 unit + 3 gpu, 1 skipped |
+| Full CTest run, Debug (14 tests) | 0.24 s; 11 unit + 3 gpu, all pass |
 
 The minimal binaries are unchanged from Phase 0, which is the useful result:
 splitting the renderer did not change what a small consumer pays. The module
@@ -111,13 +111,13 @@ selected device is the Intel UHD iGPU.
 | Test | Result |
 |---|---|
 | `shape_outline_probe` | pass, 0.07 s wall (includes Renderer init) |
-| `gpu_smoke_test` | pass, 5 frames in 0.07 s; last frame CPU total 0.033 ms, fence wait 0.001 ms, record 0.001 ms |
-| `text_edge_probe` | skip (77): no font at `assets/fonts/newcomputermodern/NewCM10-Regular.otf` |
+| `text_edge_probe` | pass, using the font-engine submodule face |
+| `gpu_smoke_test` | pass, 6 frames; last frame CPU total 0.054 ms, fence wait 0.003 ms, record 0.004 ms |
 
-`gpu_smoke_test` covers overlay curves, shapes, images, clipping, rotation and
-FrameStats. MSDF runs only when a face is supplied. These are smoke numbers,
-not a frame-rate claim: the frames are tiny (192x128) and the scene is one
-primitive per frame.
+`gpu_smoke_test` covers overlay curves, shapes, images, clipping, rotation,
+MSDF and FrameStats, so no draw path is skipped. These are smoke numbers, not a
+frame-rate claim: the frames are tiny (192x128) and the scene is one primitive
+per frame.
 
 The shader modules still produce validation warnings
 (`VUID-VkShaderModuleCreateInfo-pCode-08737/08740`) because the installed

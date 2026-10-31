@@ -44,8 +44,9 @@ The current tree has 11 Vk `unit` tests and 4 App_shell tests. The GPU tests
 the `gpu` label and `SKIP_RETURN_CODE 77`; the dev superbuild compiles the
 Slang shaders into `<build>/assets/shaders` when `slangc` is found (override
 with `-DVCE_SLANGC=/path/to/slangc` or disable with
-`-DVCE_DEV_BUILD_SHADERS=OFF`). `text_edge_probe` still skips without a font at
-`assets/fonts/newcomputermodern/NewCM10-Regular.otf`.
+`-DVCE_DEV_BUILD_SHADERS=OFF`). The text tests use the canonical
+`assets/fonts` face when checked in, otherwise the face in the font-engine
+submodule; with neither they skip (77).
 
 ## Current Vk unit tests
 
@@ -116,9 +117,9 @@ coverage.
 
 ## Limitations
 
-- The dev tree now compiles the SPIR-V assets with `slangc`; the shape and
-  smoke tests run on this machine. `text_edge_probe` and the MSDF section of
-  `gpu_smoke_test` still skip when no font is checked in. Record a skip instead
+- The dev tree compiles the SPIR-V assets with `slangc`; all three GPU tests
+  run on this machine, including MSDF via the font-engine submodule face. A
+  checkout without that submodule skips the text tests; record a skip instead
   of treating it as a pass.
 - No CI workflow is checked in yet. `tools/audit.sh` is the intended CI entry
   point; adding the workflow is part of the foundation work.

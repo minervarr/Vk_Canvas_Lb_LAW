@@ -215,6 +215,16 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_pure_test(owner_semantics_test)
     target_link_libraries(owner_semantics_test PRIVATE vk_canvas_core)
 
+    # Font for the text probes: the engine's canonical face when checked in,
+    # otherwise the small Latin face shipped with the font-engine submodule.
+    # If neither exists the probes still build and skip with exit 77.
+    set(VCE_TEST_FONT
+        "${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+    if(NOT EXISTS "${VCE_TEST_FONT}")
+        set(VCE_TEST_FONT
+            "${CMAKE_CURRENT_SOURCE_DIR}/../first_party/vulkan_font_engine/platform/android/app/src/main/assets/fonts/font.otf")
+    endif()
+
     # Pixel check of the same formulas, through the real shader and swapchain.
     # Skips (exit 77) without a headless surface, the built shaders, or the face.
     add_executable(text_edge_probe tests/text_edge_probe.cc)
@@ -222,7 +232,7 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_features(text_edge_probe PRIVATE cxx_std_17)
     target_compile_definitions(text_edge_probe PRIVATE
         TEXT_EDGE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/"
-        TEXT_EDGE_FONT="${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+        TEXT_EDGE_FONT="${VCE_TEST_FONT}")
     target_link_libraries(text_edge_probe PRIVATE vk_canvas_core)
     if(MSVC)
         target_compile_options(text_edge_probe PRIVATE /W3 /utf-8)
@@ -253,7 +263,7 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_features(gpu_smoke_test PRIVATE cxx_std_17)
     target_compile_definitions(gpu_smoke_test PRIVATE
         GPU_SMOKE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/"
-        GPU_SMOKE_FONT="${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+        GPU_SMOKE_FONT="${VCE_TEST_FONT}")
     target_link_libraries(gpu_smoke_test PRIVATE vk_canvas_core)
     if(MSVC)
         target_compile_options(gpu_smoke_test PRIVATE /W3 /utf-8)

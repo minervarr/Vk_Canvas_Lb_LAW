@@ -40,10 +40,10 @@ Files are module-relative. `base/`, `input/` and `layout/` compile into
 | capture | `capture/*` | ~194 | core, Wayland | none | Dev tool, not part of the library. |
 
 `core/tests/` holds 11 unit binaries plus 3 GPU tests (`text_edge_probe`,
-`shape_outline_probe`, `gpu_smoke_test`). All 11 unit tests and the two shape
-tests pass on this machine; `text_edge_probe` skips (77) until a font is
-available, and `gpu_smoke_test` skips its MSDF section on the same condition.
-As of 2026-10-31 the full CTest run is 14 tests with 1 skipped.
+`shape_outline_probe`, `gpu_smoke_test`). All 14 pass on this machine as of
+2026-10-31. The text tests use the canonical `assets/fonts` face when checked
+in, otherwise the small face in the font-engine submodule; with neither they
+skip (exit 77).
 
 ## Not compiled: `wip/`
 
