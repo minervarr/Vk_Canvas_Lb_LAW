@@ -28,11 +28,14 @@ consumer app
 | platform hosts | gpu, platform SDKs | UI policy |
 
 The module targets are real (Phase 1) and `ui/` is its own target (Phase 2).
-Phase 5 adds the toolkit's immediate-mode layer: `ui::Context` binds one frame's
-`Canvas`/`FrameInput` to a persistent `StateStore` and the app's `Theme`/type
-scale; `ui::Id` keys hot/active/focus/scroll/text-edit state. `tools/check_deps.py`
-enforces the directory edges, the per-target source inventory and the UI/gpu
-rules. See [`ROADMAP.md`](ROADMAP.md).
+`vk_canvas_engine` links base + draw + gpu for consumers that do not use the
+toolkit; `vk_canvas_core` is the compatibility umbrella and also links
+`vk_canvas_ui`. Phase 5 adds the toolkit's immediate-mode layer: `ui::Context`
+binds one frame's `Canvas`/`FrameInput` to a persistent `StateStore` and the
+app's `Theme`/type scale; `ui::Id` keys hot/active/focus/scroll/text-edit state.
+`tools/check_deps.py` enforces the directory edges, the per-target source
+inventory and the UI/gpu rules. Phase 6 records the rationale in
+[`decisions/`](decisions/README.md). See [`ROADMAP.md`](ROADMAP.md).
 
 ## Repository and build topology
 
@@ -90,7 +93,8 @@ rules. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Error handling
 
-Phase 3 applied this policy (see [`RELIABILITY.md`](RELIABILITY.md)):
+Phase 3 applied this policy (see [`RELIABILITY.md`](RELIABILITY.md) and
+[ADR 0003](decisions/0003-vulkan-error-and-recovery-policy.md)):
 
 - Every Vulkan call that can fail is checked with file/line/result context.
 - Construction fails loudly and leaves no half-initialized owner.

@@ -256,9 +256,9 @@ struct Renderer::Impl {
     // searched, so a map would cost more than it saved.
     std::vector<AHardwareBuffer*> hwb_lru_;
     // How many external images may be cached at once, and therefore the size
-    // of the descriptor pool backing them. A camera needs a handful; a video
-    // decoder's AImageReader was measured handing out 10 distinct buffers in
-    // the first second, so this is sized for a stream and bounded by eviction.
+    // of the descriptor pool backing them. Sized for a video decoder's working
+    // set and bounded by LRU eviction; see
+    // docs/decisions/0007-android-external-image-path.md.
     static constexpr size_t kMaxCachedHwb = 32;
 
     AHardwareBuffer* current_hwb_ = nullptr;
@@ -289,15 +289,10 @@ struct Renderer::Impl {
 
     // ── MSDF text pipeline ──────────────────────────────────────────────────
     //
-    // Where the per-frame text VBO STARTS. It used to be a hard ceiling, and
-    // the overflow path was `if (verts > kMaxMsdfVerts) verts = kMaxMsdfVerts`
-    // — a silent truncation that is not even a clean one: 16384 is not a
-    // multiple of the 6 vertices in a glyph quad, so the clamp left four
-    // orphan vertices behind, i.e. one malformed triangle at whatever UV the
-    // glyph it cut in half happened to carry. A dense screen at a high
-    // resolution reaches 2730 glyphs easily, so this was a real ceiling, and
-    // "the text stops halfway down the page" is not a failure mode worth
-    // keeping. The buffer grows instead; see ensureMsdfVboCapacity().
+    // Initial capacity for the per-frame text VBO. It GROWS on demand and is
+    // rounded to whole glyphs, so it is not a ceiling; a fixed ceiling used to
+    // cut dense screens mid-page. See
+    // docs/decisions/0008-growing-gpu-buffer-capacity.md.
     static constexpr uint32_t kInitialMsdfVerts = 16384;
 
     VkImage             msdfAtlasImage_    = VK_NULL_HANDLE;
@@ -353,11 +348,10 @@ struct Renderer::Impl {
     //   pos.xy  rgba  data0.xyzw  data1.xyzw
     static constexpr uint32_t kShapeFloatsPerVert = 14;
     static constexpr uint32_t kShapeVertsPerQuad  = 6;
-    // Where the per-frame shape VBO STARTS. It used to be a hard ceiling
-    // (`if (verts > kMaxShapeVerts) verts = kMaxShapeVerts`), and that
-    // silent truncation is how a bitmap UI vanished mid-glyph: Terminus is
-    // one rect per pixel-run, so 2048 quads is a few dozen letters. The
-    // text VBO already grows; this one does too. See ensureShapeVboCapacity().
+    // Initial capacity for the per-frame shape VBO. It GROWS on demand and is
+    // rounded to whole quads; a fixed 2048-quad ceiling silently erased bitmap
+    // UI text and everything drawn after it. See
+    // docs/decisions/0008-growing-gpu-buffer-capacity.md.
     static constexpr uint32_t kInitialShapeVerts = kShapeVertsPerQuad * 2048;
 
     VkBuffer         shapeVbo_[kFramesInFlight]       = {};

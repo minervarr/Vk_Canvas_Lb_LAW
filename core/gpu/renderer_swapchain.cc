@@ -69,21 +69,10 @@ bool Renderer::Impl::create_swapchain() {
     // swapchain_format_/_colorspace_ were fixed by resolve_output_target() in
     // the constructor and deliberately do not move across a resize — see there.
 
-    // Present mode: prefer MAILBOX over FIFO. With FIFO the present queue is a
-    // hard line — vkQueuePresentKHR/acquire block until the compositor releases an
-    // image at the display's vsync cadence. While recording, the compositor
-    // periodically holds our image ~60ms (status-bar inset churn, extra
-    // composition passes), which with our tight image count starved rendering and
-    // froze the preview ~1Hz. MAILBOX never blocks the producer: we always get a
-    // free image to render into and the newest frame replaces the queued one, so a
-    // transient compositor hold no longer stalls us. FIFO is the guaranteed
-    // fallback if MAILBOX is unsupported.
-    //
-    // ...for a consumer that asked for Latency. A consumer that asked for Vsync
-    // is presenting frames a clock scheduled, not "whatever is newest", so
-    // there is nothing for MAILBOX to prefer and nothing gained by never
-    // blocking — while the cost, a render loop free-running at hundreds of fps
-    // over identical content, is entirely real. FIFO is always available.
+    // Present policy: Latency prefers MAILBOX so a compositor hold cannot
+    // block the producer (FIFO is the fallback); Vsync uses FIFO so the display
+    // paces presentation. MAILBOX needs at least 3 images. See
+    // docs/decisions/0006-device-swapchain-and-output.md.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (present_policy_ == PresentPolicy::Latency) {
         uint32_t pm_count = 0;
@@ -135,24 +124,11 @@ bool Renderer::Impl::create_swapchain() {
     // TRANSFER_SRC lets readbackLastFrame() copy a rendered image to a host
     // buffer (headless UI capture). Harmless for the windowed present path.
     ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    // preTransform is a PROMISE, not a request. Setting it to
-    // caps.currentTransform tells the presentation engine "my images are
-    // ALREADY rotated by that much" — so it applies nothing further. On a
-    // desktop currentTransform is always IDENTITY and the distinction never
-    // surfaces; on Android it becomes ROTATE_90/180/270 the moment the device
-    // turns, and an app that keeps drawing upright then has its frame
-    // presented un-rotated onto a turned panel. Measured on a moto g06: the
-    // whole UI came out upside down and squashed across the long edge.
-    //
-    // Asking for IDENTITY hands the rotation back to the compositor, which is
-    // what an app that does not pre-rotate its own geometry must do. It costs
-    // one composition pass on some hardware — the price of not having a
-    // rotation matrix threaded through every draw call in the engine, which
-    // is the alternative and is not worth it for this app.
-    //
-    // Falls back to currentTransform where IDENTITY is not advertised, which
-    // is the only honest answer there: refusing to create a swapchain would be
-    // worse than a rotated one.
+    // preTransform is a PROMISE, not a request: IDENTITY hands rotation to the
+    // compositor, which is required for an app that does not pre-rotate its
+    // geometry. Fall back to currentTransform where IDENTITY is not advertised;
+    // refusing to create a swapchain would be worse than a rotated one. See
+    // docs/decisions/0006-device-swapchain-and-output.md.
     VkSurfaceTransformFlagBitsKHR pre_transform = caps.currentTransform;
     if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
         pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;

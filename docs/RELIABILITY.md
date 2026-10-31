@@ -7,7 +7,8 @@ checks that prove them.
 ## Checked Vulkan calls
 
 Every Vulkan call with a `VkResult` goes through one of three policies from
-`core/gpu/vk_check.hh`:
+`core/gpu/vk_check.hh` (rationale and rejected alternatives:
+[ADR 0003](decisions/0003-vulkan-error-and-recovery-policy.md)):
 
 | Macro | On failure | Use for |
 |---|---|---|

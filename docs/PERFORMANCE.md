@@ -24,6 +24,11 @@ This is a laptop with hybrid graphics. Treat absolute numbers as a local
 reference, not a hardware-independent claim. Record the machine with every
 future baseline.
 
+**Decision (2026-10-31):** this machine is the reference for size and timing
+budgets. Any CI uses lavapipe for deterministic correctness runs only; it is not
+a timing or size baseline, and no timing gate belongs in CI until a real
+benchmark scene exists.
+
 ## Build and test
 
 | Measurement | Result |
@@ -237,17 +242,16 @@ MSDF and FrameStats, so no draw path is skipped. These are smoke numbers, not a
 frame-rate claim: the frames are tiny (192x128) and the scene is one primitive
 per frame.
 
-The shader modules still produce validation warnings
-(`VUID-VkShaderModuleCreateInfo-pCode-08737/08740`) because the installed
-`slangc` emits a newer SPIR-V version than the 1.1 instance advertises. The
-draws are correct on this driver, but "validation-clean" is not yet true; that
-is Phase 3 work.
+Validation is clean on this configuration: Phase 3 pinned SPIR-V 1.3 for the
+Vulkan 1.1 instance and fixed the two other findings the validation layer
+exposed. `tools/audit.sh` fails on any `VUID-` or `Validation Error` in the four
+GPU binaries; see [`RELIABILITY.md`](RELIABILITY.md).
 
 To measure a real scene later:
 
 1. Build with `-DVCE_DEV_BUILD_SHADERS=ON` (default) and a reachable `slangc`.
-2. Run with `-DVCE_VK_VALIDATION=ON` while bringing up a path; expect the
-   shader-module warnings above until the SPIR-V target is pinned.
+2. Run with `-DVCE_VK_VALIDATION=ON` while bringing up a path; the audit's
+   validation stage is the same check and must stay clean.
 3. Add a benchmark scene (shape count, glyph count, images, resolution) and
    use `Renderer::lastFrameStats()` plus GPU timestamps per pass.
 4. Record the GPU/ICD used. Driver choice changes the result; never compare
@@ -257,21 +261,29 @@ To measure a real scene later:
 
 Not measured yet. The intended target is zero heap allocations in the
 steady-state UI frame build (`Canvas` + widgets) after warm-up, and stable RSS
-over a long run. A counting-`operator new` test and a soak test are Phase 3/4
-work.
+over a long run. The lifecycle soak exists; a counting-`operator new` test does
+not, so the allocation target is still a design goal, not a measured result.
 
-## Provisional targets (to confirm after Phase 4)
+## Targets and status
 
-- 60 fps at 1080p with 2,000 SDF shapes + 5,000 glyphs on integrated graphics.
-- CPU frame build under 1 ms for a typical screen.
-- Zero steady-state heap allocations in the UI frame build.
-- Cold start to first frame under 100 ms on desktop (excluding asset decode).
-- Memory stable over 10,000 frames; no Vulkan object leaks at teardown.
-- Minimal UI binary under 1 MB stripped after module pruning (excluding fonts
-  and shaders) — the current Canvas+font floor is already ~953 KB, so the font
-  engine is the binding constraint and must be measured separately.
-- Zero validation-layer errors in Debug; zero unchecked Vulkan calls in
-  Release.
+- 60 fps at 1080p with 2,000 SDF shapes + 5,000 glyphs on integrated graphics —
+  **not measured**; needs a benchmark scene.
+- CPU frame build under 1 ms for a typical screen — **not measured** for a real
+  screen (the 192×128 smoke frame is 0.054 ms and is not representative).
+- Zero steady-state heap allocations in the UI frame build — **not measured**;
+  needs a counting allocator.
+- Cold start to first frame under 100 ms on desktop (excluding asset decode) —
+  **not measured**.
+- Memory stable over 10,000 frames; no Vulkan object leaks at teardown — leak
+  checks pass under ASan; a 10,000-frame RSS run is not recorded.
+- Minimal UI binary under 1 MB stripped after module pruning — **met**:
+  primitive-only Canvas 22,864 B; one drawn widget 936,488 B including the font
+  engine; all widgets 969,288 B.
+- Zero validation-layer errors in Debug — **met**: the validation stage is a
+  gate and reports zero issues on the four GPU binaries.
+- Zero unchecked Vulkan calls in Release — **not mechanically verified**: the
+  three-policy rule is applied by review (ADR 0003), and no scanner proves its
+  absence.
 
 ## What to record for every future measurement
 

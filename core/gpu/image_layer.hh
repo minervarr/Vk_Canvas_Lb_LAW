@@ -51,16 +51,13 @@ public:
     void destroy_texture(TextureHandle handle);
 
     // Deferred GPU-safety reaper. create_texture() submits its upload with a
-    // fence instead of vkQueueWaitIdle (same-queue submission order already
-    // guarantees the upload lands before any later frame samples it), and
-    // destroy_texture() only unlinks the texture — the actual VK object
-    // destruction happens here. queueDrained=true means the caller has just
-    // proven all previously submitted work finished (Renderer::draw() calls
-    // this right after its frame-fence wait; cleanup() after device idle),
-    // which is what makes freeing retired textures safe. With
-    // queueDrained=false only fence-signaled upload staging is reclaimed.
-    // This removed a full vkQueueWaitIdle per texture create AND per destroy
-    // — the stall that made grid-art streaming hitch while scrolling.
+    // fence instead of vkQueueWaitIdle, and destroy_texture() only unlinks the
+    // texture; the actual Vulkan destruction happens here. queueDrained=true
+    // means the caller has just proven all previously submitted work finished
+    // (Renderer::draw() calls this right after its frame-fence wait; cleanup()
+    // after device idle), which is what makes freeing retired textures safe.
+    // With queueDrained=false only fence-signaled upload staging is reclaimed.
+    // See docs/decisions/0008-growing-gpu-buffer-capacity.md.
     void collectGarbage(bool queueDrained);
 
     // Record (INSIDE the render pass, before the vector overlay composite):

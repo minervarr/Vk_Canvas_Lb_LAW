@@ -47,15 +47,10 @@ void splitTwoLines(Canvas& c, const std::string& s, float maxW,
     l2.clear();
     if (c.textWidthStyled(s, size, style) <= maxW) { l1 = s; return; }
 
-    // Longest prefix that fits, preferring a space break — ONE pass.
-    //
-    // This used to measure every prefix separately:
-    //   for (i…) c.textWidthStyled(s.substr(0, i), …)
-    // which is a heap allocation and a full re-walk of the string per
-    // codepoint — O(n²) work and O(n) allocations, per album tile, on every
-    // frame the grid redrew. prefixFitStyled() answers the same question by
-    // accumulating the same advances once; see its comment for why the cut it
-    // returns is identical rather than merely close.
+    // One pass. Measuring every prefix separately was O(n²) and allocated per
+    // codepoint; prefixFitStyled() accumulates the same advances in the same
+    // order, so the cut is identical. See
+    // docs/decisions/0009-text-fit-and-type-scale.md.
     size_t lastSpace = std::string::npos;
     size_t fit = c.prefixFitStyled(s, maxW, size, style, nullptr, &lastSpace);
     size_t breakAt = (lastSpace != std::string::npos) ? lastSpace : fit;

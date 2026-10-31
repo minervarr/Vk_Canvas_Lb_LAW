@@ -7,12 +7,16 @@ moves, a target is split, or a test is added.
 Current shape: **49 compiled `.cc` files** — 23 in the five engine module
 directories (`base/`, `input/`, `layout/`, `draw/`, `gpu/`) and 26 under `ui/`
 (25 in `vk_canvas_ui`, one demo in `vk_canvas_ui_demo`). Engine targets:
-`vk_canvas_base` (base + input + layout), `vk_canvas_draw`, `vk_canvas_gpu`; the
-toolkit is `vk_canvas_ui`. `vk_canvas_core` remains the source-compatible
-umbrella (an INTERFACE target linking all four for one transition cycle).
+`vk_canvas_base` (base + input + layout), `vk_canvas_draw`, `vk_canvas_gpu`;
+`vk_canvas_engine` is the base+draw+gpu interface, and the toolkit is
+`vk_canvas_ui`. `vk_canvas_core` remains the source-compatible umbrella (an
+INTERFACE target linking `vk_canvas_engine` and `vk_canvas_ui` for one
+transition cycle). `-DVCE_BUILD_UI=OFF` configures the engine only and makes
+`vk_canvas_core` reduce to the engine; the option defaults ON.
 `tools/check_deps.py` checks the per-target source inventory, the layer edges
-between directories, and the platform/WIP/UI include rules. Release module
-objects carry function/data sections and consumers link with section GC
+between directories, and the platform/WIP/UI include rules. Rationale for the
+boundaries is in [`decisions/`](decisions/README.md). Release module objects
+carry function/data sections and consumers link with section GC
 (`cmake/VceModules.cmake`), so an unused function inside a pulled object is
 dropped as well.
 

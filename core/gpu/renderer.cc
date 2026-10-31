@@ -325,16 +325,9 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
         const uint32_t vis_w = external_visible_w_ > 0 ? external_visible_w_ : desc.width;
         const uint32_t vis_h = external_visible_h_ > 0 ? external_visible_h_ : desc.height;
 
-        // A quarter turn exchanges the picture's width and height, so the
-        // letterbox must be computed on the ROTATED extent. These were
-        // unconditionally swapped, which is right for the camera preview this
-        // path was written for and wrong for a video that needs no rotation at
-        // all: it letterboxed a landscape file into a portrait box.
-        //
-        // The pixel aspect is applied to the picture's own width FIRST, and the
-        // rotation swaps the axes afterwards. The other order stretches a
-        // portrait video along the wrong axis, which is the same bug the
-        // unconditional swap above was.
+        // Letterbox the ROTATED extent: a quarter turn swaps width and height.
+        // Apply the pixel aspect to the picture's own width before the swap.
+        // See docs/decisions/0007-android-external-image-path.md.
         const bool quarter_turn = (external_rotation_quadrant_ & 1) != 0;
         const float pic_w = static_cast<float>(vis_w) * external_pixel_aspect_;
         const float pic_h = static_cast<float>(vis_h);
@@ -422,12 +415,10 @@ void Renderer::Impl::draw(const std::vector<float>& overlay_curves, int overlay_
             ls.extent = { (uint32_t)iw, (uint32_t)ih };
             vkCmdSetScissor(cmd_buffers_[image_index], 0, 1, &ls);
 
-            // The shader zooms in UV space — a fraction of the FRAME — but the
-            // inset is drawn much smaller than the main preview, so a UV zoom
-            // of N lands on screen as N * (iw / draw_w), which is well under
-            // 1.0 for a small inset: the "magnifier" showed the scene SMALLER
-            // than the preview it sits on. The zoom the caller asks for is
-            // relative to what the preview already shows, so convert it.
+            // The shader zooms in frame UV space, but the inset is smaller
+            // than the preview, so convert the caller's preview-relative zoom
+            // into that space. See
+            // docs/decisions/0007-android-external-image-path.md.
             // Published so the overlay can outline the window: an inset with no
             // border is hard to even find in a busy frame, and impossible to
             // read as "this is a magnified view of the centre".

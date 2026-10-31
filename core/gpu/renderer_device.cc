@@ -100,11 +100,9 @@ void Renderer::Impl::pick_physical_device() {
     std::vector<VkPhysicalDevice> devs(count);
     VCE_VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &count, devs.data()));
 
-    // A device is usable only if it can PRESENT to this surface. Taking devs[0]
-    // used to be the whole policy, which on a machine whose first device cannot
-    // present — a compute-only family 0, or lavapipe enumerated first — either
-    // failed outright or silently rendered the UI on the CPU. Enumerate the
-    // candidates, then pick one.
+    // A device is usable only if it can PRESENT to this surface. Enumerate the
+    // candidates, then pick one; see
+    // docs/decisions/0006-device-swapchain-and-output.md.
     struct Candidate {
         VkPhysicalDevice dev;
         uint32_t family;
@@ -150,9 +148,8 @@ void Renderer::Impl::pick_physical_device() {
     }
 
     if (candidates.empty()) {
-        // Keep the historical behavior rather than refusing to start. The
-        // caller may still fail at create_swapchain(), but it will be able to
-        // see why instead of reading it as "the UI is broken".
+        // Do not refuse to start; log the fallback so a later swapchain
+        // failure is diagnosable instead of reading as "the UI is broken".
         physical_dev_ = devs[0];
         queue_family_ = 0;
         LOGI("Device selection: no device with VK_KHR_swapchain and a graphics+present "
@@ -247,8 +244,8 @@ void Renderer::Impl::create_logical_device() {
     supported2.pNext = &supported11;
     vkGetPhysicalDeviceFeatures2(physical_dev_, &supported2);
 
-    // Enable only what this device reports. `samplerAnisotropy` used to be
-    // requested unconditionally, which is invalid usage on a device without it.
+    // Enable only what this device reports; requesting an unsupported feature
+    // is invalid usage.
     VkPhysicalDeviceFeatures features{};
     features.samplerAnisotropy = supported.samplerAnisotropy;
     features.shaderStorageImageReadWithoutFormat =
@@ -300,12 +297,10 @@ void Renderer::Impl::create_logical_device() {
 
 void Renderer::Impl::resolve_output_target() {
     // Output target: what surface we present into. SDR (the default) pins
-    // 8-bit sRGB, which is what an SDR consumer must have — a camera preview
-    // stream is SDR, and presenting its HLG-encoded pixels into the only
-    // 10-bit colorspace one phone exposed (BT2020 *linear*) made the preview
-    // wash out, because the display read non-linear data as linear. HDR is
-    // opt-in per consumer and resolved against what this surface actually
-    // advertises; see output_target.hh and USAGE_hdr_output.md.
+    // 8-bit sRGB; HDR is opt-in per consumer and resolved against what this
+    // surface actually advertises. See
+    // docs/decisions/0006-device-swapchain-and-output.md, output_target.hh and
+    // USAGE_hdr_output.md.
     //
     // Resolved EXACTLY ONCE, from the constructor, before the first
     // create_swapchain(). The design is deliberately "one target per process":

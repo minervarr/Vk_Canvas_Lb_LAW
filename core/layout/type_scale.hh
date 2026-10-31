@@ -11,9 +11,9 @@
 // instead of the smallest role clamping alone and squashing the hierarchy
 // flat.
 //
-// This used to live in App_shell/ui_metrics.hh, tied to a build-generated
-// header. The floor is now an argument: App_shell stays dependent on base
-// modules only, and the app owns the font measurement.
+// The floor is an argument, not a build-generated constant: App_shell stays
+// dependent on base modules only and the app owns its font measurement. See
+// docs/decisions/0009-text-fit-and-type-scale.md.
 //
 // The caller passes the window's SHORT SIDE — min(width, height) — not its
 // height. This is the same thing while every window is wider than tall; it

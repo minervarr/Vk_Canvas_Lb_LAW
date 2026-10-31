@@ -20,24 +20,10 @@ enum class OutputTarget {
     Hdr10PQ,              // 10-bit ST 2084 PQ
 };
 
-// Which present mode the swapchain should prefer.
-//
-// Two consumers want opposite things and the engine had only ever served one.
-//
-// A camera preview wants Latency: MAILBOX, where the newest rendered frame
-// replaces whatever was queued and the producer is never blocked. That was
-// chosen against a real failure — Android's compositor periodically held an
-// image for ~60 ms, which with a tight image count starved rendering and
-// froze the preview to about 1 Hz.
-//
-// A video player wants Vsync: FIFO, and for the same reason in reverse. Its
-// frames are not "the newest thing available", they are scheduled for
-// specific instants by a clock; there is no newer frame to prefer, and
-// nothing to gain from never blocking. What MAILBOX costs it is real: with no
-// backpressure the render loop free-runs — measured at about 900 fps,
-// redrawing identical content — and the heat that makes is the hardware
-// decoder's problem too. FIFO makes vkQueuePresentKHR the pacer, one frame
-// per vsync, which is what a player wants a present call to do.
+// Which present mode the swapchain should prefer. Latency (the default)
+// prefers MAILBOX, where the newest frame wins and the producer is never
+// blocked; Vsync uses FIFO, where the display schedules one frame per refresh.
+// See docs/decisions/0006-device-swapchain-and-output.md.
 enum class PresentPolicy {
     Latency = 0,  // prefer MAILBOX, fall back to FIFO. The default; unchanged.
     Vsync,        // FIFO always. Paced by the display, and no wasted frames.

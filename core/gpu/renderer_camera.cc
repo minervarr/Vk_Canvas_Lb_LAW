@@ -63,12 +63,11 @@ void Renderer::Impl::clear_camera_frames() {
         pending_release_cb_ = nullptr;
     }
 
-    // Evict the per-HWB Vulkan objects and reclaim their descriptor sets. The
-    // camera hands out new AHardwareBuffer pointers every time its session is
-    // (re)started — e.g. on a lifecycle bounce from a USB hotplug — and each new
-    // buffer permanently consumed a descriptor set from a fixed-size pool. Left
-    // unchecked the pool (maxSets=10) overflows after a few restarts and
-    // bind_hwb() writes to a failed (null) descriptor set → driver crash.
+    // Evict the per-HWB Vulkan objects and reclaim their descriptor sets. A
+    // session restart (USB hotplug, lifecycle bounce) hands out new buffer
+    // pointers, and each one permanently consumed a set from the fixed pool;
+    // left unchecked the pool overflows and bind_hwb() writes to a failed
+    // descriptor set. See docs/decisions/0007-android-external-image-path.md.
     if (device_) {
         for (auto& kv : hwb_cache_) {
             if (kv.second.view)   vkDestroyImageView(device_, kv.second.view, nullptr);
@@ -163,18 +162,11 @@ void Renderer::Impl::setup_hwb_resources(AHardwareBuffer* hwb) {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    // Sized for a VIDEO stream, not a camera preview.
-    //
-    // 10 was right for a camera: its producer recycles a handful of gralloc
-    // buffers and the working set never grows. A decoder's does — an
-    // AImageReader feeding a player handed out 10 distinct AHardwareBuffers
-    // within one second, at which point allocation failed, bind_hwb() left the
-    // buffer uncached, draw()'s lookup missed, and the screen went black at a
-    // perfectly healthy frame rate.
-    //
-    // FREE_DESCRIPTOR_SET_BIT is what makes the eviction in bind_hwb()
-    // possible at all: without it a set can only be reclaimed by resetting the
-    // whole pool.
+    // Sized for a decoder's working set, not a camera preview's handful: an
+    // AImageReader handed out 10 distinct buffers within one second and
+    // exhausted the old pool, blacking the screen at a healthy frame rate.
+    // FREE_DESCRIPTOR_SET_BIT lets bind_hwb() evict a set without resetting the
+    // whole pool. See docs/decisions/0007-android-external-image-path.md.
     poolSize.descriptorCount = kMaxCachedHwb;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -366,10 +358,9 @@ void Renderer::Impl::bind_hwb(AHardwareBuffer* hwb) {
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     
     HwbCache cache;
-    // Every failure below used to return in silence, which presents as a black
-    // screen with a healthy-looking frame rate and nothing in any log — the
-    // frames arrive, the cache lookup in draw() misses, and nothing is
-    // composited. Each one says so now, once.
+    // Log every failure once: a silent return here presents as a black screen
+    // with a healthy frame rate and nothing in the log. See
+    // docs/decisions/0007-android-external-image-path.md.
     if (vkCreateImage(device_, &image_info, nullptr, &cache.image) != VK_SUCCESS) {
         LOGI("bind_hwb: vkCreateImage failed (externalFormat %llu, %ux%u)",
              (unsigned long long)last_external_format_, desc.width, desc.height);

@@ -12,9 +12,10 @@
 //                               For runtime paths that degrade: an allocation
 //                               that fails is a smaller frame, not a dead app.
 //
-// Calls whose VkResult is part of the protocol (acquire/present return
+// calls whose VkResult is part of the protocol (acquire/present return
 // VK_ERROR_OUT_OF_DATE_KHR and friends) are NOT wrapped; classify those with
-// vce_vk_classify() and react. See docs/RELIABILITY.md.
+// vce_vk_classify() and react. See docs/RELIABILITY.md and
+// docs/decisions/0003-vulkan-error-and-recovery-policy.md.
 
 #include <vulkan/vulkan.h>
 #include <cstdio>

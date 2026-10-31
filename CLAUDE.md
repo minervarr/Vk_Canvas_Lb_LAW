@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **Direction and current phase:** read `docs/ROADMAP.md` before starting work.
+> Irreversible choices and their rationale are in `docs/decisions/`.
 > It carries the quality goals, target architecture, audit findings and the next
 > action. The live checkpoint is in `../.opencode/status.md`.
 
@@ -36,7 +37,7 @@ cd platform/windows
 - CMake 3.22.1+
 - FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
-- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks, 14 unit tests, 4 GPU tests, validation, ASan+UBSan, soak and libFuzzer. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no golden suite; the GPU probes exit 77 without shaders/assets and assert structural pixels. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
+- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks, 17 unit tests, 4 GPU tests, validation, ASan+UBSan, soak and libFuzzer. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no golden suite; the GPU probes exit 77 without shaders/assets and assert structural pixels. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
 
 ## Shader Compilation
 
@@ -59,7 +60,8 @@ slangc <shader>.slang -entry main -target spirv -emit-spirv-via-glsl \
 One platform-agnostic engine core plus thin per-platform backends:
 
 ```
-core/                      # three module targets + the vk_canvas_core umbrella
+core/                      # base/draw/gpu targets; vk_canvas_engine interface
+                           #   (base+draw+gpu); vk_canvas_core compatibility umbrella
   base/                    # types, texture, log, animated_float, text_buffer, undo_redo
   input/                   # input, keys, frame_input, gesture
   layout/                  # layout, type_scale

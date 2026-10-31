@@ -158,6 +158,19 @@ add_custom_target(vk_canvas_check_composite_pc ALL
     COMMENT "Checking composite_frag.slang's push block against CompositePush")
 add_dependencies(vk_canvas_gpu vk_canvas_check_composite_pc)
 
+# ── Precise engine target ───────────────────────────────────────────────────
+#
+# base + draw + gpu, without the toolkit. A consumer that draws its own UI (or
+# no UI) links this instead of the compatibility umbrella. `vk_canvas_ui`
+# remains a separate sibling target; the engine never depends on it.
+add_library(vk_canvas_engine INTERFACE)
+target_compile_features(vk_canvas_engine INTERFACE cxx_std_17)
+target_link_libraries(vk_canvas_engine INTERFACE
+    vk_canvas_base
+    vk_canvas_draw
+    vk_canvas_gpu
+)
+
 # ── Compatibility umbrella ──────────────────────────────────────────────────
 #
 # Existing consumers link exactly this name. It is an INTERFACE target now, so
@@ -165,18 +178,31 @@ add_dependencies(vk_canvas_gpu vk_canvas_check_composite_pc)
 # back into one archive. The UI layer is linked here for one transition cycle;
 # new consumers should link `vk_canvas_ui` explicitly and the engine modules
 # they actually use.
-if(NOT TARGET vk_canvas_ui)
+#
+# VCE_BUILD_UI=OFF configures only base/draw/gpu: no toolkit targets, no UI
+# compile time, and `vk_canvas_core` reduces to the engine. A consumer that
+# draws its own UI and does not link the umbrella can set this without changing
+# any source. It is ON by default so existing builds are unchanged.
+option(VCE_BUILD_UI "Build the vk_canvas_ui toolkit (and the compatibility umbrella's UI link)" ON)
+if(VCE_BUILD_UI AND NOT TARGET vk_canvas_ui)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../ui ${CMAKE_BINARY_DIR}/ui)
 endif()
 
 add_library(vk_canvas_core INTERFACE)
 target_compile_features(vk_canvas_core INTERFACE cxx_std_17)
-target_link_libraries(vk_canvas_core INTERFACE
-    vk_canvas_base
-    vk_canvas_draw
-    vk_canvas_gpu
-    vk_canvas_ui
-)
+if(VCE_BUILD_UI)
+    target_link_libraries(vk_canvas_core INTERFACE
+        vk_canvas_engine
+        vk_canvas_ui
+    )
+else()
+    # The toolkit was configured away. The umbrella keeps working for core
+    # users; a widget reference now fails to compile/link instead of silently
+    # pulling a target that was explicitly disabled.
+    target_link_libraries(vk_canvas_core INTERFACE
+        vk_canvas_engine
+    )
+endif()
 
 # Pure-logic tests. They compile their module source directly, so they never
 # need a Vulkan device, a shader or a window. add_test() is emitted only when

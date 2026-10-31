@@ -314,15 +314,11 @@ void Canvas::emitTextQuad_(float x0, float y0, float x1, float y1,
 void Canvas::quadMsdfRect(float x, float y, float w, float h, Color c) {
     if (!msdf_ || !quads_) { rect(x, y, w, h, c, 0.0f); return; }
 
-    // A texel that samples to full coverage. A font able to reserve one says
-    // so; otherwise fall back to the middle of a laid-out 'I', which is what
-    // this always did.
-    //
-    // That fallback's size used to be a hardcoded 100.0f — harmless for a
-    // distance field baked once for every size, and a trap for a per-size
-    // raster cache, where it requests a 100 px cell nothing will ever draw. It
-    // also ignored q.draw, so a font lacking the glyph sampled (0,0) instead —
-    // a transparent texel, and an invisible "solid" rect.
+    // Fallback solid texel: prefer the font's reserved texel; otherwise use
+    // the middle of an actual laid-out 'I'. Lay it out at the requested draw
+    // size (a fixed 100 px asks a per-size raster cache for a cell it will
+    // never draw) and bail out if the glyph is absent. See
+    // docs/decisions/0009-text-fit-and-type-scale.md.
     float uc = 0.0f, vc = 0.0f;
     if (!msdf_->solidTexel(uc, vc)) {
         GlyphQuad q;

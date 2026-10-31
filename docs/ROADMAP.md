@@ -12,20 +12,18 @@ sync.
 
 ## Current position
 
-- **Phase:** 5 — UI toolkit features (DONE)
-- **Last completed:** Phase 5 — `ui::Theme` light/dark presets, density and token
-  overrides; type roles with fit policy; `ui::Id` + `StateStore` + `Context`
-  owning hot/active/focus/scroll/text-edit state; context widgets; and a
-  CPU-testable demo settings screen.
-- **Next action:** none scheduled. Phase 6 is a deferred decision gate and the
-  Phase 4/5 measurements do not trigger it. Remaining work is the open decision
-  on reference hardware/CI and audit finding 8 (move historical narratives from
-  code comments to ADRs).
-- **Blocking decisions:** reference hardware/CI for cross-machine timing is
-  still open (Open decision 1). Size budgets are local-machine gates with
-  recorded provenance; they are not a multi-machine claim.
+- **Phase:** 6 — Audit closure (DONE)
+- **Last completed:** Phase 6 — nine ADRs in `docs/decisions/`, historical
+  narratives moved out of code comments, the promised `vk_canvas_engine` target
+  added, and the stale validation claim in `docs/PERFORMANCE.md` corrected.
+- **Next action:** none scheduled. Phase 7 is the deferred generator gate and
+  the Phase 4/5 measurements do not trigger it. Remaining work is maintenance:
+  a consumer that can validate the API end-to-end, and CI when one is wanted.
+- **Blocking decisions:** none. The reference machine and lavapipe policy are
+  recorded in `docs/PERFORMANCE.md`; the umbrella transition and the `archive`
+  quarantine are recorded in ADR 0001.
 - **Resume phrase:** no next phase. "continue next phase" means re-evaluate the
-  Phase 6 generator gate only if a consumer reports an unacceptable binary,
+  Phase 7 generator gate only if a consumer reports an unacceptable binary,
   build-time or audit cost; otherwise this is maintenance work.
 
 ### How to resume after a context cleanup
@@ -37,11 +35,11 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0 through Phase 5 are green: the engine modules, the `Renderer`
+Phase 0 through Phase 6 are green: the engine modules, the `Renderer`
 pimpl/split, GPU smoke coverage, the Vulkan-free `output_target` adapter, the
 `ui/` toolkit boundary, checked-call/recovery/audit hardening, the measured
-pay-for-use property, and the context-based UI toolkit are in place and
-audited. Phase 6 is a deferred gate, not scheduled work.
+pay-for-use property, the context-based UI toolkit, and the decision records are
+in place and audited. Phase 7 is a deferred gate, not scheduled work.
 
 ---
 
@@ -231,7 +229,7 @@ Problems that make auditing and testing harder:
 | 5 | `Renderer`, `OverlayRasterizer`, `ImageLayer` and `ComputeContext` own Vulkan handles but are implicitly copyable: a copy is a double-free. | done (Phase 0) |
 | 6 | Init paths mix exceptions with unchecked `vkCreate*` calls. A failure can leave a half-initialized renderer. | done (Phase 3) |
 | 7 | No performance or binary-size baseline; no harness, no budget, no regression check. | done (Phase 4: size probes + budgets) |
-| 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | open (Phase 3) |
+| 8 | Long historical narratives live in code comments; rationale should move to ADRs, code should state invariants. | done (Phase 6: `docs/decisions/`) |
 | 9 | `App_shell/ui_metrics` is a UI design system depending on a build-generated header; it belongs in `ui/theme` and blocks standalone builds. | done (Phase 2) |
 | 10 | No dependency enforcement: core can include a platform header, or UI can include Vulkan, and nothing fails. | done (T2.1) |
 
@@ -397,7 +395,33 @@ the same screen is testable without a window. **Verified 2026-10-31:** 21/21
 CTest (17 unit + 4 GPU), including `theme_test`, `context_widgets_test` and
 `context_demo_test`; `tools/audit.sh` green.
 
-### Phase 6 — Generator decision gate (DEFERRED)
+### Phase 6 — Audit closure (DONE)
+
+- [x] Sync the workspace resume state (`status.md`, `context.md`, `todo.md`)
+      with the verified Phase 5 tree instead of the stale Phase 2 checkpoint.
+- [x] Add `docs/decisions/` with an index and ADRs for the irreversible choices:
+      module boundaries/umbrella, renderer pimpl split, Vulkan error policy,
+      pay-for-use/size budgets, immediate-mode UI, device/swapchain/output
+      selection, Android external images, growing GPU buffers, text fit/type
+      scale.
+- [x] Move the long historical narratives out of code comments into those ADRs;
+      the comments keep the invariant plus a pointer. No behavior change.
+- [x] Add the promised `vk_canvas_engine` INTERFACE target (base + draw + gpu)
+      so a consumer can avoid the UI umbrella; `vk_canvas_core` now links
+      `vk_canvas_engine` + `vk_canvas_ui`, and `-DVCE_BUILD_UI=OFF` removes the
+      toolkit from the build entirely (default ON).
+- [x] Correct the stale `docs/PERFORMANCE.md` claim that SPIR-V validation
+      warnings were still Phase 3 work: Phase 3 pinned SPIR-V 1.3 and validation
+      is clean.
+- [x] Resolve open decisions 1–3 in writing (reference machine/lavapipe,
+      `archive`, umbrella transition).
+
+Exit: every audit finding has a status, every irreversible choice has an ADR,
+and the docs do not contradict the code. **Verified 2026-10-31:** 21/21 CTest,
+`check_deps: ok`, header check and `tools/audit.sh` green; a test consumer links
+`vk_canvas_engine` without the toolkit.
+
+### Phase 7 — Generator decision gate (DEFERRED)
 
 Not triggered: Phase 4 measured section GC + per-widget TUs + module targets as
 sufficient for the current consumers, and Phase 5 added code without an
@@ -421,11 +445,11 @@ problem that link-time pruning usually solves better.
 What happens today:
 
 - Source code always lives in the repository; it is not "in the program".
-- A static archive (`vk_canvas_core`) is searched per object file (one per
-  `.cc`). If the app never references a symbol from `plotview.o`, that object
-  is not linked into the executable.
-- But `renderer.o` is one 2,849-line object: using `Renderer` pulls all of it.
-  `widgets.o` is one 730-line object: using one widget pulls all widgets.
+- Each module archive (`vk_canvas_base`, `vk_canvas_draw`, `vk_canvas_gpu`,
+  `vk_canvas_ui`) is searched per object file (one per `.cc`). If the app never
+  references a symbol from `plotview.o`, that object is not linked.
+- The renderer is split into subsystem TUs (ADR 0002), and widgets into one TU
+  per widget; using one widget pulls one widget object, not a monolith.
 - Without `-ffunction-sections -fdata-sections` + `--gc-sections` (or MSVC
   `/Gy /OPT:REF`), unused functions within a pulled object remain.
 - Compile time and audit surface are paid regardless of linking.
@@ -515,15 +539,20 @@ In `Vk_Canvas_Lb_LAW/docs/`:
 not duplicate architecture manuals. The root workspace `AGENTS.md` gets a
 "project charter" pointer and the current phase.
 
-## 11. Open decisions
+## 11. Decisions closed
 
-1. **Reference hardware/CI:** which machine and GPU define the performance
-   baseline; is lavapipe acceptable for GPU CI.
-2. **`archive`:** kept in `wip/` until a consumer needs generic persistence.
-   Revisit then.
-3. **`vk_canvas_core` transition:** how long the umbrella keeps linking
-   `vk_canvas_ui`. Default: one cycle, then consumers move to
-   `vk_canvas_engine` + `vk_canvas_ui` explicitly.
+1. **Reference hardware/CI:** decided 2026-10-31. The baseline is the local
+   machine recorded in `docs/PERFORMANCE.md` (Intel i7-11800H, Intel TGL UHD,
+   GCC 16.2.1, Mesa 26.2.4); size budgets are local-machine gates with recorded
+   provenance. CI, when added, may use lavapipe for deterministic correctness
+   runs only; it is not a timing or size baseline, and no timing gate belongs in
+   CI without a real benchmark scene.
+2. **`archive`:** stays in `wip/` until a consumer needs generic persistence and
+   a test exists. It is not compiled into any target.
+3. **`vk_canvas_core` transition:** the umbrella keeps linking `vk_canvas_ui`
+   until a consumer has migrated to `vk_canvas_engine` + `vk_canvas_ui`
+   explicitly. No consumer is present in this checkout, so there is no removal
+   date; removal is a deliberate change with a consumer build to prove it.
 
 ## 12. Commit discipline
 
