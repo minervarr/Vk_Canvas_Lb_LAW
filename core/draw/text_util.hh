@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 #include "canvas.hh"
 
@@ -16,7 +17,7 @@
 
 // Longest prefix of `s` that, with a trailing "...", still fits maxW.
 // Returns `s` unchanged if it already fits.
-std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
+std::string truncateToWidth(Canvas& c, std::string_view s, float maxW,
                             float size, FontStyle style);
 
 // Largest text size <= `size` at which `s` fits in maxW, never below
@@ -24,24 +25,24 @@ std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
 // tool, not a clamp; pair it with truncateToWidth when overflow must be
 // impossible, or use the result as-is when overflow is acceptable. Pure
 // (draws nothing).
-float fitTextSize(Canvas& c, const std::string& s, float maxW,
+float fitTextSize(Canvas& c, std::string_view s, float maxW,
                   float size, float minSize, FontStyle style);
 
 // Split `s` into up to two lines within maxW: line 1 breaks at the last
 // word boundary that fits (falling back to a hard character break for
 // unbroken strings), line 2 gets the rest ellipsis-truncated.
-void splitTwoLines(Canvas& c, const std::string& s, float maxW,
+void splitTwoLines(Canvas& c, std::string_view s, float maxW,
                    float size, FontStyle style,
                    std::string& l1, std::string& l2);
 
 // Greedy word-wrap of multi-paragraph text into render lines. '\n' splits
 // paragraphs; blank entries in `out` mark paragraph gaps. Appends to `out`.
-void wrapText(Canvas& c, const std::string& s, float maxW, float size,
+void wrapText(Canvas& c, std::string_view s, float maxW, float size,
               FontStyle style, std::vector<std::string>& out);
 
 // Draw `s` horizontally centered in [x, x+w] at baseline-top y, measured
 // with the same styled metrics it renders with.
-void textCenteredStyled(Canvas& c, const std::string& s, float x, float w,
+void textCenteredStyled(Canvas& c, std::string_view s, float x, float w,
                         float y, float size, Color color, FontStyle style);
 
 // Minimal HTML -> plain text: tags dropped (block closers become newlines,

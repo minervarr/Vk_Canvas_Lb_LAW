@@ -139,8 +139,8 @@ Stage switches are documented at the top of the script. A skipped stage prints
 why; it is never silently counted as a pass.
 
 Evidence on 2026-10-31 (Intel UHD TGL, Mesa 26.2.4, GCC 16.2.1, Vulkan loader
-1.4.363): 21/21 CTest entries pass (17 unit + 4 GPU), validation reports zero
-issues on all four
+1.4.363), re-run after the performance pass: 23/23 CTest entries pass (19 unit +
+4 GPU), validation reports zero issues on all four
 GPU binaries, the sanitizer run is leak-free, the soak passes 5/5, and the fuzz
 targets (three in Vk_Canvas, one in App_shell) run ~10^6 inputs each with no
 crash.

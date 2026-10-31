@@ -17,18 +17,21 @@ void drawDropdownField(Canvas& c, const Rect& row,
   float fieldW = row.w * 0.52f;
   Rect f = {row.x + row.w - fieldW, row.y, fieldW, row.h};
 
-  std::string labelS(label);
-  float labelSize = applyTextFit(c, labelS, f.x - row.x - labelPad(row), s, fit);
-  c.text(labelS, row.x, vcenter(row, labelSize), labelSize, style.labelText);
+  std::string scratch;
+  const FittedText labelF = fitText(c, label, scratch,
+                                    f.x - row.x - labelPad(row), s, fit);
+  c.text(labelF.text, row.x, vcenter(row, labelF.size), labelF.size,
+         style.labelText);
 
   c.rect(f.x, f.y, f.w, f.h, hovered ? style.fieldHoverBg : style.fieldBg, f.h * 0.22f);
 
   // The value's zone ends where the chevron's begins, so with a fitting
   // policy the two can never touch.
   float chevronZone = f.h * 1.0f;
-  std::string valueS(value);
-  float valueSize = applyTextFit(c, valueS, f.w - f.h * 0.4f - chevronZone, s, fit);
-  c.text(valueS, f.x + f.h * 0.4f, vcenter(f, valueSize), valueSize, style.valueText);
+  const FittedText valueF = fitText(c, value, scratch,
+                                    f.w - f.h * 0.4f - chevronZone, s, fit);
+  c.text(valueF.text, f.x + f.h * 0.4f, vcenter(f, valueF.size), valueF.size,
+         style.valueText);
   // Disclosure chevron: a real triangle (analytic vector primitive — one
   // 3-line contour in the winding pass), not a glyph.
   float cx = f.x + f.w - f.h * 0.5f;

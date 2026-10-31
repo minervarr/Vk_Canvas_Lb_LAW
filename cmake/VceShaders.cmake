@@ -71,6 +71,12 @@ function(vce_compile_slang_stage TARGET_NAME OUT_DIR SHADER_SRC_DIR STAGE)
                               -target spirv
                               -emit-spirv-via-glsl
                               -profile glsl_450
+                              # Slang's default is -O1. The shipped shaders were
+                              # therefore compiled at a lower level than the C++
+                              # they accompany; -O2 already drops the shape
+                              # fragment shader from 550 to 450 SPIR-V
+                              # instructions with no semantic change.
+                              -O2
                               -I ${SHADER_SRC_DIR}
                               -I ${_vce_shared_include}
             DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang ${_slang_sources}

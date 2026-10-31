@@ -3,20 +3,23 @@
 #include <algorithm>
 #include <string>
 
+#include "widgets_internal.hh"
+
 namespace widgets {
 
 float listContentHeight(int n, float rowH) { return n * rowH; }
 
-std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
-                                    const std::vector<std::string>& items,
-                                    int selected, float scrollPx, float rowH,
-                                    int hoverIndex, const TextFit& fit,
-                                    const ScrollListStyle& style) {
-  std::vector<ListRow> visible;
+void drawScrollListInto(Canvas& c, const Rect& area,
+                        const std::vector<std::string>& items,
+                        int selected, float scrollPx, float rowH,
+                        int hoverIndex, const TextFit& fit,
+                        const ScrollListStyle& style,
+                        std::vector<ListRow>* visible) {
   c.rect(area.x, area.y, area.w, area.h, style.background, c.pad());
   const auto savedClip = c.saveClip();
   c.setClip(area.x, area.y, area.w, area.h);
   float s = rowH * 0.42f;
+  std::string scratch;
   for (int i = 0; i < (int)items.size(); i++) {
     float ry = area.y + i * rowH - scrollPx;
     if (ry + rowH < area.y || ry > area.y + area.h) continue;  // off-screen
@@ -24,11 +27,12 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
     bool sel = (i == selected);
     Color textColor = style.rowText;
 
-    // Measure the row's text first — the Pill fill can hug it (fitWidth).
+    // A string_view into the caller's item unless the fit policy truncates;
+    // the old code copied every visible item every frame.
     float textX = r.x + c.pad();
-    std::string item = items[(size_t)i];
-    float itemSize = applyTextFit(c, item, r.w - c.pad() * 2.0f, s, fit);
-    float textW = c.textWidth(item, itemSize);
+    const FittedText item = fitText(c, items[(size_t)i], scratch,
+                                    r.w - c.pad() * 2.0f, s, fit);
+    float textW = item.width;
 
     if (style.selection == ListSelectionStyle::Pill) {
       // Full row height (matches the action-button height exactly).
@@ -58,10 +62,20 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
       if (sel) textColor = style.borderSelected;
     }
     if (!sel && i == hoverIndex) textColor = style.hoverText;
-    c.text(item, textX, r.y + (rowH - itemSize) * 0.5f, itemSize, textColor);
-    visible.push_back({r, i});
+    c.text(item.text, textX, r.y + (rowH - item.size) * 0.5f, item.size, textColor);
+    if (visible) visible->push_back({r, i});
   }
   c.restoreClip(savedClip);
+}
+
+std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
+                                    const std::vector<std::string>& items,
+                                    int selected, float scrollPx, float rowH,
+                                    int hoverIndex, const TextFit& fit,
+                                    const ScrollListStyle& style) {
+  std::vector<ListRow> visible;
+  drawScrollListInto(c, area, items, selected, scrollPx, rowH, hoverIndex,
+                     fit, style, &visible);
   return visible;
 }
 

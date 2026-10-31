@@ -1,9 +1,10 @@
 # Performance baseline
 
-Status: third baseline after Phase 4, 2026-10-31. Phase 0 and Phase 1 numbers
-remain below as historical references. Phase 4 adds the per-feature binary-size
-table, its budgets and the LTO measurement; frame numbers are still smoke
-measurements, not frame-rate claims.
+Status: fourth baseline, 2026-10-31 (post-Phase-6 performance pass). Phase 0
+and Phase 1 numbers remain below as historical references. Phase 4 adds the
+per-feature binary-size table, its budgets and the LTO measurement; the post-6
+pass adds CPU/shader measurements and the measured-zero allocation test. Frame
+numbers are still smoke measurements, not frame-rate claims.
 
 ## Reference machine
 
@@ -17,7 +18,7 @@ measurements, not frame-rate claims.
 | Vulkan loader | 1.4.363 |
 | Compiler | GCC 16.2.1 20260810 |
 | CMake / Ninja | 4.4.4 / 1.13.2 |
-| Build flags | Debug: `-g -O2` for the core target; Release: CMake Release |
+| Build flags | Debug: `-g -O2`; Release: CMake Release, then the module's deliberate `-O2` (see the post-6 section) |
 | Build trees | `/tmp/opencode/vk-baseline-{debug,release}`, `/tmp/opencode/app-shell-release` |
 
 This is a laptop with hybrid graphics. Treat absolute numbers as a local
@@ -225,6 +226,85 @@ cmake -S Vk_Canvas_Lb_LAW/dev -B /tmp/opencode/vk-lto -G Ninja \
 cmake --build /tmp/opencode/vk-lto
 ```
 
+## Post-Phase-6 CPU and shader pass (2026-10-31)
+
+A review of the frame-build hot paths, measured on the reference machine with
+GCC 16.2.1. All numbers are local; the scene sizes and methodology are stated
+because none of this is a frame-rate claim.
+
+### Build policy
+
+- **Shaders now compile at `-O2`.** Slang's default is `-O1`; the shipped
+  `shape_frag.spv` fell from 9,368 to 8,092 bytes and from 550 to 450 SPIR-V
+  instructions (counted with `spirv-dis`) with no semantic change. C++ already
+  used `-O2`, so this removes the mismatch between the two halves.
+- **C++ stays at `-O2`, including Release.** Release's default `-O3` was
+  measured and rejected: `size_canvas_rect` grew from 22,864 to 26,960 bytes
+  (+18%) while the rect/segment/triangle microbenchmark was unchanged
+  (18.2 vs 18.1 ns per three primitives). The pay-for-use budget wins until a
+  real scene shows otherwise. `cmake/VceModules.cmake` states this explicitly.
+
+### CPU frame build
+
+| Change | Before | After |
+|---|---:|---:|
+| `Canvas` rect + segment + triangle emission | 43.8 ns / set | 17.3 ns / set |
+| `wrapText`, 4,400 chars, fixed 5 px font | 0.048 ms / call | 0.022 ms / call |
+| `wrapText` allocations for 63 output lines | one per measured prefix (O(n²)) | 63 (one per line) |
+| `ui::Context` steady-state frame (label, toggle, radio, slider, text field, scroll list) | not measured | **0 allocations** after warm-up |
+
+What changed:
+
+- `Canvas` emits all six vertices of a text/shape quad with one vector growth
+  instead of 54 `push_back`/insert calls, and curve records are written in
+  place after one `resize`.
+- `wrapText` uses `Canvas::prefixFitStyled` (one accumulating walk) instead of
+  measuring `substr(0, i)` for every codepoint; `splitTwoLines` no longer
+  copies and front-erases the remainder.
+- Label/button/radio/scroll-list fitting measures once and keeps the original
+  `string_view` when no truncation is needed; `scrollList` no longer builds a
+  `vector<ListRow>` the context layer discards; the text field writes its
+  buffer back only when it changed; App_shell's event pumps reuse their
+  pending-event vector.
+- `frame_alloc_test` pins the zero-allocation result. It uses the built-in
+  stroke font and no renderer, so it proves the frame-build path, not atlas
+  upload, glyph baking or GPU work.
+
+### Size after the pass
+
+The six feature probes remain within `tools/size_budgets.txt`; the UI probes
+are slightly smaller than the Phase 4 baseline because the same frame now
+contains less code:
+
+| Probe | Phase 4 (GC on) | After |
+|---|---:|---:|
+| `size_layout` | 14,464 | 14,464 |
+| `size_canvas_rect` | 22,864 | 22,864 |
+| `size_ui_geometry` | 14,592 | 14,592 |
+| `size_ui_toggle` | 936,488 | 928,296 |
+| `size_ui_all_widgets` | 969,288 | 961,104 |
+| `size_gpu_renderer` | 48,040 | 48,040 |
+
+### Reviewed, not changed
+
+These are real costs, left alone because each needs a scene or a deliberate
+memory tradeoff:
+
+- The overlay compute path is single-buffered, so any frame with curve records
+  waits out the other frame slot (`Renderer::draw`). Double-buffering the
+  output image + tile/row/curve buffers costs roughly 28 MB at 1080p; the
+  shape path (empty curves) already gets full two-frame overlap.
+- `coverage.slang` insertion-sorts up to 256 curve indices **per pixel** for
+  painter ordering. It only runs on the curve/bitmap-text path; a per-tile
+  sorted list or a sort pass would remove it.
+- `Canvas` still walks text once to measure and once to emit for
+  `textCentered`/`textRight`, and the SDF shape path uses six vertices per
+  shape where instancing could use one.
+- `TextFont` glyph/kern lookups are hash tables per codepoint; a direct-mapped
+  glyph cache is possible but belongs to the font-engine submodule.
+- PGO and `-march=native` are not used: they are not portable, and no scene
+  measures them.
+
 ## GPU/frame timings
 
 Measured after Phase 1: the dev tree compiles the SPIR-V assets (see
@@ -259,10 +339,17 @@ To measure a real scene later:
 
 ## Allocation and steady-state goals
 
-Not measured yet. The intended target is zero heap allocations in the
-steady-state UI frame build (`Canvas` + widgets) after warm-up, and stable RSS
-over a long run. The lifecycle soak exists; a counting-`operator new` test does
-not, so the allocation target is still a design goal, not a measured result.
+The frame-build target is now measured: `frame_alloc_test` overrides global
+`operator new` and runs a complete `ui::Context` frame (label, toggle, radio,
+slider, text field, scroll list) after four warm-up frames. It observes **0
+allocations over 10 frames**. `text_fit_test` separately pins `wrapText` to one
+allocation per output line instead of one per measured prefix.
+
+Limits: both use the built-in stroke font and no renderer. They do not cover
+MSDF/Raster glyph baking, atlas upload, image upload, or renderer command
+recording, and a real app screen with many dynamic strings can still allocate
+where it constructs those strings. Stable RSS over a long run is still the
+lifecycle soak plus ASan, not a 10,000-frame RSS measurement.
 
 ## Targets and status
 
@@ -270,15 +357,16 @@ not, so the allocation target is still a design goal, not a measured result.
   **not measured**; needs a benchmark scene.
 - CPU frame build under 1 ms for a typical screen — **not measured** for a real
   screen (the 192×128 smoke frame is 0.054 ms and is not representative).
-- Zero steady-state heap allocations in the UI frame build — **not measured**;
-  needs a counting allocator.
+- Zero steady-state heap allocations in the UI frame build — **met for the
+  measured context frame** (`frame_alloc_test`: 0 over 10 frames after
+  warm-up); renderer/atlas/image paths are outside that test.
 - Cold start to first frame under 100 ms on desktop (excluding asset decode) —
   **not measured**.
 - Memory stable over 10,000 frames; no Vulkan object leaks at teardown — leak
   checks pass under ASan; a 10,000-frame RSS run is not recorded.
 - Minimal UI binary under 1 MB stripped after module pruning — **met**:
-  primitive-only Canvas 22,864 B; one drawn widget 936,488 B including the font
-  engine; all widgets 969,288 B.
+  primitive-only Canvas 22,864 B; one drawn widget 928,296 B including the font
+  engine; all widgets 961,104 B.
 - Zero validation-layer errors in Debug — **met**: the validation stage is a
   gate and reports zero issues on the four GPU binaries.
 - Zero unchecked Vulkan calls in Release — **not mechanically verified**: the

@@ -199,6 +199,16 @@ std::vector<ListRow> drawScrollList(Canvas& c, const Rect& area,
                                     const TextFit& fit = kTextFree,
                                     const ScrollListStyle& style = kScrollListDefault);
 
+// Same draw, but appends the visible rows to `visible` instead of returning a
+// fresh vector. Pass nullptr when the caller only needs the pixels: a context
+// list does that every frame, and the returned vector was pure garbage there.
+void drawScrollListInto(Canvas& c, const Rect& area,
+                        const std::vector<std::string>& items,
+                        int selected, float scrollPx, float rowH,
+                        int hoverIndex, const TextFit& fit,
+                        const ScrollListStyle& style,
+                        std::vector<ListRow>* visible);
+
 // ── Text field (single-line editable UTF-8 text input) ──────────────────────
 // Minimal single-line editor: insertion/deletion/cursor movement all operate
 // on whole Unicode codepoints, never splitting a multi-byte UTF-8 sequence —

@@ -89,5 +89,8 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_ui_test(theme_test)
     vce_add_ui_test(context_widgets_test)
     vce_add_ui_test(context_demo_test)
+    # Counting operator new: proves the steady-state frame build does not
+    # allocate after warm-up. See the test's header comment.
+    vce_add_ui_test(frame_alloc_test)
     target_link_libraries(context_demo_test PRIVATE vk_canvas_ui_demo)
 endif()

@@ -335,6 +335,10 @@ private:
                            Color topLeft, Color topRight,
                            Color bottomLeft, Color bottomRight);
 
+  // Append one zero-initialised 20-float curve record and return it for the
+  // caller to fill. One resize instead of a stack record followed by insert().
+  float* appendCurve_();
+
   // Clip records appended at/after startIdx against the active clip rect.
   void clipFrom_(size_t startIdx);
 

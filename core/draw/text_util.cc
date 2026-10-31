@@ -2,16 +2,16 @@
 #include <algorithm>
 #include <cctype>
 
-std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
+std::string truncateToWidth(Canvas& c, std::string_view s, float maxW,
                             float size, FontStyle style) {
-    if (c.textWidthStyled(s, size, style) <= maxW) return s;
+    if (c.textWidthStyled(s, size, style) <= maxW) return std::string(s);
     const std::string ellipsis = "...";
     size_t lo = 0, hi = s.size();
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
         // Snap back off UTF-8 continuation bytes so we never split a codepoint.
         while (mid > 0 && (s[mid] & 0xC0) == 0x80) mid--;
-        std::string cand = s.substr(0, mid) + ellipsis;
+        std::string cand = std::string(s.substr(0, mid)) + ellipsis;
         if (c.textWidthStyled(cand, size, style) <= maxW) {
             // No narrower split point than lo is reachable (can happen once
             // multi-byte codepoints are involved, e.g. Cyrillic/CJK, where
@@ -28,10 +28,10 @@ std::string truncateToWidth(Canvas& c, const std::string& s, float maxW,
             hi = mid - 1;
         }
     }
-    return lo == 0 ? ellipsis : s.substr(0, lo) + ellipsis;
+    return lo == 0 ? ellipsis : std::string(s.substr(0, lo)) + ellipsis;
 }
 
-float fitTextSize(Canvas& c, const std::string& s, float maxW,
+float fitTextSize(Canvas& c, std::string_view s, float maxW,
                   float size, float minSize, FontStyle style) {
     if (maxW <= 0.0f || s.empty()) return size;
     float w = c.textWidthStyled(s, size, style);
@@ -41,11 +41,11 @@ float fitTextSize(Canvas& c, const std::string& s, float maxW,
     return std::max(fitted, minSize);
 }
 
-void splitTwoLines(Canvas& c, const std::string& s, float maxW,
+void splitTwoLines(Canvas& c, std::string_view s, float maxW,
                    float size, FontStyle style,
                    std::string& l1, std::string& l2) {
     l2.clear();
-    if (c.textWidthStyled(s, size, style) <= maxW) { l1 = s; return; }
+    if (c.textWidthStyled(s, size, style) <= maxW) { l1.assign(s); return; }
 
     // One pass. Measuring every prefix separately was O(n²) and allocated per
     // codepoint; prefixFitStyled() accumulates the same advances in the same
@@ -55,47 +55,52 @@ void splitTwoLines(Canvas& c, const std::string& s, float maxW,
     size_t fit = c.prefixFitStyled(s, maxW, size, style, nullptr, &lastSpace);
     size_t breakAt = (lastSpace != std::string::npos) ? lastSpace : fit;
     if (breakAt == 0) { l1 = truncateToWidth(c, s, maxW, size, style); return; }
-    l1 = s.substr(0, breakAt);
-    std::string rest = s.substr(breakAt);
-    while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
-    l2 = truncateToWidth(c, rest, maxW, size, style);
+    l1.assign(s.substr(0, breakAt));
+    // Skip the gap between the lines without materialising the remainder and
+    // erasing from its front (that was one allocation plus O(spaces) moves).
+    size_t restStart = breakAt;
+    while (restStart < s.size() && s[restStart] == ' ') ++restStart;
+    l2 = truncateToWidth(c, s.substr(restStart), maxW, size, style);
 }
 
-void wrapText(Canvas& c, const std::string& s, float maxW, float size,
+void wrapText(Canvas& c, std::string_view s, float maxW, float size,
               FontStyle style, std::vector<std::string>& out) {
     size_t start = 0;
     while (start <= s.size()) {
         size_t nl = s.find('\n', start);
-        std::string para = s.substr(start, nl == std::string::npos ? std::string::npos
-                                                                   : nl - start);
+        std::string_view para = s.substr(start, nl == std::string_view::npos
+                                                   ? std::string_view::npos
+                                                   : nl - start);
         if (para.empty()) {
-            out.push_back("");
+            out.emplace_back();
         } else {
             size_t pos = 0;
             while (pos < para.size()) {
-                std::string rest = para.substr(pos);
-                if (c.textWidthStyled(rest, size, style) <= maxW) { out.push_back(rest); break; }
-                size_t fit = 0, lastSpace = std::string::npos;
-                for (size_t i = 1; i <= rest.size(); i++) {
-                    if (i < rest.size() && (rest[i] & 0xC0) == 0x80) continue;
-                    if (c.textWidthStyled(rest.substr(0, i), size, style) > maxW) break;
-                    fit = i;
-                    if (i < rest.size() && rest[i] == ' ') lastSpace = i;
+                std::string_view rest = para.substr(pos);
+                if (c.textWidthStyled(rest, size, style) <= maxW) {
+                    out.emplace_back(rest);
+                    break;
                 }
-                size_t brk = (lastSpace != std::string::npos) ? lastSpace
+                // One pass, no per-prefix allocation: the running width in
+                // prefixFitStyled() is the same prefix measurement the old
+                // per-codepoint loop repeated, so the break point is identical.
+                size_t lastSpace = std::string_view::npos;
+                size_t fit = c.prefixFitStyled(rest, maxW, size, style,
+                                               nullptr, &lastSpace);
+                size_t brk = (lastSpace != std::string_view::npos) ? lastSpace
                             : std::max<size_t>(fit, 1);
-                out.push_back(rest.substr(0, brk));
+                out.emplace_back(rest.substr(0, brk));
                 pos += brk;
                 while (pos < para.size() && para[pos] == ' ') pos++;
             }
         }
-        if (nl == std::string::npos) break;
+        if (nl == std::string_view::npos) break;
         start = nl + 1;
     }
     while (!out.empty() && out.back().empty()) out.pop_back();
 }
 
-void textCenteredStyled(Canvas& c, const std::string& s, float x, float w,
+void textCenteredStyled(Canvas& c, std::string_view s, float x, float w,
                         float y, float size, Color color, FontStyle style) {
     float tw = c.textWidthStyled(s, size, style);
     c.textStyled(s, x + std::max(0.0f, (w - tw) * 0.5f), y, size, color, style);

@@ -252,6 +252,10 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     # the whole renderer.
     vce_add_pure_test(canvas_records_test draw/canvas.cc)
     target_link_libraries(canvas_records_test PRIVATE vk_font_core)
+    # Text-fit correctness plus an allocation bound that catches a return to
+    # per-prefix measurement in wrapText().
+    vce_add_pure_test(text_fit_test draw/canvas.cc draw/text_util.cc)
+    target_link_libraries(text_fit_test PRIVATE vk_font_core)
 
     # No executable work: the static_asserts are the test. Linking the core
     # target supplies the Vulkan and font-engine include paths.

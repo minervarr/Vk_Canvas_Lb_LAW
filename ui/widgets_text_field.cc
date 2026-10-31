@@ -83,12 +83,15 @@ std::pair<size_t, size_t> WordAt(const std::string& s, size_t pos) {
 // scroll — shared by drawTextField (render) and textFieldHandleClick (hit
 // test) so a click maps to the same glyph the user sees under the pointer.
 float ComputeTextX(Canvas& c, const Rect& row, const TextFieldState& state,
-                   float pad, float maxW, float size) {
+                   float pad, float maxW, float size,
+                   float* outCursorPrefixW = nullptr) {
   float textX = row.x + pad;
+  float prefixW = 0.0f;
   if (!state.text.empty()) {
-    float prefixW = c.textWidth(std::string_view(state.text).substr(0, state.cursorByte), size);
+    prefixW = c.textWidth(std::string_view(state.text).substr(0, state.cursorByte), size);
     if (prefixW > maxW) textX -= (prefixW - maxW);
   }
+  if (outCursorPrefixW) *outCursorPrefixW = prefixW;
   return textX;
 }
 
@@ -272,20 +275,29 @@ void drawTextField(Canvas& c, const Rect& row, const TextFieldState& state,
       c.text(placeholder, row.x + pad, textY, s, style.placeholder);
   } else {
     float textX = row.x + pad;
-    if (focused) textX = ComputeTextX(c, row, state, pad, maxW, s);
+    // One cursor-prefix measurement serves both the scroll offset and the
+    // caret/selection geometry; the old path walked the prefix up to three
+    // times per focused frame.
+    float cursorPrefixW = 0.0f;
+    if (focused) textX = ComputeTextX(c, row, state, pad, maxW, s, &cursorPrefixW);
 
     if (focused && state.selectionAnchor != state.cursorByte) {
       size_t s0 = std::min(state.selectionAnchor, state.cursorByte);
       size_t s1 = std::max(state.selectionAnchor, state.cursorByte);
-      float x0 = textX + c.textWidth(std::string_view(state.text).substr(0, s0), s);
-      float x1 = textX + c.textWidth(std::string_view(state.text).substr(0, s1), s);
+      const float w0 = s0 == state.cursorByte
+                           ? cursorPrefixW
+                           : c.textWidth(std::string_view(state.text).substr(0, s0), s);
+      const float w1 = s1 == state.cursorByte
+                           ? cursorPrefixW
+                           : c.textWidth(std::string_view(state.text).substr(0, s1), s);
+      float x0 = textX + w0;
+      float x1 = textX + w1;
       c.rect(x0, row.y + row.h * 0.15f, x1 - x0, row.h * 0.7f, style.selection);
     }
 
     c.text(state.text, textX, textY, s, style.text);
     if (focused && state.selectionAnchor == state.cursorByte) {
-      float prefixW = c.textWidth(std::string_view(state.text).substr(0, state.cursorByte), s);
-      float cursorX = textX + prefixW;
+      float cursorX = textX + cursorPrefixW;
       c.rect(cursorX, row.y + row.h * 0.2f, row.h * 0.06f, row.h * 0.6f, style.cursor);
     }
   }

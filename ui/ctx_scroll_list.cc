@@ -76,8 +76,9 @@ int scrollList(Context& c, Id id, const Rect& area,
         if (clicked >= 0) selected = clicked;
     }
 
-    widgets::drawScrollList(c.canvas(), area, items, selected, state.scrollPx,
-                            rowHeight, hover, fit, detail::scrollListStyle(c.theme()));
+    widgets::drawScrollListInto(c.canvas(), area, items, selected, state.scrollPx,
+                                rowHeight, hover, fit,
+                                detail::scrollListStyle(c.theme()), nullptr);
     if (c.focused(id)) c.drawFocusRing(area, c.theme().radius);
     return clicked;
 }

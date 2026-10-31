@@ -24,6 +24,13 @@ function(vce_canvas_module_settings target)
             target_link_options(${target} INTERFACE "$<$<NOT:$<CONFIG:Debug>>:/OPT:REF>")
         endif()
     else()
+        # Deliberately -O2 in every configuration, not only Debug. Release's
+        # default -O3 was measured: the minimal Canvas probe grew 22,864 ->
+        # 26,960 bytes (+18%) while the shape/emit microbenchmark was unchanged
+        # (18.2 vs 18.1 ns for the same three primitives). The pay-for-use size
+        # budget wins until a real scene shows otherwise. (target options come
+        # after CMAKE_CXX_FLAGS_<CONFIG>, so this also pins MinSizeRel; do not
+        # drop it without re-running tools/size_report.sh.)
         target_compile_options(${target} PRIVATE -O2)
         if(VCE_CANVAS_FUNCTION_SECTIONS)
             target_compile_options(${target} PRIVATE

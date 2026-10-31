@@ -33,7 +33,11 @@ bool textField(Context& c, Id id, const Rect& row, std::string& text,
                            detail::textFieldStyle(c.theme()));
     if (c.focused(id)) c.drawFocusRing(row, c.theme().radius);
 
-    text = slot.state.text;
+    // Refresh the caller's value only when the field actually changed. The
+    // old unconditional assign copied the whole buffer back every frame
+    // (heap allocation for any text past SSO), while both sides already held
+    // the same bytes.
+    if (changed) text = slot.state.text;
     return changed;
 }
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 // Layout of a curve record (20 floats); bounding box lives at [14..17].
@@ -34,6 +35,12 @@ void Canvas::clear(Color c) {
     emitFilledRect(out_, hw, hh, hw, hh, c.r, c.g, c.b, c.a);
 }
 
+float* Canvas::appendCurve_() {
+    const size_t at = out_.size();
+    out_.resize(at + kCurveFloats);   // value-initialises the new floats to 0
+    return out_.data() + at;
+}
+
 void Canvas::emitShapeQuad_(float x0, float y0, float x1, float y1,
                             float kind, const float d[6], Color c) {
     // 1px AA margin so the smoothed edge is never cut by the quad itself.
@@ -46,10 +53,17 @@ void Canvas::emitShapeQuad_(float x0, float y0, float x1, float y1,
         y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
         if (x0 >= x1 || y0 >= y1) return;
     }
+    // One growth for all six vertices. The previous loop inserted 14 floats
+    // per vertex (six capacity checks) from a stack record.
+    const size_t at = shapes_->size();
+    shapes_->resize(at + 6 * 14);
+    float* v = shapes_->data() + at;
     auto vert = [&](float vx, float vy) {
-        float rec[14] = { vx, vy, c.r, c.g, c.b, c.a,
-                          kind, d[0], d[1], d[2], d[3], d[4], d[5], 0.0f };
-        shapes_->insert(shapes_->end(), rec, rec + 14);
+        v[0] = vx;   v[1] = vy;   v[2] = c.r; v[3] = c.g;
+        v[4] = c.b;  v[5] = c.a;  v[6] = kind;
+        v[7] = d[0]; v[8] = d[1]; v[9] = d[2];
+        v[10] = d[3]; v[11] = d[4]; v[12] = d[5]; v[13] = 0.0f;
+        v += 14;
     };
     vert(x0, y0); vert(x1, y0); vert(x1, y1);
     vert(x0, y0); vert(x1, y1); vert(x0, y1);
@@ -65,10 +79,15 @@ void Canvas::emitShapeQuadGrad_(float x0, float y0, float x1, float y1,
         y0 = std::max(y0, clipY0_); y1 = std::min(y1, clipY1_);
         if (x0 >= x1 || y0 >= y1) return;
     }
-    auto vert = [&](float vx, float vy, Color c) {
-        float rec[14] = { vx, vy, c.r, c.g, c.b, c.a,
-                          kind, d[0], d[1], d[2], d[3], d[4], d[5], 0.0f };
-        shapes_->insert(shapes_->end(), rec, rec + 14);
+    const size_t at = shapes_->size();
+    shapes_->resize(at + 6 * 14);
+    float* v = shapes_->data() + at;
+    auto vert = [&](float vx, float vy, Color vc) {
+        v[0] = vx;   v[1] = vy;   v[2] = vc.r; v[3] = vc.g;
+        v[4] = vc.b; v[5] = vc.a; v[6] = kind;
+        v[7] = d[0]; v[8] = d[1]; v[9] = d[2];
+        v[10] = d[3]; v[11] = d[4]; v[12] = d[5]; v[13] = 0.0f;
+        v += 14;
     };
     vert(x0, y0, topLeft);    vert(x1, y0, topRight);    vert(x1, y1, bottomRight);
     vert(x0, y0, topLeft);    vert(x1, y1, bottomRight); vert(x0, y1, bottomLeft);
@@ -153,7 +172,7 @@ void Canvas::rectOutline(float x, float y, float w, float h, Color c,
     // stroke when its lineWidth slot is non-zero. The path is inset by half
     // the stroke width, so the visible band remains inside the caller's rect.
     size_t start = out_.size();
-    float rec[kCurveFloats] = {0};
+    float* rec = appendCurve_();
     rec[0] = 2.0f;
     rec[1] = cx;
     rec[2] = cy;
@@ -169,7 +188,6 @@ void Canvas::rectOutline(float x, float y, float w, float h, Color c,
     rec[kBBoxMinY] = y - 1.0f;
     rec[kBBoxMaxX] = x + w + 1.0f;
     rec[kBBoxMaxY] = y + h + 1.0f;
-    out_.insert(out_.end(), rec, rec + kCurveFloats);
     clipFrom_(start);
 }
 
@@ -222,14 +240,13 @@ void Canvas::triangle(float x0, float y0, float x1, float y1,
     auto edge = [&](float ax, float ay, float bx, float by) {
         xform_(ax, ay);
         xform_(bx, by);
-        float rec[kCurveFloats] = {0};
+        float* rec = appendCurve_();
         rec[0] = 6.0f;  // line segment, winding-fill pass (same as glyph edges)
         rec[1] = ax; rec[2] = ay;
         rec[3] = bx; rec[4] = by;
         rec[9] = c.r; rec[10] = c.g; rec[11] = c.b; rec[12] = c.a;
         rec[kBBoxMinX] = std::min(ax, bx); rec[kBBoxMinY] = std::min(ay, by);
         rec[kBBoxMaxX] = std::max(ax, bx); rec[kBBoxMaxY] = std::max(ay, by);
-        out_.insert(out_.end(), rec, rec + kCurveFloats);
     };
     edge(x0, y0, x1, y1);
     edge(x1, y1, x2, y2);
@@ -243,7 +260,7 @@ void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color
     float minX = std::min(ax, bx) - r, maxX = std::max(ax, bx) + r;
     float minY = std::min(ay, by) - r, maxY = std::max(ay, by) + r;
 
-    float rec[kCurveFloats] = {0};
+    float* rec = appendCurve_();
     rec[0] = 3.0f;                       // SDF segment
     rec[1] = ax; rec[2] = ay;
     rec[3] = bx; rec[4] = by;
@@ -251,7 +268,6 @@ void Canvas::emitCapsule_(float ax, float ay, float bx, float by, float r, Color
     rec[13] = r;                         // capsule radius (half thickness)
     rec[kBBoxMinX] = minX; rec[kBBoxMinY] = minY;
     rec[kBBoxMaxX] = maxX; rec[kBBoxMaxY] = maxY;
-    out_.insert(out_.end(), rec, rec + kCurveFloats);
 }
 
 void Canvas::segment(float x0, float y0, float x1, float y1, float thickness, Color c) {
@@ -299,13 +315,18 @@ void Canvas::emitTextQuad_(float x0, float y0, float x1, float y1,
     static_assert(TextFont::FLOATS_PER_VERT == 9,
                   "vertex layout changed: update this emitter AND both "
                   "renderers' attribute tables AND msdf_vert.slang");
+    // Six vertices in one growth. This is the per-glyph hot path: the old
+    // emitter did 54 push_back calls (six capacity checks per vertex).
+    constexpr size_t kFloatsPerVert = TextFont::FLOATS_PER_VERT;
+    const size_t at = quads_->size();
+    quads_->resize(at + 6 * kFloatsPerVert);
+    float* v = quads_->data() + at;
     auto vert = [&](float vx, float vy, float vu, float vv) {
         xform_(vx, vy);
-        quads_->push_back(vx);  quads_->push_back(vy);
-        quads_->push_back(vu);  quads_->push_back(vv);
-        quads_->push_back(c.r); quads_->push_back(c.g);
-        quads_->push_back(c.b); quads_->push_back(c.a);
-        quads_->push_back(page);
+        v[0] = vx;  v[1] = vy;  v[2] = vu; v[3] = vv;
+        v[4] = c.r; v[5] = c.g; v[6] = c.b; v[7] = c.a;
+        v[8] = page;
+        v += kFloatsPerVert;
     };
     vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
     vert(x0, y0, u0, v0); vert(x1, y1, u1, v1); vert(x0, y1, u0, v1);
@@ -398,7 +419,7 @@ void Canvas::emitRotatableRect_(float x, float y, float w, float h, Color c) {
         maxX = std::max(maxX, px); maxY = std::max(maxY, py);
     }
 
-    float rec[kCurveFloats] = {0};
+    float* rec = appendCurve_();
     rec[0] = 3.0f;                 // SDF segment
     rec[1] = ax; rec[2] = ay;
     rec[3] = bx; rec[4] = by;
@@ -406,7 +427,6 @@ void Canvas::emitRotatableRect_(float x, float y, float w, float h, Color c) {
     rec[13] = hh;                  // lineWidth = capsule radius → filled pill
     rec[kBBoxMinX] = minX; rec[kBBoxMinY] = minY;
     rec[kBBoxMaxX] = maxX; rec[kBBoxMaxY] = maxY;
-    out_.insert(out_.end(), rec, rec + kCurveFloats);
 }
 
 void Canvas::setClip(float x, float y, float w, float h) {
@@ -450,8 +470,9 @@ void Canvas::occlude(float x, float y, float w, float h) {
         }
         cx /= 6.0f; cy /= 6.0f;
         if (cx >= x0 && cx < x1 && cy >= y0 && cy < y1) continue;  // occluded → drop
-        if (write != g) std::copy(q.begin() + g, q.begin() + g + kFloatsPerGlyph,
-                                  q.begin() + write);
+        if (write != g)
+            std::memmove(q.data() + write, q.data() + g,
+                         kFloatsPerGlyph * sizeof(float));
         write += kFloatsPerGlyph;
     }
     q.resize(write);
@@ -468,8 +489,8 @@ void Canvas::clipFrom_(size_t startIdx) {
             maxY <= clipY0_ || minY >= clipY1_)
             continue;
         if (write != r)
-            std::copy(out_.begin() + r, out_.begin() + r + kCurveFloats,
-                      out_.begin() + write);
+            std::memmove(out_.data() + write, out_.data() + r,
+                         kCurveFloats * sizeof(float));
         // Clamp the tiling bounding box to the clip rect.
         out_[write + kBBoxMinX] = std::max(minX, clipX0_);
         out_[write + kBBoxMinY] = std::max(minY, clipY0_);

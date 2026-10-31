@@ -10,10 +10,8 @@
 namespace ui {
 
 namespace {
-std::string percentText(float value) {
-    char buffer[16];
+void percentText(float value, char (&buffer)[16]) {
     std::snprintf(buffer, sizeof(buffer), "%.0f%%", value * 100.0f);
-    return buffer;
 }
 }  // namespace
 
@@ -57,8 +55,9 @@ bool slider(Context& c, Id id, const Rect& row, std::string_view label,
         }
     }
 
-    std::string text(valueText);
-    if (text.empty()) text = percentText(value);
+    char buffer[16];
+    std::string_view text = valueText;
+    if (text.empty()) { percentText(value, buffer); text = buffer; }
     widgets::drawSlider(c.canvas(), row, value, label, text, detail::sliderStyle(c.theme()));
     if (c.focused(id)) c.drawFocusRing(row, c.theme().radius);
     return changed;

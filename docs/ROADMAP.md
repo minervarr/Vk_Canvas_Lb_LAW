@@ -12,10 +12,11 @@ sync.
 
 ## Current position
 
-- **Phase:** 6 — Audit closure (DONE)
-- **Last completed:** Phase 6 — nine ADRs in `docs/decisions/`, historical
-  narratives moved out of code comments, the promised `vk_canvas_engine` target
-  added, and the stale validation claim in `docs/PERFORMANCE.md` corrected.
+- **Phase:** 6 — Audit closure (DONE), plus the post-6 performance pass (DONE)
+- **Last completed:** Post-Phase-6 performance pass — shader `-O2`, batched
+  Canvas emission, single-pass `wrapText`, allocation-free context frame, and
+  the measured-zero allocation test. Details and measurements in
+  `docs/PERFORMANCE.md`.
 - **Next action:** none scheduled. Phase 7 is the deferred generator gate and
   the Phase 4/5 measurements do not trigger it. Remaining work is maintenance:
   a consumer that can validate the API end-to-end, and CI when one is wanted.
@@ -420,6 +421,28 @@ Exit: every audit finding has a status, every irreversible choice has an ADR,
 and the docs do not contradict the code. **Verified 2026-10-31:** 21/21 CTest,
 `check_deps: ok`, header check and `tools/audit.sh` green; a test consumer links
 `vk_canvas_engine` without the toolkit.
+
+### Post-Phase-6 performance pass (DONE)
+
+Not a new phase number: a measured review of the frame-build and shader hot
+paths after the audit closed.
+
+- [x] Compile shaders at `-O2` instead of Slang's `-O1` default (the shape
+      fragment shader drops 550 -> 450 SPIR-V instructions).
+- [x] Batch `Canvas` text/shape/curve emission into one vector growth per
+      primitive (rect+segment+triangle: 43.8 -> 17.3 ns).
+- [x] Make `wrapText` single-pass via `prefixFitStyled` (4,400 chars: 0.048 ->
+      0.022 ms; one allocation per output line).
+- [x] Remove per-frame UI string copies and the discarded scroll-list vector;
+      text fields write back only on change; App_shell event pumps reuse their
+      pending vector.
+- [x] Add `frame_alloc_test` (0 allocations over 10 warm frames) and
+      `text_fit_test` (wrap semantics + allocation bound).
+- [x] Re-check the feature-probe size budgets after the pass; all six pass.
+
+Not scheduled: re-baseline with a real scene if one is built. Overlay
+single-buffering, the coverage shader's per-pixel sort, and text measure+emit
+double walks remain unmeasured costs (listed in `docs/PERFORMANCE.md`).
 
 ### Phase 7 — Generator decision gate (DEFERRED)
 

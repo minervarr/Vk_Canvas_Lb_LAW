@@ -17,10 +17,11 @@ Rect drawRadioRow(Canvas& c, const Rect& row, bool selected, bool hovered,
   Rect dot{row.x + pad, row.y + (row.h - dotD) * 0.5f, dotD, dotD};
 
   float labelX = dot.x + dot.w + gap;
-  std::string text(label);
   float s = rowTextSize(row);
-  float drawSize = applyTextFit(c, text, row.x + row.w - labelX - pad, s, fit);
-  float textW = c.textWidth(text, drawSize);
+  std::string scratch;
+  const FittedText text = fitText(c, label, scratch,
+                                  row.x + row.w - labelX - pad, s, fit);
+  const float textW = text.width;
 
   // Content-fitted hit/highlight rect: full row height (matches the row/button
   // height exactly — no vertical inset), only as wide as the dot + label + pad.
@@ -39,7 +40,7 @@ Rect drawRadioRow(Canvas& c, const Rect& row, bool selected, bool hovered,
   // A rounded square with radius == half-size approximates a dot — Canvas has
   // no circle primitive (same technique as Pager::drawDots).
   c.rect(dot.x, dot.y, dot.w, dot.h, selected ? style.dotOn : style.dotOff, dot.w * 0.5f);
-  c.text(text, labelX, vcenter(row, drawSize), drawSize,
+  c.text(text.text, labelX, vcenter(row, text.size), text.size,
          selected ? style.textOn : style.textOff);
   return hit;
 }

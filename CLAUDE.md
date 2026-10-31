@@ -37,7 +37,7 @@ cd platform/windows
 - CMake 3.22.1+
 - FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
-- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks, 17 unit tests, 4 GPU tests, validation, ASan+UBSan, soak and libFuzzer. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no golden suite; the GPU probes exit 77 without shaders/assets and assert structural pixels. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
+- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks, 19 unit tests, 4 GPU tests, validation, ASan+UBSan, soak and libFuzzer. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no golden suite; the GPU probes exit 77 without shaders/assets and assert structural pixels. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
 
 ## Shader Compilation
 
