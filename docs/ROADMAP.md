@@ -12,18 +12,21 @@ sync.
 
 ## Current position
 
-- **Phase:** 4 — pay-for-use and performance budgets (DONE)
-- **Last completed:** Phase 4 — Release function/data sections plus
-  `--gc-sections`, per-widget toolkit TUs, feature-isolated link probes with
-  size budgets, optional LTO measurement, and the measured per-feature table in
-  `docs/PERFORMANCE.md`.
-- **Next action:** start Phase 5 at T6.1 in `.opencode/todo.md`: `ui::Theme`
-  (dark/light, token overrides, density) on top of the existing theme skeleton.
+- **Phase:** 5 — UI toolkit features (DONE)
+- **Last completed:** Phase 5 — `ui::Theme` light/dark presets, density and token
+  overrides; type roles with fit policy; `ui::Id` + `StateStore` + `Context`
+  owning hot/active/focus/scroll/text-edit state; context widgets; and a
+  CPU-testable demo settings screen.
+- **Next action:** none scheduled. Phase 6 is a deferred decision gate and the
+  Phase 4/5 measurements do not trigger it. Remaining work is the open decision
+  on reference hardware/CI and audit finding 8 (move historical narratives from
+  code comments to ADRs).
 - **Blocking decisions:** reference hardware/CI for cross-machine timing is
   still open (Open decision 1). Size budgets are local-machine gates with
   recorded provenance; they are not a multi-machine claim.
-- **Resume phrase:** "continue next phase" means start Phase 5 (UI toolkit
-  features) at T6.1 in `.opencode/todo.md`. Phase 4 is green.
+- **Resume phrase:** no next phase. "continue next phase" means re-evaluate the
+  Phase 6 generator gate only if a consumer reports an unacceptable binary,
+  build-time or audit cost; otherwise this is maintenance work.
 
 ### How to resume after a context cleanup
 
@@ -34,11 +37,11 @@ cat .opencode/todo.md          # checked/unchecked work
 cat Vk_Canvas_Lb_LAW/docs/ROADMAP.md
 ```
 
-Phase 0 through Phase 4 are green: the engine modules, the `Renderer`
+Phase 0 through Phase 5 are green: the engine modules, the `Renderer`
 pimpl/split, GPU smoke coverage, the Vulkan-free `output_target` adapter, the
-`ui/` toolkit boundary, checked-call/recovery/audit hardening, and the measured
-pay-for-use property are in place and audited. Phase 5 (UI toolkit features) is
-next.
+`ui/` toolkit boundary, checked-call/recovery/audit hardening, the measured
+pay-for-use property, and the context-based UI toolkit are in place and
+audited. Phase 6 is a deferred gate, not scheduled work.
 
 ---
 
@@ -331,7 +334,8 @@ transitive property of the submodule's monolithic target, not a UI include.
       `docs/RELIABILITY.md`.
 
 Exit: validation-clean, leak-free, fuzz-clean for covered parsers; recovery
-paths exercised. **Verified 2026-10-31:** 18/18 CTest entries; validation zero
+paths exercised. **Verified 2026-10-31:** 18/18 CTest entries at the time of
+Phase 3; validation zero
 issues on all four GPU binaries; ASan+UBSan full CTest leak-free; soak 5/5;
 three fuzz targets clean; `audit: ok`.
 
@@ -359,29 +363,45 @@ three fuzz targets clean; `audit: ok`.
       `docs/PERFORMANCE.md`, "Phase 4 pay-for-use baseline".
 
 Exit: a documented, measured answer to "what does an app pay for parts it does
-not use". **Verified 2026-10-31:** `tools/audit.sh` green (18/18 CTest,
-validation, ASan+UBSan, soak, fuzz, size budgets); the probe table and LTO
-measurement are in `docs/PERFORMANCE.md`.
+not use". **Verified 2026-10-31:** `tools/audit.sh` green (18/18 CTest at the
+time, before the Phase 5 tests; validation, ASan+UBSan, soak, fuzz, size
+budgets); the probe table and LTO measurement are in `docs/PERFORMANCE.md`.
 
-### Phase 5 — UI toolkit features (PLANNED)
+### Phase 5 — UI toolkit features (DONE)
 
-- `ui::Theme` (dark/light, token overrides, density).
-- `ui::TypeScale` and text roles (caption/secondary/body/title/header), with
-  wrapping/ellipsis policy.
-- `ui::Context` carrying `Canvas`, `FrameInput`, theme, metrics and per-frame
-  state; no boilerplate in apps.
-- `ui::Id` + state store for hot/active/focus/scroll; keyboard navigation.
-- Widgets migrated one at a time, each with a CPU-only test.
-- Optional: a small declarative screen description interpreted by `ui/` for
-  hot reload and less boilerplate. Data, not generated C++.
+- [x] `ui::Theme` (dark/light, token overrides, density).
+      `ui/theme/theme.hh`: `kDarkTheme`/`kLightTheme`, copy-and-override tokens,
+      `withDensity()` and `scaledSpacing()`.
+- [x] `ui::TypeScale` and text roles (caption/secondary/body/title/header), with
+      wrapping/ellipsis policy. `ui::typeStyle()` is the single size+fit policy;
+      `ui::label()` consumes it.
+- [x] `ui::Context` carrying `Canvas`, `FrameInput`, theme, metrics and per-frame
+      state; no boilerplate in apps. One context per frame owns begin/end.
+- [x] `ui::Id` + state store for hot/active/focus/scroll; keyboard navigation.
+      `StateStore` also owns text-field state; Tab/Shift+Tab focus order,
+      Enter/Space activation, Escape blur, slider arrow/Page keys and a context
+      scroll list whose wheel/selection-reveal state is toolkit-owned.
+- [x] Widgets migrated one at a time, each with a CPU-only test. Context
+      versions of toggle, radio, slider, button, text field, label/group header;
+      `context_widgets_test` has one assertion block per widget. The legacy
+      `widgets::` API is untouched.
+- [x] Optional: a small declarative screen description interpreted by `ui/` for
+      hot reload and less boilerplate. **Not implemented:** the phase exit does
+      not need it, and a data interpreter would be a separate, opt-in layer.
+- [x] Demo screen without hand-wired interaction state.
+      `ui/demo/settings_screen.*` uses only app values plus `ui::Context`;
+      `context_demo_test` drives it headlessly.
 
 Exit: a demo screen can be built without hand-wiring every widget's state, and
-the same screen is testable without a window.
+the same screen is testable without a window. **Verified 2026-10-31:** 21/21
+CTest (17 unit + 4 GPU), including `theme_test`, `context_widgets_test` and
+`context_demo_test`; `tools/audit.sh` green.
 
 ### Phase 6 — Generator decision gate (DEFERRED)
 
-Only after Phase 4 shows that file splits + GC sections + module targets + LTO
-still leave an unacceptable binary or build-time cost.
+Not triggered: Phase 4 measured section GC + per-widget TUs + module targets as
+sufficient for the current consumers, and Phase 5 added code without an
+unacceptable binary or build-time cost. Re-open only if a consumer reports one.
 
 If a generator is built, its contract is:
 

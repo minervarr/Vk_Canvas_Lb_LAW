@@ -4,16 +4,17 @@ Status: canonical, 2026-10-31. This is the audit index: what exists, what it
 depends on, what tests it, and whether it is compiled. Update it whenever a file
 moves, a target is split, or a test is added.
 
-Current shape: **39 compiled `.cc` files** — 23 in the five engine module
-directories (`base/`, `input/`, `layout/`, `draw/`, `gpu/`) and 16 in the `ui/`
-toolkit. Engine targets: `vk_canvas_base` (base + input + layout),
-`vk_canvas_draw`, `vk_canvas_gpu`; the toolkit is `vk_canvas_ui`.
-`vk_canvas_core` remains the source-compatible umbrella (an INTERFACE target
-linking all four for one transition cycle). `tools/check_deps.py` checks the
-per-target source inventory, the layer edges between directories, and the
-platform/WIP/UI include rules. Release module objects carry function/data
-sections and consumers link with section GC (`cmake/VceModules.cmake`), so an
-unused function inside a pulled object is dropped as well.
+Current shape: **49 compiled `.cc` files** — 23 in the five engine module
+directories (`base/`, `input/`, `layout/`, `draw/`, `gpu/`) and 26 under `ui/`
+(25 in `vk_canvas_ui`, one demo in `vk_canvas_ui_demo`). Engine targets:
+`vk_canvas_base` (base + input + layout), `vk_canvas_draw`, `vk_canvas_gpu`; the
+toolkit is `vk_canvas_ui`. `vk_canvas_core` remains the source-compatible
+umbrella (an INTERFACE target linking all four for one transition cycle).
+`tools/check_deps.py` checks the per-target source inventory, the layer edges
+between directories, and the platform/WIP/UI include rules. Release module
+objects carry function/data sections and consumers link with section GC
+(`cmake/VceModules.cmake`), so an unused function inside a pulled object is
+dropped as well.
 
 ## Compiled engine
 
@@ -51,6 +52,9 @@ still carries libvulkan because the font-engine submodule's archive does.
 |---|---|---|---|---|---|
 | widget contract | `ui/widgets.hh` | 353 | canvas, frame_input | all widget tests | Public structs, styles, geometry/draw declarations. |
 | widget helpers | `ui/widgets_internal.hh`, `ui/widgets_text_fit.cc` | ~45 | canvas, text_util | indirectly | Shared `vcenter`/`drawLabelFit` and the opt-in `applyTextFit` policy. |
+| context + state | `ui/context.*`, `ui/state.*`, `ui/id.hh` | ~346 | canvas, frame_input, widgets | `context_widgets_test`, `context_demo_test` | Per-frame theme/type binding plus persistent hot/active/focus/scroll/text-edit state; stable FNV Ids. |
+| type roles + theme | `ui/theme/theme.hh`, `ui/type.hh` | ~172 | base types, type scale, widgets::TextFit | `theme_test`, `ui_state_test` | Dark/light presets, token overrides, density; role size + overflow policy. |
+| context widgets | `ui/widgets_context.hh`, `ui/ctx_*.cc` | ~335 | context, theme, legacy widgets | `context_widgets_test` | Toggle/radio/slider/button/text field/scroll list/label over `ui::Context`; legacy `widgets::` API unchanged. |
 | text field | `ui/widgets_text_field.cc` | 295 | canvas, keys | `ui_state_test` | UTF-8-safe editing, click mapping, draw. |
 | toggle | `ui/widgets_toggle.cc` | 27 | canvas | `widget_geometry_test` | Switch row. |
 | radio | `ui/widgets_radio.cc` | 47 | canvas | none yet (draw path) | Content-fitted pill, dot row. |
@@ -64,7 +68,7 @@ still carries libvulkan because the font-engine submodule's archive does.
 | text area | `ui/textarea.*` | ~253 | canvas, font | none yet | Scrollable, wrapped text view. |
 | plot view | `ui/plotview.*` | ~345 | canvas | none yet | Plot widget. |
 | pager | `ui/pager.*`, `ui/pager_draw.cc` | ~163 | types; draw half uses Canvas | `pager_test` | Page model tested without Canvas; `drawDots()` is separate. |
-| theme | `ui/theme/theme.hh` | ~70 | base types, type scale | `ui_state_test` | Colour roles, spacing/stroke/density tokens; `ui::TypeScale` aliases the base ladder. |
+| demo | `ui/demo/settings_screen.*` | ~95 | context, widgets_context | `context_demo_test` | Separate `vk_canvas_ui_demo` consumer target; values only in app state. |
 
 Splitting `widgets.cc` into one TU per widget is what makes the one-widget
 `size_ui_toggle` probe 32.8 KB smaller than `size_ui_all_widgets`
@@ -73,12 +77,13 @@ file. The font engine, not widget code, dominates any text-drawing binary.
 
 `core/tests/` holds 11 unit binaries plus 4 GPU tests (`text_edge_probe`,
 `shape_outline_probe`, `gpu_smoke_test`, `renderer_lifecycle_test`);
-`ui/tests/` holds 3 unit binaries (`pager_test`, `widget_geometry_test`,
-`ui_state_test`). All 18 pass on this machine as of 2026-10-31, and the whole
-set is leak-free under ASan+UBSan. The text tests use the canonical
-`assets/fonts` face when checked in, otherwise the small face in the font-engine
-submodule; with neither they skip (exit 77). Shaders compile to SPIR-V 1.3
-through glslang because the renderer asks for a Vulkan 1.1 device.
+`ui/tests/` holds 6 unit binaries (`pager_test`, `widget_geometry_test`,
+`ui_state_test`, `theme_test`, `context_widgets_test`, `context_demo_test`).
+All 21 pass on this machine as of 2026-10-31, and the whole set is leak-free
+under ASan+UBSan. The text tests use the canonical `assets/fonts` face when
+checked in, otherwise the small face in the font-engine submodule; with neither
+they skip (exit 77). Shaders compile to SPIR-V 1.3 through glslang because the
+renderer asks for a Vulkan 1.1 device.
 
 ## Not compiled: `wip/`
 

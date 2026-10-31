@@ -62,11 +62,12 @@ One platform-agnostic engine core plus thin per-platform backends:
 core/                      # three module targets + the vk_canvas_core umbrella
   base/                    # types, texture, log, animated_float, text_buffer, undo_redo
   input/                   # input, keys, frame_input, gesture
-  layout/                  # layout
-  draw/                    # canvas, text_util, text_cover, responsive_text,
-                           #   widgets, textarea, plotview, pager (widgets move to ui/ later)
+  layout/                  # layout, type_scale
+  draw/                    # canvas, text_util, text_cover, responsive_text
   gpu/                     # renderer, overlay, image_layer, output_target,
                            #   headless, art_texture, platform.hh (the seam)
+ui/                        # toolkit target: theme, type roles, context/state,
+                           #   widgets, textarea, plotview, pager, demo/
 wip/                       # unported prototypes, not compiled, no supported API
                            #   canvas_host vulkan_state compute_context
                            #   text_editor archive font_weight
@@ -158,10 +159,16 @@ frameInput.beginFrame();          // clear last frame's edges FIRST
 pumpPlatformEvents();             // backend feeds InputSink -> FrameInput
 anim.update(dtSeconds);           // advance AnimatedFloats
 Rect screen{0, 0, w, h};          // recompute layout from the CURRENT size
-Rect nav = dockTop(screen, uiScale.scale(64, h));   // no hardcoded pixels
-// hit-test with frameInput.pointerWentDown/pointerX/Y against widget geoms,
-// then draw via Canvas + widgets:: using the same rects
+// ui::Context owns this frame's binding to Canvas + input + theme + StateStore.
+ui::Context ui(canvas, frameInput, uiState, theme, metrics);
+screenApp(ui, appState);          // ui::toggle/radio/slider/button/textField
 ```
+
+`ui::StateStore uiState` is a long-lived member; `ui::Context` is constructed per
+frame (its ctor calls `beginFrame()`, its dtor applies focus/pointer cleanup).
+The legacy pattern — hit-test with `frameInput.pointerWentDown/pointerX/Y`
+against widget geoms and draw via `Canvas` + `widgets::` — still works; context
+widgets are additive.
 
 Layout is recomputed every frame from the surface size (cheap, pure math) — never cached against a stale resolution.
 

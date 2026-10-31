@@ -139,6 +139,7 @@ endforeach()
 
 add_library(vce_core_header_check OBJECT ${_core_header_sources})
 target_link_libraries(vce_core_header_check PRIVATE vk_canvas_core)
+target_include_directories(vce_core_header_check PRIVATE ${VK_CANVAS_DIR}/ui/demo)
 add_custom_target(check_headers DEPENDS vce_core_header_check)
 
 # Optional libFuzzer harnesses (clang only). They are never part of CTest;

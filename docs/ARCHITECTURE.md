@@ -28,8 +28,11 @@ consumer app
 | platform hosts | gpu, platform SDKs | UI policy |
 
 The module targets are real (Phase 1) and `ui/` is its own target (Phase 2).
-`tools/check_deps.py` enforces the directory edges, the per-target source
-inventory and the UI/gpu rules. See [`ROADMAP.md`](ROADMAP.md).
+Phase 5 adds the toolkit's immediate-mode layer: `ui::Context` binds one frame's
+`Canvas`/`FrameInput` to a persistent `StateStore` and the app's `Theme`/type
+scale; `ui::Id` keys hot/active/focus/scroll/text-edit state. `tools/check_deps.py`
+enforces the directory edges, the per-target source inventory and the UI/gpu
+rules. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Repository and build topology
 
@@ -87,9 +90,7 @@ inventory and the UI/gpu rules. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Error handling
 
-Current state is mixed: construction paths throw `std::runtime_error` for
-fatal Vulkan failures, while some `vkCreate*` results are unchecked. The target
-policy is:
+Phase 3 applied this policy (see [`RELIABILITY.md`](RELIABILITY.md)):
 
 - Every Vulkan call that can fail is checked with file/line/result context.
 - Construction fails loudly and leaves no half-initialized owner.
@@ -100,7 +101,8 @@ policy is:
 - No `vkQueueWaitIdle` in a per-frame path unless the caller explicitly asked
   for it.
 
-Phase 3 applies the policy; the roadmap tracks it.
+Recovery paths are covered by `renderer_lifecycle_test`; validation runs are
+part of `tools/audit.sh`.
 
 ## Threading contract
 
@@ -132,15 +134,12 @@ Phase 3 applies the policy; the roadmap tracks it.
 
 ## Known deviations (tracked in the roadmap)
 
-- `core/gpu/renderer.cc` is no longer a monolith: the pimpl splits it into
-  device / swapchain / camera / text / shapes / readback TUs, largest 534
-  lines. The remaining deviations are checked-call coverage (Phase 3) and
-  shader-module validation warnings from the installed `slangc`.
-- `core/base/log.hh` and `core/gpu/renderer.hh` contain guarded platform includes (the
-  logging shim and the Android camera path). They are allowlisted in
-  `check_deps.py` and scheduled to move behind the seam.
-- Validation runs still report shader-module SPIR-V version warnings from the
-  installed `slangc`; the draws are correct on this driver. Phase 3 pins the
-  target or upgrades the instance version.
-- Checked Vulkan calls are introduced (`VCE_VK_CHECK`) but not applied across
-  every init/teardown path yet; that is Phase 3.
+- The largest engine TU is `core/gpu/overlay.cc` at 677 lines; it is one
+  subsystem (tiling/coverage), not a mixed TU. The renderer split's largest TU
+  is `renderer.cc` at 632 lines. No further split is justified by the Phase 4
+  size measurements.
+- `core/base/log.hh` and `core/gpu/renderer.hh` contain guarded platform
+  includes (the logging shim and the Android camera path). They are allowlisted
+  in `check_deps.py`.
+- Audit finding 8 remains open: long historical narratives in code comments
+  should move to `docs/decisions/`, leaving invariants in code.

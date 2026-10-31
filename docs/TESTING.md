@@ -48,7 +48,7 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `bench` | frame/startup/allocation/size | Release build; size budgets in `tools/size_budgets.txt` | size overrun fails; timing is report-only until a real scene exists |
 | `fuzz` | UTF-8/UTF-16, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
 
-The current tree has 14 Vk `unit` tests and 4 App_shell tests. The GPU tests
+The current tree has 17 Vk `unit` tests and 4 App_shell tests. The GPU tests
 (`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`,
 `renderer_lifecycle_test`) are registered with the `gpu` label and
 `SKIP_RETURN_CODE 77`; the dev superbuild compiles the Slang shaders into
@@ -74,6 +74,9 @@ in the font-engine submodule; with neither they skip (77).
 | `pager_test` | `ui/pager.*` | clamp, settle, fling, page rects, zero viewport |
 | `widget_geometry_test` | `ui/widgets.*` geometry | toggle/stepper/slider/segment/table rects |
 | `ui_state_test` | `ui/widgets.*` text state + theme | insertion, deletion, selection, IME, type scale |
+| `theme_test` | `ui/theme`, `ui/type` | dark/light presets, token override, density, role fit policy |
+| `context_widgets_test` | `ui/context` + `ui/ctx_*` | hover, click, focus order, keyboard, slider drag, scroll, text entry |
+| `context_demo_test` | `ui/demo/settings_screen` | a whole screen driven headlessly; app state only |
 | `canvas_records_test` | `canvas.*` | curve records, SDF packing, images, clipping |
 | `owner_semantics_test` | `Renderer`/`OverlayRasterizer`/`ImageLayer` | compile-time non-copyability |
 | `vk_result_test` | `vk_check.hh` | VkResult → swapchain/recovery classification |

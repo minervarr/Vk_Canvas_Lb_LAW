@@ -9,6 +9,8 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/VceModules.cmake)
 
 add_library(vk_canvas_ui STATIC
+    state.cc
+    context.cc
     widgets_text_fit.cc
     widgets_text_field.cc
     widgets_toggle.cc
@@ -21,6 +23,13 @@ add_library(vk_canvas_ui STATIC
     widgets_table.cc
     widgets_button.cc
     widgets_group_header.cc
+    ctx_label.cc
+    ctx_toggle.cc
+    ctx_radio.cc
+    ctx_slider.cc
+    ctx_button.cc
+    ctx_text_field.cc
+    ctx_scroll_list.cc
     textarea.cc
     plotview.cc
     pager.cc
@@ -33,6 +42,15 @@ target_include_directories(vk_canvas_ui PUBLIC
 )
 
 vce_canvas_module_settings(vk_canvas_ui)
+
+# The demo is a consumer of the toolkit, not part of it. It builds for the
+# tests and on explicit request; a normal app target does not compile it.
+option(VCE_BUILD_UI_DEMO "Build the vk_canvas_ui_demo settings-screen example" OFF)
+if(BUILD_TESTING OR VCE_BUILD_UI_DEMO)
+    add_library(vk_canvas_ui_demo STATIC demo/settings_screen.cc)
+    target_link_libraries(vk_canvas_ui_demo PUBLIC vk_canvas_ui)
+    vce_canvas_module_settings(vk_canvas_ui_demo)
+endif()
 
 # draw PUBLIC-exposes Canvas and the base modules. This target's SOURCE and
 # headers are Vulkan-free (enforced by tools/check_deps.py); the link line still
@@ -68,4 +86,8 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     vce_add_ui_test(pager_test)
     vce_add_ui_test(widget_geometry_test)
     vce_add_ui_test(ui_state_test)
+    vce_add_ui_test(theme_test)
+    vce_add_ui_test(context_widgets_test)
+    vce_add_ui_test(context_demo_test)
+    target_link_libraries(context_demo_test PRIVATE vk_canvas_ui_demo)
 endif()

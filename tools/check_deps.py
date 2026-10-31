@@ -31,6 +31,9 @@ MODULE_RE = re.compile(
 UI_MODULE_RE = re.compile(
     r"add_library\s*\(\s*vk_canvas_ui\s+STATIC(.*?)\)", re.S
 )
+UI_DEMO_RE = re.compile(
+    r"add_library\s*\(\s*vk_canvas_ui_demo\s+STATIC(.*?)\)", re.S
+)
 
 # Physical module -> the CMake target that owns it. base also owns input/ and
 # layout/: they are separate directories to keep the dependency arrows honest,
@@ -288,16 +291,35 @@ def check_ui_inventory(errors: list[str]) -> int:
         for token in match.group(1).split()
         if token.strip().endswith(".cc")
     }
+    # demo/ is a separate consumer target, not part of the toolkit archive.
     actual = {
         p.relative_to(UI).as_posix()
         for p in repo_files(UI, (".cc",))
-        if p.relative_to(UI).parts[0] != "tests"
+        if p.relative_to(UI).parts[0] not in ("tests", "demo")
     }
     for name in sorted(actual - listed):
         errors.append(f"ui/{name}: not in vk_canvas_ui source list")
     for name in sorted(listed - actual):
         errors.append(f"ui/{name}: listed in CMake but missing on disk")
-    return len(actual)
+
+    demo_match = UI_DEMO_RE.search(text)
+    demo_actual = {
+        p.relative_to(UI).as_posix()
+        for p in repo_files(UI / "demo", (".cc",))
+    }
+    if demo_actual and not demo_match:
+        errors.append("ui/CMakeLists.txt: vk_canvas_ui_demo source list not found")
+    elif demo_match:
+        demo_listed = {
+            token.strip()
+            for token in demo_match.group(1).split()
+            if token.strip().endswith(".cc")
+        }
+        for name in sorted(demo_actual - demo_listed):
+            errors.append(f"ui/{name}: not in vk_canvas_ui_demo source list")
+        for name in sorted(demo_listed - demo_actual):
+            errors.append(f"ui/{name}: listed in vk_canvas_ui_demo but missing on disk")
+    return len(actual) + len(demo_actual)
 
 
 def main() -> int:
