@@ -324,8 +324,9 @@ transitive property of the submodule's monolithic target, not a UI include.
 - [x] Add surface-loss/resize/minimize tests and a device-loss error path.
       `renderer_lifecycle_test` (headless), `Renderer::deviceLost()` /
       `surfaceLost()`, `vk_result_test`.
-- [x] Add fuzz targets (UTF-8, text buffer, HTML sidecar parser). `dev/fuzz/`,
-      built only with clang + libFuzzer; archive stays quarantined in `wip/`.
+- [x] Add fuzz targets (UTF-8/UTF-16, text buffer, HTML sidecar parser).
+      `dev/fuzz/` in both repositories; built only with clang + libFuzzer.
+      Archive stays quarantined in `wip/` (not compiled, no target).
 - [x] Document the platform contract and the thread contract in
       `docs/RELIABILITY.md`.
 
@@ -420,7 +421,7 @@ framework. Add a harness, not a framework.
 | `unit` | pure logic, CPU only, no GPU/swapchain (a pure format adapter may include Vulkan headers) | Linux/Windows CI | must pass |
 | `gpu` | headless surface, real swapchain, pixel probes | local + optional CI (lavapipe) | skip (77) if unavailable |
 | `bench` | frame/startup/allocation/size measurements | local/nightly | regression report, not a hard gate at first |
-| `fuzz` | UTF-8, text buffer, HTML sidecar parser | clang + libFuzzer; `dev/fuzz/` | crash = bug |
+| `fuzz` | UTF-8/UTF-16, text buffer, HTML sidecar parser | clang + libFuzzer; `dev/fuzz/` | crash = bug |
 
 Harness rules:
 

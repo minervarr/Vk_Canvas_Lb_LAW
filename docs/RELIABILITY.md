@@ -129,8 +129,9 @@ runs, in order:
 4. ASan+UBSan build (`VCE_DEV_SANITIZE=ON`), full CTest with leak detection on
 5. soak: `gpu_smoke_test` and `renderer_lifecycle_test` repeated `VK_AUDIT_SOAK`
    times (default 5)
-6. libFuzzer: `utf8_fuzz`, `text_buffer_fuzz`, `html_strip_fuzz` for
-   `VK_AUDIT_FUZZ_SECONDS` each (default 5)
+6. libFuzzer: `utf8_fuzz`, `text_buffer_fuzz`, `html_strip_fuzz` in Vk_Canvas
+   and `utf16_fuzz` in `App_shell/dev/fuzz`, each for
+   `VK_AUDIT_FUZZ_SECONDS` (default 5)
 7. `App_shell` build, header check and tests
 
 Stage switches are documented at the top of the script. A skipped stage prints
@@ -139,7 +140,8 @@ why; it is never silently counted as a pass.
 Evidence on 2026-10-31 (Intel UHD TGL, Mesa 26.2.4, GCC 16.2.1, Vulkan loader
 1.4.363): 18/18 CTest entries pass, validation reports zero issues on all four
 GPU binaries, the sanitizer run is leak-free, the soak passes 5/5, and the fuzz
-targets run ~10^6 inputs each with no crash.
+targets (three in Vk_Canvas, one in App_shell) run ~10^6 inputs each with no
+crash.
 
 ## Known limitations
 

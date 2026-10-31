@@ -44,7 +44,7 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `unit` | pure logic, CPU only, no GPU/swapchain | a compiler; some tests include Vulkan headers | must pass |
 | `gpu` | headless surface, real swapchain, pixel probes | Vulkan device + built SPIR-V assets | skip `77` if unavailable |
 | `bench` | frame/startup/allocation/size | as above; planned | report, not a hard gate yet |
-| `fuzz` | UTF-8, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
+| `fuzz` | UTF-8/UTF-16, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
 
 The current tree has 14 Vk `unit` tests and 4 App_shell tests. The GPU tests
 (`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`,
@@ -133,9 +133,13 @@ cmake --build /tmp/opencode/vk-fuzz --target utf8_fuzz text_buffer_fuzz html_str
 `utf8_fuzz` pins forward progress in the shared decoder, `text_buffer_fuzz`
 drives the gap buffer through arbitrary edit/cursor sequences and checks the
 line/cursor invariants after every step, and `html_strip_fuzz` exercises the
-HTML-sidecar flattener. `tools/audit.sh` runs each for
-`VK_AUDIT_FUZZ_SECONDS` (default 5) when clang is available. The `wip/archive`
-prototype is not fuzzed because it is not compiled and has no target.
+HTML-sidecar flattener. The JNI seam's other direction has its own harness in
+`App_shell/dev/fuzz/utf16_fuzz.cc` (`-DAPP_SHELL_DEV_BUILD_FUZZ=ON`):
+`utf16::to_utf8` / `to_utf16` over arbitrary units and bytes, including
+unpaired surrogates and cursor positions past the end. `tools/audit.sh` runs
+each for `VK_AUDIT_FUZZ_SECONDS` (default 5) when clang is available. The
+`wip/archive` prototype is not fuzzed because it is not compiled and has no
+target.
 
 ## What is not tested yet
 

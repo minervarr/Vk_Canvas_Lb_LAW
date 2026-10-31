@@ -146,6 +146,18 @@ if [ -d "$APP_SHELL_DIR/dev" ]; then
 
     echo "== app_shell: tests"
     ctest --test-dir "$APP_SHELL_BUILD_DIR" --output-on-failure
+
+    if [ "$VK_AUDIT_FUZZ_SECONDS" != 0 ] && command -v clang++ >/dev/null 2>&1; then
+        echo "== app_shell: fuzz ($VK_AUDIT_FUZZ_SECONDS s)"
+        APP_SHELL_FUZZ_DIR="${APP_SHELL_FUZZ_DIR:-${APP_SHELL_BUILD_DIR}-fuzz}"
+        cmake -S "$APP_SHELL_DIR/dev" -B "$APP_SHELL_FUZZ_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DAPP_SHELL_DEV_BUILD_FUZZ=ON
+        cmake --build "$APP_SHELL_FUZZ_DIR" --target utf16_fuzz
+        "$APP_SHELL_FUZZ_DIR/fuzz/utf16_fuzz" \
+            -max_total_time="$VK_AUDIT_FUZZ_SECONDS" -print_final_stats=1 -rss_limit_mb=2048
+    fi
 else
     echo "== app_shell: not present, skipping"
 fi

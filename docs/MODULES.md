@@ -89,9 +89,10 @@ through glslang because the renderer asks for a Vulkan 1.1 device.
 `App_shell` is a separate repository. Portable target: `ui_metrics`,
 `ui_orientation`, `utf16_utf8`, `app_paths` (desktop). Hosts: Win32, Wayland,
 Android. The four CPU-only tests are wired through `App_shell/dev/` and all pass
-under `ctest` as of 2026-10-31. `ui_metrics` now includes only the base-layer
-`type_scale.hh`; `computeUiMetrics(shortSide, minReadablePx)` takes the app's
-font-derived floor, so no generated header is required.
+under `ctest` as of 2026-10-31; `App_shell/dev/fuzz/utf16_fuzz.cc` is the
+libFuzzer harness for the JNI UTF-16 seam. `ui_metrics` now includes only the
+base-layer `type_scale.hh`; `computeUiMetrics(shortSide, minReadablePx)` takes
+the app's font-derived floor, so no generated header is required.
 
 ## Updating this index
 
