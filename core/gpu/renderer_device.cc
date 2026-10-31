@@ -242,7 +242,14 @@ void Renderer::Impl::create_logical_device() {
     VkPhysicalDeviceFeatures2 supported2{};
     supported2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     supported2.pNext = &supported11;
-    vkGetPhysicalDeviceFeatures2(physical_dev_, &supported2);
+    // vkGetPhysicalDeviceFeatures2 is core Vulkan 1.1. The NDK's libvulkan
+    // stub for minSdk 26 only exports the 1.0 entry points, so a direct call
+    // fails to link on Android even though the loader can provide it at
+    // runtime. Resolve it through the instance; a Vulkan 1.0 device leaves the
+    // 1.1 feature block zeroed, and this renderer does not support one.
+    auto get_features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+        vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFeatures2"));
+    if (get_features2) get_features2(physical_dev_, &supported2);
 
     // Enable only what this device reports; requesting an unsupported feature
     // is invalid usage.
