@@ -40,14 +40,18 @@ inventory and the UI/gpu rules. Phase 6 records the rationale in
 ## Repository and build topology
 
 - `Vk_Canvas_Lb_LAW` has **no root CMakeLists.txt**. `core/CMakeLists.txt`,
+  `ui/CMakeLists.txt`, `app_shell/CMakeLists.txt`,
   `platform/windows/CMakeLists.txt`, `platform/linux/CMakeLists.txt` and
-  `platform/android/` own their builds. Consumers add `core/` plus exactly one
-  backend.
+  `platform/android/` own their builds. Consumers add `core/`, `app_shell/` and
+  exactly one backend.
 - `dev/CMakeLists.txt` is a development superbuild: it adds `core` (which adds
-  `ui/` through the umbrella), the Linux backend, capture and the tests so one
-  configure/build/test covers the tree. It is not a library entry point.
-- `App_shell` is a separate repository. Its portable target links nothing;
-  each host links one platform backend. It must not learn application concepts.
+  `ui/` through the umbrella), the Linux backend, `app_shell`, capture and the
+  tests so one configure/build/test covers the tree. It is not a library entry
+  point.
+- `app_shell/` is a top-level directory in this repository. Its portable target
+  links nothing; each host links one platform backend. It must not learn
+  application concepts, and nothing under `core/`, `ui/` or `platform/` may
+  include it. `tools/check_deps.py` enforces both directions.
 - Shaders are Slang, compiled per platform by the consuming build. The dev
   superbuild compiles them with `slangc` (`VCE_DEV_BUILD_SHADERS`); the Linux
   backend itself builds the window/protocol layer. Probes skip (`exit 77`)
@@ -119,7 +123,7 @@ part of `tools/audit.sh`.
   implementation owns its synchronization.
 - `Renderer::consume_frame_ready()` / the atomic wake flag are the cross-thread
   signal. Nothing else is implicitly thread-safe.
-- `App_shell` hosts own their event queues and document their own locking.
+- `app_shell` hosts own their event queues and document their own locking.
 
 ## Public-header boundaries
 
@@ -133,7 +137,7 @@ part of `tools/audit.sh`.
   vulkan.h was included first. `core/gpu/platform.hh` is the only core header
   allowed to depend on Vulkan's platform surface types; it is implemented by
   the backends.
-- `App_shell/host.hh` and `app_view.hh` are the program seam; they use portable
+- `app_shell/host.hh` and `app_view.hh` are the program seam; they use portable
   `LayoutRect`/`ColorRef`, not Win32 types.
 
 ## Known deviations (tracked in the roadmap)

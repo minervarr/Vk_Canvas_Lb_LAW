@@ -29,6 +29,7 @@ Index:
 | [0007](0007-android-external-image-path.md) | Android `AHardwareBuffer` external-image path | accepted |
 | [0008](0008-growing-gpu-buffer-capacity.md) | Growing GPU buffers instead of silent truncation | accepted |
 | [0009](0009-text-fit-and-type-scale.md) | One type scale, one-pass fit and the solid-texel fallback | accepted |
+| [0010](0010-repository-topology.md) | `app_shell/` lives inside Vk_Canvas; source and target boundaries unchanged | accepted |
 
 Related canonical documents: [`../ARCHITECTURE.md`](../ARCHITECTURE.md),
 [`../RELIABILITY.md`](../RELIABILITY.md), [`../PERFORMANCE.md`](../PERFORMANCE.md),

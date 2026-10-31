@@ -26,7 +26,10 @@ include(CTest)
 option(APP_SHELL_DEV_BUILD_FUZZ
     "Build the libFuzzer harness under dev/fuzz (clang only)" OFF)
 
-set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../Vk_Canvas_Lb_LAW CACHE PATH
+# The enclosing Vk_Canvas checkout. app_shell/dev is now a subdirectory of the
+# framework, so two levels up is the repository root. Kept as an override for a
+# consumer that checks the framework out under a different name.
+set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../.. CACHE PATH
     "Vk_Canvas source root (the directory containing core/)")
 # app_shell no longer consumes a generated min-text-size header; its test
 # supplies the legibility floor as a value. ui_min_text_size.gen.h.in stays in

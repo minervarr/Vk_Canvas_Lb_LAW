@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "core"
 WIP = ROOT / "wip"
 UI = ROOT / "ui"
+APP_SHELL = ROOT / "app_shell"
+PLATFORM = ROOT / "platform"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s+[<"]([^">]+)[">]', re.MULTILINE)
 MODULE_RE = re.compile(
@@ -108,6 +110,17 @@ UI_FORBIDDEN = {
     "art_texture.hh",
     "output_target.hh",
     "vk_check.hh",
+}
+
+# app_shell/host.hh is the seam: it exposes HWND under _WIN32 and JavaVM under
+# Android, so those two guarded platform includes are part of the contract.
+# app_paths.cc is the DESKTOP implementation of exeDir()/stateDir(): Windows
+# answers it with GetModuleFileNameW, so the guarded <windows.h> is the point of
+# that file, not a leak. Every other portable app_shell file must be free of
+# platform SDK headers.
+APP_SHELL_PLATFORM_EXCEPTIONS = {
+    "host.hh": {"windows.h", "jni.h"},
+    "app_paths.cc": {"windows.h"},
 }
 
 
@@ -210,6 +223,73 @@ def check_ui_includes(errors: list[str]) -> None:
                 errors.append(
                     f"{rel}: ui must not include the gpu layer ({inc!r})"
                 )
+
+
+def check_app_shell_includes(errors: list[str]) -> None:
+    """The shell's portable half stays above base/input/layout; os/ hosts may
+    use platform SDKs and the vk platform/gpu headers, but never ui/."""
+    if not APP_SHELL.is_dir():
+        errors.append("app_shell/ is missing")
+        return
+    for path in repo_files(APP_SHELL, (".hh", ".cc")):
+        rel = path.relative_to(APP_SHELL).as_posix()
+        in_os = rel.startswith("os/")
+        allowed_platform = APP_SHELL_PLATFORM_EXCEPTIONS.get(path.name, set())
+        for inc in includes_of(path):
+            if inc.startswith("ui/"):
+                errors.append(
+                    f"app_shell/{rel}: must not include the ui layer ({inc!r})"
+                )
+            if inc.startswith("wip/"):
+                errors.append(
+                    f"app_shell/{rel}: includes unported prototype {inc!r}"
+                )
+            if in_os:
+                continue
+            if is_platform_include(inc) and inc not in allowed_platform:
+                errors.append(
+                    f"app_shell/{rel}: platform SDK include <{inc}>"
+                )
+            if Path(inc).name in UI_FORBIDDEN or inc.startswith("vulkan"):
+                errors.append(
+                    f"app_shell/{rel}: portable shell must not include "
+                    f"GPU/Vulkan ({inc!r})"
+                )
+
+
+def check_engine_to_app_shell(errors: list[str]) -> None:
+    """The shell sits above the engine. Nothing under core/, ui/ or platform/
+    may include one of its headers."""
+    if not APP_SHELL.is_dir():
+        return
+    app_headers = {p.name for p in APP_SHELL.rglob("*.hh")}
+    for directory in (CORE, UI, PLATFORM):
+        for path in repo_files(directory, (".hh", ".cc")):
+            rel = path.relative_to(ROOT).as_posix()
+            for inc in includes_of(path):
+                if Path(inc).name in app_headers:
+                    errors.append(
+                        f"{rel}: must not include app_shell ({inc!r})"
+                    )
+
+
+def check_app_shell_inventory(errors: list[str]) -> int:
+    """Every compiled shell source must be named in app_shell/CMakeLists.txt.
+    tests/ and dev/ are consumers of the shell, not shell sources."""
+    cmake = APP_SHELL / "CMakeLists.txt"
+    if not cmake.is_file():
+        errors.append("app_shell/CMakeLists.txt is missing")
+        return 0
+    text = cmake.read_text(encoding="utf-8", errors="replace")
+    compiled = 0
+    for path in repo_files(APP_SHELL, (".cc",)):
+        rel = path.relative_to(APP_SHELL).as_posix()
+        if rel.startswith(("tests/", "dev/")):
+            continue
+        compiled += 1
+        if rel not in text:
+            errors.append(f"app_shell/{rel}: not in app_shell/CMakeLists.txt")
+    return compiled
 
 
 def check_core_inventory(errors: list[str]) -> int:
@@ -326,8 +406,11 @@ def main() -> int:
     errors: list[str] = []
     check_module_includes(errors)
     check_ui_includes(errors)
-    compiled = check_core_inventory(errors)
-    compiled += check_ui_inventory(errors)
+    check_app_shell_includes(errors)
+    check_engine_to_app_shell(errors)
+    engine_compiled = check_core_inventory(errors)
+    engine_compiled += check_ui_inventory(errors)
+    shell_compiled = check_app_shell_inventory(errors)
 
     if errors:
         print("check_deps: FAILED", file=sys.stderr)
@@ -337,9 +420,11 @@ def main() -> int:
 
     core_files = len(repo_files(CORE, (".hh", ".cc")))
     ui_files = len(repo_files(UI, (".hh", ".cc")))
+    app_shell_files = len(repo_files(APP_SHELL, (".hh", ".cc")))
     print(
-        f"check_deps: ok ({core_files} core + {ui_files} ui files, "
-        f"{compiled} compiled sources across {len(MODULES) + 1} module targets)"
+        f"check_deps: ok ({core_files} core + {ui_files} ui + "
+        f"{app_shell_files} app_shell files, {engine_compiled} engine + "
+        f"{shell_compiled} shell compiled sources)"
     )
     return 0
 

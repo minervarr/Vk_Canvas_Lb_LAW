@@ -18,8 +18,11 @@
 cmake_minimum_required(VERSION 3.22)
 
 set(APP_SHELL_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE INTERNAL "app_shell source root")
-set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vk_canvas CACHE PATH
-    "Where vk_canvas lives; app_shell needs its core headers and one backend")
+# Default to the enclosing Vk_Canvas checkout. A consumer may still override
+# this before add_subdirectory(); the enclosing tree is the normal case now
+# that app_shell is part of the framework rather than a sibling repository.
+set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/.. CACHE PATH
+    "Vk_Canvas source root; app_shell needs its core headers and one backend")
 
 # The min-text-size generator remains available for apps that want to measure
 # their own fonts (cmake/AppShellMinTextSize.cmake), but app_shell itself no

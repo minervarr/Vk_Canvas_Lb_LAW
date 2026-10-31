@@ -37,9 +37,9 @@ benchmark scene exists.
 | Vk dev configure (Debug) | 0.49 s |
 | Vk dev build (Debug, cold) | 10.6 s |
 | Vk unit tests (11, Debug) | 0.02 s total |
-| App_shell dev configure (Release) | 1.26 s |
-| App_shell build (Release, cold) | 4.5 s |
-| App_shell unit tests (4, Debug) | 0.00 s total |
+| app_shell standalone dev configure (Release) | 1.26 s |
+| app_shell standalone build (Release, cold) | 4.5 s |
+| app_shell unit tests (4, Debug; same `ctest` in the Vk dev tree) | 0.00 s total |
 
 Commands:
 
@@ -264,7 +264,7 @@ What changed:
 - Label/button/radio/scroll-list fitting measures once and keeps the original
   `string_view` when no truncation is needed; `scrollList` no longer builds a
   `vector<ListRow>` the context layer discards; the text field writes its
-  buffer back only when it changed; App_shell's event pumps reuse their
+  buffer back only when it changed; app_shell's event pumps reuse their
   pending-event vector.
 - `frame_alloc_test` pins the zero-allocation result. It uses the built-in
   stroke font and no renderer, so it proves the frame-build path, not atlas

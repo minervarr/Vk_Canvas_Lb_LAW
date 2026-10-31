@@ -12,13 +12,13 @@ Vk_Canvas_Lb_LAW/tools/audit.sh
 It runs the dependency/source-inventory check, configures and builds the Vk dev
 tree, builds the header self-containment target, runs every unit test, checks
 the Release per-feature binary-size budgets, then the Phase 3 stages:
-validation-layer GPU runs, ASan+UBSan CTest, soak repeats and libFuzzer. It does
-the same build/test side for `App_shell` when the two repositories are checked
-out together. Build trees default to
-`/tmp/opencode/{vk-dev,app-shell-dev,vk-size,vk-size-nogc}` (plus `-validation`,
-`-sanitize`, `-fuzz`); override with `VK_BUILD_DIR` / `APP_SHELL_BUILD_DIR` /
-`VK_SIZE_DIR` / `VK_SIZE_NOGC_DIR` / `VK_VALIDATION_DIR` / `VK_SANITIZE_DIR` /
-`VK_FUZZ_DIR`. Build trees are reused, never deleted.
+validation-layer GPU runs, ASan+UBSan CTest, soak repeats and libFuzzer. The
+same dev tree includes `app_shell/`, so the header check, unit tests, sanitizers
+and fuzz stage cover both libraries. Build trees default to
+`/tmp/opencode/{vk-dev,vk-size,vk-size-nogc}` (plus `-validation`,
+`-sanitize`, `-fuzz`); override with `VK_BUILD_DIR` / `VK_SIZE_DIR` /
+`VK_SIZE_NOGC_DIR` / `VK_VALIDATION_DIR` / `VK_SANITIZE_DIR` / `VK_FUZZ_DIR`.
+Build trees are reused, never deleted.
 
 Stage switches: `VK_AUDIT_VALIDATION=0`, `VK_AUDIT_SANITIZE=0`, `VK_AUDIT_SOAK=0`,
 `VK_AUDIT_FUZZ_SECONDS=0`, `VK_AUDIT_SIZE=0`. A stage that cannot run prints why
@@ -33,8 +33,11 @@ ctest --test-dir /tmp/opencode/vk-dev --output-on-failure
 ctest --test-dir /tmp/opencode/vk-dev -R layout_test --output-on-failure
 ```
 
+The main dev tree already builds app_shell and its tests. The standalone
+harness is kept for working on app_shell alone:
+
 ```bash
-cmake -S App_shell/dev -B /tmp/opencode/app-shell-dev -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake -S Vk_Canvas_Lb_LAW/app_shell/dev -B /tmp/opencode/app-shell-dev -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build /tmp/opencode/app-shell-dev
 ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 ```
@@ -48,7 +51,8 @@ ctest --test-dir /tmp/opencode/app-shell-dev --output-on-failure
 | `bench` | frame/startup/allocation/size | Release build; size budgets in `tools/size_budgets.txt` | size overrun fails; timing is report-only until a real scene exists |
 | `fuzz` | UTF-8/UTF-16, text buffer, HTML sidecar parser | clang + libFuzzer (`dev/fuzz/`) | crash = bug |
 
-The current tree has 19 Vk `unit` tests and 4 App_shell tests. The GPU tests
+The current tree has 19 Vk `unit` tests and 4 app_shell tests, all in the same
+`unit` label (23 total). The GPU tests
 (`text_edge_probe`, `shape_outline_probe`, `gpu_smoke_test`,
 `renderer_lifecycle_test`) are registered with the `gpu` label and
 `SKIP_RETURN_CODE 77`; the dev superbuild compiles the Slang shaders into
@@ -87,7 +91,7 @@ in the font-engine submodule; with neither they skip (77).
 ## Adding a test
 
 1. Put it in `Vk_Canvas_Lb_LAW/core/tests/<module>_test.cc`,
-   `Vk_Canvas_Lb_LAW/ui/tests/<module>_test.cc`, or `App_shell/tests/`.
+   `Vk_Canvas_Lb_LAW/ui/tests/<module>_test.cc`, or `app_shell/tests/`.
    One binary per module or tightly-related group.
 2. Start with `#undef NDEBUG` so `assert()` survives a Release build.
 3. Include only the module under test where possible. Pure tests compile the
@@ -133,7 +137,7 @@ The parsers that consume untrusted bytes have libFuzzer harnesses under
 cmake -S Vk_Canvas_Lb_LAW/dev -B /tmp/opencode/vk-fuzz -G Ninja \
     -DCMAKE_CXX_COMPILER=clang++ -DVCE_DEV_BUILD_FUZZ=ON \
     -DVCE_DEV_BUILD_SHADERS=OFF -DVCE_DEV_BUILD_PLATFORM=OFF
-cmake --build /tmp/opencode/vk-fuzz --target utf8_fuzz text_buffer_fuzz html_strip_fuzz
+cmake --build /tmp/opencode/vk-fuzz --target utf8_fuzz text_buffer_fuzz html_strip_fuzz utf16_fuzz
 /tmp/opencode/vk-fuzz/fuzz/utf8_fuzz -max_total_time=30
 ```
 
@@ -141,7 +145,7 @@ cmake --build /tmp/opencode/vk-fuzz --target utf8_fuzz text_buffer_fuzz html_str
 drives the gap buffer through arbitrary edit/cursor sequences and checks the
 line/cursor invariants after every step, and `html_strip_fuzz` exercises the
 HTML-sidecar flattener. The JNI seam's other direction has its own harness in
-`App_shell/dev/fuzz/utf16_fuzz.cc` (`-DAPP_SHELL_DEV_BUILD_FUZZ=ON`):
+`app_shell/dev/fuzz/utf16_fuzz.cc`, built by the same `dev/fuzz/` tree:
 `utf16::to_utf8` / `to_utf16` over arbitrary units and bytes, including
 unpaired surrogates and cursor positions past the end. `tools/audit.sh` runs
 each for `VK_AUDIT_FUZZ_SECONDS` (default 5) when clang is available. The
@@ -158,7 +162,7 @@ target.
   state are covered, but their draw calls are not pixel-tested.
 - Platform hosts (Win32/Wayland/Android) and the Java half.
 - Exact pixel output across drivers; the GPU tests assert structure, not hashes.
-- `App_shell`'s `Host`/`AppView` integration and Android JNI paths.
+- `app_shell`'s `Host`/`AppView` integration and Android JNI paths.
 
 These gaps are Phase 4/5 work. Until then, changes to those areas need a written
 manual verification note in the commit or PR, and must not claim automated

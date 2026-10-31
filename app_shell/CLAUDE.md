@@ -3,10 +3,10 @@
 Guidance for Claude Code (claude.ai/code) working in `app_shell`.
 
 > **Framework direction:** read the canvas roadmap before starting work:
-> `../Vk_Canvas_Lb_LAW/docs/ROADMAP.md` when the repos are checked out together,
-> or <https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md>.
+> `../docs/ROADMAP.md` in this repository, or
+> <https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md>.
 > It defines the `core/` / `ui/` / `app_shell` boundaries and the current phase.
-> The live checkpoint is in `../.opencode/status.md`.
+> The live checkpoint is in `../../.opencode/status.md`.
 
 ## What this is
 
@@ -60,16 +60,13 @@ consumer. **API-shaping decisions should favour the NEXT consumer, not that
 one** — that is the whole reason this is a separate library rather than a folder
 in `gui/`.
 
-It is its own repository (github.com/minervarr/App_shell), added as a git
-submodule at `framework/app_shell` by every consumer — the same shape
-`audio_engine` and `vk_canvas` already use. A second app adds it the same way:
-`git submodule add https://github.com/minervarr/App_shell.git framework/app_shell`,
-then `add_subdirectory()`s it and links `app_shell` plus the one platform host it
-needs. The split that matters is still the one in the SOURCE, never in version
-control: nothing in here may know what a track is, regardless of how it is
-cloned. This repository is committed and pushed with its own `git_wrapper` —
-never plain `git commit`/`git push` — from inside `framework/app_shell/`; the
-consumer's own `git_wrapper push` pushes this submodule first, then itself.
+It lives in the framework repository as a top-level directory, `app_shell/`, a
+sibling of `core/`, `ui/` and `platform/`. A consumer adds
+`framework/vk_canvas/core` and then `framework/vk_canvas/app_shell`, and links
+`app_shell` plus the one platform host it needs. The split that matters is still
+the one in the SOURCE, never in version control: nothing in here may know what a
+track is. `tools/check_deps.py` enforces the portable/host split and forbids
+`core/`, `ui/` and `platform/` from including app_shell.
 
 ---
 
@@ -242,12 +239,12 @@ The type scale now lives in the engine's base layer
 (`Vk_Canvas_Lb_LAW/core/layout/type_scale.hh`); `ui_metrics.hh` includes it and
 no longer includes a generated header. `computeUiMetrics(shortSide,
 minReadablePx)` takes the app's font-derived legibility floor as a value, so
-App_shell builds without a consumer, a font or a generator.
+app_shell builds without a consumer, a font or a generator.
 
 `cmake/AppShellMinTextSize.cmake` remains available for an app that wants the
 floor emitted as `ui_min_text_size.gen.h`. It cannot run under a
 cross-compiler, so an Android build copies the header out of a desktop build
-tree — see any consumer's `android/CMakeLists.txt`. App_shell itself no longer
+tree — see any consumer's `android/CMakeLists.txt`. app_shell itself no longer
 needs `add_dependencies(app_shell generate_ui_min_text_size)`.
 
 `ui_metrics` takes the window's **short side**, not its height. Identical for
@@ -305,8 +302,6 @@ unreachable from any desktop run and would otherwise never be exercised at all.
 
 ## Committing
 
-Use `./git_wrapper` from inside `framework/app_shell/`, never plain
-`git commit`/`git push` — this is its own repository. Commit and push here
-FIRST, then commit and push the consumer (its own `git_wrapper push` already
-pushes submodules before itself, but doing it by hand in the right order is
-the same rule vk_canvas and audio_engine follow).
+Use the framework's `./git_wrapper` from the repository root, never plain
+`git commit`/`git push`. There is no separate app_shell repository to push
+first: a change that spans the engine and the shell is one commit.

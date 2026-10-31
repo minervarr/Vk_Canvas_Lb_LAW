@@ -3,8 +3,8 @@
 #   source inventory + layer rules, header self-containment, every unit test,
 #   and (Phase 3) validation, sanitizer, soak and fuzz stages.
 #
-# Build trees are reused, never deleted. Override them with VK_BUILD_DIR and
-# APP_SHELL_BUILD_DIR. The script is safe to run from any working directory.
+# Build trees are reused, never deleted. Override them with VK_BUILD_DIR. The
+# script is safe to run from any working directory.
 #
 # Stage switches (defaults run everything the machine supports):
 #   VK_AUDIT_VALIDATION=0     skip the VK_LAYER_KHRONOS_validation build
@@ -15,11 +15,8 @@
 set -euo pipefail
 
 VK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKSPACE="$(cd "$VK_DIR/.." && pwd)"
-APP_SHELL_DIR="$WORKSPACE/App_shell"
 
 VK_BUILD_DIR="${VK_BUILD_DIR:-${TMPDIR:-/tmp}/opencode/vk-dev}"
-APP_SHELL_BUILD_DIR="${APP_SHELL_BUILD_DIR:-${TMPDIR:-/tmp}/opencode/app-shell-dev}"
 VK_VALIDATION_DIR="${VK_VALIDATION_DIR:-${VK_BUILD_DIR}-validation}"
 VK_SANITIZE_DIR="${VK_SANITIZE_DIR:-${VK_BUILD_DIR}-sanitize}"
 VK_FUZZ_DIR="${VK_FUZZ_DIR:-${VK_BUILD_DIR}-fuzz}"
@@ -130,43 +127,15 @@ if [ "$VK_AUDIT_FUZZ_SECONDS" != 0 ]; then
             -DVCE_DEV_BUILD_FUZZ=ON \
             -DVCE_DEV_BUILD_SHADERS=OFF \
             -DVCE_DEV_BUILD_PLATFORM=OFF \
-            -DVCE_DEV_BUILD_CAPTURE=OFF
-        cmake --build "$VK_FUZZ_DIR" --target utf8_fuzz text_buffer_fuzz html_strip_fuzz
-        for f in utf8_fuzz text_buffer_fuzz html_strip_fuzz; do
+            -DVCE_DEV_BUILD_CAPTURE=OFF \
+            -DVCE_DEV_BUILD_APP_SHELL=OFF
+        cmake --build "$VK_FUZZ_DIR" --target utf8_fuzz text_buffer_fuzz html_strip_fuzz utf16_fuzz
+        for f in utf8_fuzz text_buffer_fuzz html_strip_fuzz utf16_fuzz; do
             echo "   $f"
             "$VK_FUZZ_DIR/fuzz/$f" -max_total_time="$VK_AUDIT_FUZZ_SECONDS" \
                 -print_final_stats=1 -rss_limit_mb=2048
         done
     fi
-fi
-
-if [ -d "$APP_SHELL_DIR/dev" ]; then
-    echo "== app_shell: configure"
-    cmake -S "$APP_SHELL_DIR/dev" -B "$APP_SHELL_BUILD_DIR" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug
-
-    echo "== app_shell: header self-containment"
-    cmake --build "$APP_SHELL_BUILD_DIR" --target check_headers
-
-    echo "== app_shell: build"
-    cmake --build "$APP_SHELL_BUILD_DIR"
-
-    echo "== app_shell: tests"
-    ctest --test-dir "$APP_SHELL_BUILD_DIR" --output-on-failure
-
-    if [ "$VK_AUDIT_FUZZ_SECONDS" != 0 ] && command -v clang++ >/dev/null 2>&1; then
-        echo "== app_shell: fuzz ($VK_AUDIT_FUZZ_SECONDS s)"
-        APP_SHELL_FUZZ_DIR="${APP_SHELL_FUZZ_DIR:-${APP_SHELL_BUILD_DIR}-fuzz}"
-        cmake -S "$APP_SHELL_DIR/dev" -B "$APP_SHELL_FUZZ_DIR" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DAPP_SHELL_DEV_BUILD_FUZZ=ON
-        cmake --build "$APP_SHELL_FUZZ_DIR" --target utf16_fuzz
-        "$APP_SHELL_FUZZ_DIR/fuzz/utf16_fuzz" \
-            -max_total_time="$VK_AUDIT_FUZZ_SECONDS" -print_final_stats=1 -rss_limit_mb=2048
-    fi
-else
-    echo "== app_shell: not present, skipping"
 fi
 
 echo "audit: ok"

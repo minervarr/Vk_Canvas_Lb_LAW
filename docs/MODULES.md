@@ -111,15 +111,16 @@ renderer asks for a Vulkan 1.1 device.
 | Windows | `platform/windows/*` | Win32 + `Build.bat`; compiles shaders via `VceShaders.cmake` |
 | Android | `platform/android/*` | Gradle + NDK; camera/HWB path lives in `core/gpu/renderer_camera.cc` behind `__ANDROID__` |
 
-## App_shell
+## app_shell
 
-`App_shell` is a separate repository. Portable target: `ui_metrics`,
-`ui_orientation`, `utf16_utf8`, `app_paths` (desktop). Hosts: Win32, Wayland,
-Android. The four CPU-only tests are wired through `App_shell/dev/` and all pass
-under `ctest` as of 2026-10-31; `App_shell/dev/fuzz/utf16_fuzz.cc` is the
-libFuzzer harness for the JNI UTF-16 seam. `ui_metrics` now includes only the
-base-layer `type_scale.hh`; `computeUiMetrics(shortSide, minReadablePx)` takes
-the app's font-derived floor, so no generated header is required.
+`app_shell/` is a top-level directory in this repository, not a separate one.
+Portable target: `ui_metrics`, `ui_orientation`, `utf16_utf8`, `app_paths`
+(desktop). Hosts: Win32, Wayland, Android. The four CPU-only tests are wired
+through `dev/CMakeLists.txt` and run in the same `ctest` as the engine; the
+UTF-16 libFuzzer harness lives in `app_shell/dev/fuzz/utf16_fuzz.cc` and is
+built by `dev/fuzz/` (`VCE_DEV_BUILD_FUZZ=ON`). `ui_metrics` now includes only
+the base-layer `type_scale.hh`; `computeUiMetrics(shortSide, minReadablePx)`
+takes the app's font-derived floor, so no generated header is required.
 
 ## Updating this index
 

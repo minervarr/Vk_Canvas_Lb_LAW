@@ -30,6 +30,8 @@ option(VCE_DEV_BUILD_PLATFORM
     "Build the Linux/Wayland backend" ON)
 option(VCE_DEV_BUILD_CAPTURE
     "Build the headless capture tool (needs the platform backend)" ON)
+option(VCE_DEV_BUILD_APP_SHELL
+    "Build the application shell and its CPU-only tests" ON)
 option(VCE_DEV_BUILD_SHADERS
     "Compile the Slang shaders the GPU probes need" ON)
 option(VCE_DEV_SANITIZE
@@ -111,6 +113,14 @@ if(VCE_DEV_BUILD_PLATFORM)
     add_subdirectory(${VK_CANVAS_DIR}/platform/linux linux)
 endif()
 
+# app_shell: the Host/AppView seam and its platform host. The portable target
+# links no engine target; app_shell_wayland compiles against platform/linux and
+# needs the same Wayland development package as the backend above. The four
+# CPU-only tests register with CTest through app_shell/CMakeLists.txt.
+if(VCE_DEV_BUILD_APP_SHELL)
+    add_subdirectory(${VK_CANVAS_DIR}/app_shell app_shell)
+endif()
+
 if(VCE_DEV_BUILD_CAPTURE AND VCE_DEV_BUILD_PLATFORM)
     add_subdirectory(${VK_CANVAS_DIR}/core/capture capture)
 endif()
@@ -125,6 +135,12 @@ endif()
 file(GLOB_RECURSE _core_headers ${VK_CANVAS_DIR}/core/*.hh)
 file(GLOB_RECURSE _ui_headers ${VK_CANVAS_DIR}/ui/*.hh)
 set(_engine_headers ${_core_headers} ${_ui_headers})
+# app_shell's top-level headers only. Its os/ headers need the NDK or a platform
+# SDK and stay out, exactly as the standalone app_shell/dev check does.
+if(VCE_DEV_BUILD_APP_SHELL)
+    file(GLOB _app_shell_headers ${VK_CANVAS_DIR}/app_shell/*.hh)
+    list(APPEND _engine_headers ${_app_shell_headers})
+endif()
 list(FILTER _engine_headers EXCLUDE REGEX "/capture/")
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/header_check)
 set(_core_header_sources)
@@ -139,6 +155,11 @@ endforeach()
 
 add_library(vce_core_header_check OBJECT ${_core_header_sources})
 target_link_libraries(vce_core_header_check PRIVATE vk_canvas_core)
+if(VCE_DEV_BUILD_APP_SHELL)
+    # app_shell PUBLIC-carries the core module include roots (it links no engine
+    # target), which is exactly what its headers need here.
+    target_link_libraries(vce_core_header_check PRIVATE app_shell)
+endif()
 target_include_directories(vce_core_header_check PRIVATE ${VK_CANVAS_DIR}/ui/demo)
 add_custom_target(check_headers DEPENDS vce_core_header_check)
 

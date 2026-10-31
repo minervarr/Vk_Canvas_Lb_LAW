@@ -12,17 +12,20 @@ sync.
 
 ## Current position
 
-- **Phase:** 6 — Audit closure (DONE), plus the post-6 performance pass (DONE)
+- **Phase:** 6 — Audit closure (DONE), post-6 performance pass (DONE), repository
+  consolidation (IN PROGRESS)
 - **Last completed:** Post-Phase-6 performance pass — shader `-O2`, batched
   Canvas emission, single-pass `wrapText`, allocation-free context frame, and
   the measured-zero allocation test. Details and measurements in
-  `docs/PERFORMANCE.md`.
-- **Next action:** none scheduled. Phase 7 is the deferred generator gate and
-  the Phase 4/5 measurements do not trigger it. Remaining work is maintenance:
-  a consumer that can validate the API end-to-end, and CI when one is wanted.
+  `docs/PERFORMANCE.md`. The `app_shell` repository has been folded in and the
+  Vk dev tree builds and tests it (27/27 CTest); consumer migration is pending.
+- **Next action:** migrate Matrix_Player, VideoPlayer and whisper_ui_cpp to the
+  merged tree, then archive `minervarr/App_shell`. After that, none scheduled.
+  Phase 7 remains a deferred generator gate.
 - **Blocking decisions:** none. The reference machine and lavapipe policy are
   recorded in `docs/PERFORMANCE.md`; the umbrella transition and the `archive`
-  quarantine are recorded in ADR 0001.
+  quarantine are recorded in ADR 0001. `app_shell/` is covered by the root
+  AGPLv3 license.
 - **Resume phrase:** no next phase. "continue next phase" means re-evaluate the
   Phase 7 generator gate only if a consumer reports an unacceptable binary,
   build-time or audit cost; otherwise this is maintenance work.
@@ -463,6 +466,65 @@ Rationale: a per-app source generator multiplies the code to audit, breaks
 debug symbols and makes a framework bug fix not reach every app. It solves a
 problem that link-time pruning usually solves better.
 
+### Repository consolidation — fold App_shell into the framework (IN PROGRESS)
+
+Decision agreed 2026-10-31. The two-library architecture did not change: only
+the repository count did. `app_shell/` is now a top-level sibling of `core/`,
+`ui/` and `platform/`; the source and target boundaries are unchanged.
+
+Why the repository boundary was the weak one:
+
+- App_shell was not independently consumable. The hosts include concrete
+  vk_canvas headers (`win32_platform.hh`, `wayland_display.hh`,
+  `wayland_window.hh`, `renderer.hh`, `jni_util.hh`, `fullscreen.hh`); the
+  portable half includes `type_scale.hh` and `frame_input.hh`. It is the
+  app-facing upper half of the platform layer.
+- Every consumer found (Matrix_Player, VideoPlayer, whisper_ui_cpp) pinned both
+  repositories. The repo that uses `audio_engine` alone (media_player) does not
+  use App_shell.
+- `tools/audit.sh` tested `$WORKSPACE/App_shell` and silently skipped it when
+  the sibling checkout was absent, so the repository's own audit was not
+  self-contained.
+- Consumers pinned the pair by hand; nothing rejected a new App_shell against an
+  old canvas, and a cross-repo change needed two commits in a fixed order.
+- App_shell's default `VK_CANVAS_DIR` (`../vk_canvas`) did not exist in a normal
+  checkout; every consumer passed the path explicitly.
+
+Work items:
+
+- [x] Import with `git subtree add --prefix=app_shell ...`; the temporary clone
+      was filtered to drop the 19 machine-specific `build/` and
+      `compile_commands.json` files. 48 tracked files and the full history
+      remain.
+- [x] Default `VK_CANVAS_DIR` to `${CMAKE_CURRENT_SOURCE_DIR}/..`; keep
+      `app_shell/CMakeLists.txt` as its own entry point and the repository free
+      of a root CMakeLists.
+- [x] Add `app_shell` to `dev/CMakeLists.txt` behind
+      `VCE_DEV_BUILD_APP_SHELL`; extend `check_headers` to the top-level shell
+      headers; build `utf16_fuzz` from `dev/fuzz/`.
+- [x] Extend `check_deps.py`: portable `app_shell/*` may include
+      base/input/layout only; `app_shell/os/*` may include platform SDKs and vk
+      platform/gpu headers; no `core/`, `ui/` or `platform/` file may include
+      `app_shell/`; no UI in the portable half.
+- [x] Remove the `$WORKSPACE/App_shell` branch from `audit.sh`; the same
+      `ctest` now runs 27 entries (23 unit + 4 GPU), including the four
+      app_shell tests.
+- [ ] Migrate Matrix_Player, VideoPlayer and whisper_ui_cpp: bump the vk pin,
+      drop the App_shell submodule and `.gitmodules` entry, change
+      `add_subdirectory(framework/app_shell ...)` to
+      `.../vk_canvas/app_shell`, and move the Android Gradle `java.srcDirs`
+      entry.
+- [ ] Archive `minervarr/App_shell`; do not delete it.
+
+Exit: one checkout and one `ctest` cover both libraries; `check_deps` enforces
+the app_shell layer rules; `audit.sh` no longer looks outside the repository;
+the three consumers build against the merged tree; the standalone repository is
+archived. An ADR for the repository topology accompanies the import
+(`docs/decisions/0010-repository-topology.md`).
+
+Not part of this move: `audio_engine` (it has a consumer that does not use
+canvas), `first_party/vulkan_font_engine`, `img_decode_kit`.
+
 ## 7. Unused code policy
 
 What happens today:
@@ -582,7 +644,8 @@ not duplicate architecture manuals. The root workspace `AGENTS.md` gets a
 - One mechanical change per commit: docs, harness, tests, WIP move, types,
   ownership, baseline.
 - Each commit builds and passes the tests that exist at that point.
-- Commit `Vk_Canvas_Lb_LAW` before `App_shell` when a change spans both.
+- `app_shell/` is part of this repository. A change that spans the engine and
+  the shell is one commit; the old cross-repository ordering rule is retired.
 - Use `./git_wrapper`, never plain `git commit`/`git push`.
 - Never delete files as part of this work. Move WIP files with `git mv` and
   document why.

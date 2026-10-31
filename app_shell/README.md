@@ -5,7 +5,8 @@ implementations (Win32, Wayland, Android), plus the small portable modules
 every desktop-and-Android application needs — `app_paths`, `ui_metrics`,
 `ui_orientation`, `layout_rect`, `color`.
 
-Framework direction and current phase: [Vk_Canvas roadmaps](https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md).
+Framework direction and current phase: [`../docs/ROADMAP.md`](../docs/ROADMAP.md)
+(or the [GitHub copy](https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md)).
 
 `vk_canvas` makes *drawing* portable. This makes the *program* portable.
 
@@ -13,11 +14,11 @@ Read `CLAUDE.md` for the guided tour, or `docs/app_shell.tex` (compile with
 `pdflatex app_shell.tex`, twice, for the table of contents) for the full
 reference manual.
 
-First extracted from, and still primarily developed against, Matrix Player.
+Part of the `Vk_Canvas_Lb_LAW` repository; first extracted from, and still
+primarily developed against, Matrix Player.
 
 ## Committing
 
-Use `git_wrapper` (`./git_wrapper` on Linux, `git_wrapper.exe` on Windows) —
-never plain `git commit`/`git push`. Forces author/committer identity to
-`nava <nava@noreply.com>` and strips stray `Co-Authored-By:`/"Generated with"
-trailers. See `USAGE_gitWrapper.md`.
+Use the framework's `./git_wrapper` from the repository root — never plain
+`git commit`/`git push`. This is no longer a separate repository, so there is no
+app_shell-first ordering rule. See `../USAGE_gitWrapper.md`.

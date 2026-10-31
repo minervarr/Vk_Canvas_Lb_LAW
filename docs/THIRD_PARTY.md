@@ -7,7 +7,8 @@ the exact obligations with the copyright holders before distributing a binary.
 
 `Vk_Canvas_Lb_LAW` is AGPLv3 (see `../LICENSE`). Static linking into a consumer
 application has license consequences; this document does not interpret them.
-`App_shell` is a separate repository with its own license file.
+`app_shell/` is part of this repository and is covered by the same AGPLv3
+license (`../LICENSE`). It has no separate license file.
 
 ## Submodules and vendored code
 
@@ -30,7 +31,7 @@ consumer provides the target, its license is the consumer's responsibility.
 |---|---|---|
 | Wayland `xdg-shell` and `idle-inhibit` stubs | system `wayland-protocols` XML, `wayland-scanner` | generated at build time, not committed |
 | SPIR-V shaders | `shaders_src/*.slang` and the font engine's shared shaders | compiled per platform by the consuming build; `slangc` from the Vulkan SDK |
-| `ui_min_text_size.gen.h` | `vulkan_font_engine/tools/min_text_size` + the app's fonts | optional per-application artifact; App_shell now takes the floor as an argument |
+| `ui_min_text_size.gen.h` | `vulkan_font_engine/tools/min_text_size` + the app's fonts | optional per-application artifact; app_shell now takes the floor as an argument |
 | `CompositePush` check | `cmake/check_composite_pc.cmake` | compares `renderer.cc` and the shared shader's push block at build time |
 
 ## Fonts and test assets
