@@ -18,10 +18,11 @@ sync.
   Canvas emission, single-pass `wrapText`, allocation-free context frame, and
   the measured-zero allocation test. Details and measurements in
   `docs/PERFORMANCE.md`. The `app_shell` repository has been folded in and the
-  Vk dev tree builds and tests it (27/27 CTest); consumer migration is pending.
-- **Next action:** migrate Matrix_Player, VideoPlayer and whisper_ui_cpp to the
-  merged tree, then archive `minervarr/App_shell`. After that, none scheduled.
-  Phase 7 remains a deferred generator gate.
+  Vk dev tree builds and tests it (27/27 CTest); Matrix_Player is migrated and
+  builds on Linux and Android. VideoPlayer and whisper_ui_cpp remain.
+- **Next action:** migrate VideoPlayer and whisper_ui_cpp to the merged tree,
+  then archive `minervarr/App_shell`. After that, none scheduled. Phase 7
+  remains a deferred generator gate.
 - **Blocking decisions:** none. The reference machine and lavapipe policy are
   recorded in `docs/PERFORMANCE.md`; the umbrella transition and the `archive`
   quarantine are recorded in ADR 0001. `app_shell/` is covered by the root
@@ -509,11 +510,19 @@ Work items:
 - [x] Remove the `$WORKSPACE/App_shell` branch from `audit.sh`; the same
       `ctest` now runs 27 entries (23 unit + 4 GPU), including the four
       app_shell tests.
-- [ ] Migrate Matrix_Player, VideoPlayer and whisper_ui_cpp: bump the vk pin,
-      drop the App_shell submodule and `.gitmodules` entry, change
-      `add_subdirectory(framework/app_shell ...)` to
-      `.../vk_canvas/app_shell`, and move the Android Gradle `java.srcDirs`
+- [x] Resolve `vkGetPhysicalDeviceFeatures2` through `vkGetInstanceProcAddr`
+      (`671a5e8`): the NDK's minSdk 26 `libvulkan.so` stub only exports the 1.0
+      entry points, so the direct call failed to link the Matrix Android app.
+- [x] Matrix_Player migrated (pin `dbd4c27`): the `framework/app_shell`
+      submodule is gone, CMake/Gradle point at `framework/vk_canvas/app_shell`,
+      and `computeUiMetrics()` calls pass the measured
+      `kMinReadableTextSizePx`. Linux `matrix_player` and Android
+      `assembleDebug` build.
+- [ ] Migrate VideoPlayer: bump the vk pin, drop the App_shell submodule and
+      `.gitmodules` entry, change `add_subdirectory(framework/app_shell ...)`
+      to `.../vk_canvas/app_shell`, and move the Android Gradle `java.srcDirs`
       entry.
+- [ ] Migrate whisper_ui_cpp the same way.
 - [ ] Archive `minervarr/App_shell`; do not delete it.
 
 Exit: one checkout and one `ctest` cover both libraries; `check_deps` enforces
