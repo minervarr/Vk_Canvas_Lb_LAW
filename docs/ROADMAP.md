@@ -20,6 +20,9 @@ sync.
 - **Blocking decisions:** none. Reference hardware is recorded in
   `docs/PERFORMANCE.md`; GPU frame timings remain unmeasured until the dev tree
   builds SPIR-V assets.
+- **Resume phrase:** "continue next phase" means start Phase 1 at T2.1 in
+  `.opencode/todo.md`: create the module CMake targets and move the compiled
+  files with `git mv`. Do not start Phase 2 (`ui/`) until Phase 1 is green.
 
 ### How to resume after a context cleanup
 
