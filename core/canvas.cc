@@ -114,6 +114,65 @@ void Canvas::rect(float x, float y, float w, float h, Color c, float radius) {
     clipFrom_(start);
 }
 
+void Canvas::rectOutline(float x, float y, float w, float h, Color c,
+                         float radius, float thickness) {
+    if (w <= 0.0f || h <= 0.0f || thickness <= 0.0f) return;
+
+    // An inner stroke of `thickness`, so the outer edge stays on the caller's
+    // bounds and a fill drawn with the same radius remains exactly covered.
+    const float t = std::min(thickness, std::min(w, h));
+    const float half = t * 0.5f;
+    const float outer_radius =
+        std::max(0.0f, std::min(radius, std::min(w, h) * 0.5f));
+    const float path_radius = std::max(0.0f, outer_radius - half);
+
+    if (rotActive_) {
+        // A rounded-box SDF is screen-axis-aligned. Keep the border visible
+        // and rotatable by drawing the four edge strips; the corner arcs are
+        // lost, matching the engine's existing rotated-box limitation.
+        rect(x, y, w, t, c);
+        rect(x, y + h - t, w, t, c);
+        rect(x, y, t, h, c);
+        rect(x + w - t, y, t, h, c);
+        return;
+    }
+
+    const float cx = x + w * 0.5f;
+    const float cy = y + h * 0.5f;
+    const float hw = std::max(0.0f, w * 0.5f - half);
+    const float hh = std::max(0.0f, h * 0.5f - half);
+
+    if (shapes_) {
+        // kind 3 = rounded-box outline; d1.z carries the half thickness.
+        float d[6] = { cx, cy, hw, hh, path_radius, half };
+        emitShapeQuad_(x, y, x + w, y + h, 3.0f, d, c);
+        return;
+    }
+
+    // Curve fallback: the existing type-2 rounded-box SDF already draws a
+    // stroke when its lineWidth slot is non-zero. The path is inset by half
+    // the stroke width, so the visible band remains inside the caller's rect.
+    size_t start = out_.size();
+    float rec[kCurveFloats] = {0};
+    rec[0] = 2.0f;
+    rec[1] = cx;
+    rec[2] = cy;
+    rec[3] = hw;
+    rec[4] = hh;
+    rec[5] = path_radius;
+    rec[9] = c.r;
+    rec[10] = c.g;
+    rec[11] = c.b;
+    rec[12] = c.a;
+    rec[13] = half;
+    rec[kBBoxMinX] = x - 1.0f;
+    rec[kBBoxMinY] = y - 1.0f;
+    rec[kBBoxMaxX] = x + w + 1.0f;
+    rec[kBBoxMaxY] = y + h + 1.0f;
+    out_.insert(out_.end(), rec, rec + kCurveFloats);
+    clipFrom_(start);
+}
+
 void Canvas::image(TextureHandle tex, float x, float y, float w, float h,
                     float u0, float v0, float u1, float v1) {
   if (!images_ || tex == kInvalidTexture) return;

@@ -65,7 +65,7 @@ public:
   // default) to make image() a no-op, e.g. for hosts that never draw art.
   void useImages(std::vector<ImageDraw>* out) { images_ = out; }
 
-  // Route primitives (rect/segment/polyline/triangle) into `out` as SDF
+  // Route primitives (rect/rectOutline/segment/polyline/triangle) into `out` as SDF
   // shape quads for Renderer's shape pipeline (14 floats/vert, 6 verts per
   // shape: pos.xy rgba data0.xyzw data1.xyzw — see shape_frag.slang for the
   // kind/parameter packing) instead of compute-rasterized curve records.
@@ -140,6 +140,15 @@ public:
 
   // Filled axis-aligned rectangle with optional rounded corners.
   void rect(float x, float y, float w, float h, Color c, float radius = 0.0f);
+
+  // Stroke a rounded rectangle just inside its bounds: the outer edge sits on
+  // [x, y, w, h] and the inner edge follows radius - thickness. The border
+  // therefore follows the corners instead of overpainting them with four
+  // straight rects. Uses the analytic SDF shape path when available; otherwise
+  // emits a stroked rounded-box curve record. Under an active rotation the
+  // rounded box cannot rotate, so this falls back to four edge strips.
+  void rectOutline(float x, float y, float w, float h, Color c,
+                   float radius = 0.0f, float thickness = 1.0f);
 
   // Same, with an independent color per corner — the rasterizer linearly
   // interpolates COLOR0 across the quad (shape_vert.slang forwards it

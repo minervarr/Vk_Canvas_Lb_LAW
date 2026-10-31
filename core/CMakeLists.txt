@@ -110,6 +110,21 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     else()
         target_compile_options(text_edge_probe PRIVATE -Wall -Wextra)
     endif()
+
+    # Pixel check for Canvas::rectOutline: the border has to follow the rounded
+    # corners, not leave a straight line across the old sharp corner. Skips
+    # (exit 77) without a headless surface or the built shape shaders.
+    add_executable(shape_outline_probe tests/shape_outline_probe.cc)
+    target_include_directories(shape_outline_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(shape_outline_probe PRIVATE cxx_std_17)
+    target_compile_definitions(shape_outline_probe PRIVATE
+        SHAPE_OUTLINE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/")
+    target_link_libraries(shape_outline_probe PRIVATE vk_canvas_core)
+    if(MSVC)
+        target_compile_options(shape_outline_probe PRIVATE /W3 /utf-8)
+    else()
+        target_compile_options(shape_outline_probe PRIVATE -Wall -Wextra)
+    endif()
 endif()
 
 if(ANDROID)

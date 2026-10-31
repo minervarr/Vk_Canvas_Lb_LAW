@@ -10,6 +10,9 @@
 //   0 = rounded rect : center=(d0.y,d0.z) halfExt=(d0.w,d1.x) radius=d1.y
 //   1 = capsule      : a=(d0.y,d0.z) b=(d0.w,d1.x) radius=d1.y
 //   2 = triangle     : v0=(d0.y,d0.z) v1=(d0.w,d1.x) v2=(d1.y,d1.z)
+//   3 = rounded rect outline:
+//                      center=(d0.y,d0.z) halfExt=(d0.w,d1.x)
+//                      radius=d1.y halfThickness=d1.z
 //
 // Output is straight alpha; the pipeline blends SRC_ALPHA / 1-SRC_ALPHA
 // (same blend state as the MSDF text pipeline).
@@ -33,7 +36,7 @@ float4 main(float4 color : COLOR0, float4 d0 : TEXCOORD0, float4 d1 : TEXCOORD1,
     float2 pa = pix - a, ba = bp - a;
     float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
     d = length(pa - ba * h) - d1.y;
-  } else {
+  } else if (kind == 2) {
     // Triangle (iq's sdTriangle) — sign-correct for either winding order.
     float2 p0 = float2(d0.y, d0.z);
     float2 p1 = float2(d0.w, d1.x);
@@ -48,6 +51,15 @@ float4 main(float4 color : COLOR0, float4 d0 : TEXCOORD0, float4 d1 : TEXCOORD1,
                         float2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
                     float2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
     d = -sqrt(dm.x) * sign(dm.y);
+  } else {
+    // Rounded-rect outline: the band within halfThickness of the rounded-box
+    // path. Canvas insets that path by halfThickness, so the outer edge lands
+    // on the caller's rect and the fill can use the same outer radius.
+    float2 p = pix - float2(d0.y, d0.z);
+    float2 b = float2(d0.w, d1.x) - d1.y;
+    float2 q = abs(p) - b;
+    float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - d1.y;
+    d = abs(sd) - d1.z;
   }
 
   // Distance -> coverage across one SCREEN pixel: fwidth(d) is how much the
@@ -60,9 +72,10 @@ float4 main(float4 color : COLOR0, float4 d0 : TEXCOORD0, float4 d1 : TEXCOORD1,
   // width melts a 1px staircase — a bitmap glyph, a pixel-art ring — into a
   // blur, and the blur stacks where separate rects meet. Cap a SHARP box at
   // one pixel: an integer-aligned edge then lands fully inside or fully
-  // outside the pixel centers. Rounded boxes, capsules and triangles keep
+  // outside the pixel centers. Rounded boxes and outlines with a sharp
+  // corner keep the same cap; rounded shapes, capsules and triangles keep
   // the uncapped band, and magnification (fwidth < 1) is untouched.
-  if (kind == 0 && d1.y == 0.0)
+  if ((kind == 0 || kind == 3) && d1.y == 0.0)
     w = min(w, 1.0);
   float cov = clamp(0.5 - d / w, 0.0, 1.0);
   // color.rgb is an authored display-referred sRGB number. Written raw into a

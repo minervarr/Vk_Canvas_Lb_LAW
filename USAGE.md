@@ -8,7 +8,7 @@ glyphs come from the `vulkan_font_engine` submodule.
 
 | File | Role |
 |------|------|
-| `canvas.{hh,cc}` | Immediate-mode draw API: `clear/rect/text/button`, clipping, `textWidth`. Emits curve records. |
+| `canvas.{hh,cc}` | Immediate-mode draw API: `clear/rect/rectOutline/text/button`, clipping, `textWidth`. Emits curve records. |
 | `textarea.{hh,cc}` | Reusable **scrollable, word-wrapped** text view. Layout + scroll only (no editing yet). |
 | `renderer.{hh,cc}` | Vulkan device/swapchain; rasterises a curve buffer each frame. |
 | `app.{hh,cc}` / `main.cc` | Minimal `android_main` host (event loop + window lifecycle). |
@@ -24,7 +24,8 @@ std::vector<float> curves;                       // reused buffer
 Canvas c(curves, screenW, screenH, font,         // font may be nullptr
          insetTop, insetBottom, insetLeft, insetRight);
 c.clear(col::bg);
-c.rect(x, y, w, h, col::panel);
+c.rect(x, y, w, h, col::panel, 12.0f);
+c.rectOutline(x, y, w, h, col::dim, 12.0f);  // 1 px border, follows the corners
 c.text("hello", x, y, size, col::text);
 c.button(bx, by, bw, bh, "OK", col::btnIdle, col::text);
 // upload `curves` to the renderer and dispatch (see renderer.hh)
