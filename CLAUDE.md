@@ -2,6 +2,12 @@
 
 Guidance for Claude Code (claude.ai/code) working in `app_shell`.
 
+> **Framework direction:** read the canvas roadmap before starting work:
+> `../Vk_Canvas_Lb_LAW/docs/ROADMAP.md` when the repos are checked out together,
+> or <https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md>.
+> It defines the `core/` / `ui/` / `app_shell` boundaries and the current phase.
+> The live checkpoint is in `../.opencode/status.md`.
+
 ## What this is
 
 **The application shell.** `vk_canvas` makes *drawing* portable — a Renderer, a

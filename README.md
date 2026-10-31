@@ -5,6 +5,8 @@ implementations (Win32, Wayland, Android), plus the small portable modules
 every desktop-and-Android application needs — `app_paths`, `ui_metrics`,
 `ui_orientation`, `layout_rect`, `color`.
 
+Framework direction and current phase: [Vk_Canvas roadmaps](https://github.com/minervarr/Vk_Canvas_Lb_LAW/blob/main/docs/ROADMAP.md).
+
 `vk_canvas` makes *drawing* portable. This makes the *program* portable.
 
 Read `CLAUDE.md` for the guided tour, or `docs/app_shell.tex` (compile with

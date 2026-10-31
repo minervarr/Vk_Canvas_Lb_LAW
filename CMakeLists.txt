@@ -160,7 +160,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
     add_executable(ui_metrics_test tests/ui_metrics_test.cc ui_metrics.cc)
     target_include_directories(ui_metrics_test PRIVATE
         ${APP_SHELL_DIR} ${VK_CANVAS_DIR}/core ${CMAKE_BINARY_DIR}/generated)
-    add_dependencies(ui_metrics_test generate_ui_min_text_size)
+    # A consumer normally calls app_shell_generate_min_text_size() before this
+    # file, which defines the target. The dev superbuild supplies a stub header
+    # instead, so the test must not require the target to exist.
+    if(TARGET generate_ui_min_text_size)
+        add_dependencies(ui_metrics_test generate_ui_min_text_size)
+    endif()
 
     add_executable(ui_orientation_test tests/ui_orientation_test.cc ui_orientation.cc)
     target_include_directories(ui_orientation_test PRIVATE ${APP_SHELL_DIR})
@@ -176,4 +181,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
     # and the highlight rule is the part that has to be asserted anyway.
     add_executable(touch_hover_test tests/touch_hover_test.cc)
     target_include_directories(touch_hover_test PRIVATE ${APP_SHELL_DIR})
+
+    if(BUILD_TESTING)
+        foreach(_test ui_metrics_test ui_orientation_test utf16_utf8_test touch_hover_test)
+            add_test(NAME ${_test} COMMAND $<TARGET_FILE:${_test}>)
+            set_tests_properties(${_test} PROPERTIES LABELS unit)
+        endforeach()
+    endif()
 endif()
