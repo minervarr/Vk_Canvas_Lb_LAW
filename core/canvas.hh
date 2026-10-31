@@ -3,12 +3,11 @@
 #include <vector>
 #include <string_view>
 #include "texture.hh"
+#include "types.hh"
 
 struct Font;
 class  TextFont;
 enum class FontStyle : uint8_t;   // defined in text_font.hh (Roman/Bold/Math/Italic)
-
-struct Color { float r, g, b, a; };
 
 namespace col {
   constexpr Color bg      = {0.0f, 0.0f, 0.0f, 1.0f};  // Pure black background
@@ -26,13 +25,6 @@ namespace col {
   constexpr Color thumb   = {0.82f, 0.84f, 0.90f, 1.0f};  // Slider thumb / knob
   constexpr Color panel2  = {0.15f, 0.15f, 0.19f, 1.0f};  // Secondary panel / row
 }
-
-struct Rect {
-  float x, y, w, h;
-  bool contains(float px, float py) const {
-    return px >= x && px <= x + w && py >= y && py <= y + h;
-  }
-};
 
 class Canvas {
 public:

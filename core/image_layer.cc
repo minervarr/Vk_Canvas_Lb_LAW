@@ -517,5 +517,17 @@ void ImageLayer::cleanup() {
     if (descPool_)       vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (descLayout_)     vkDestroyDescriptorSetLayout(device_, descLayout_, nullptr);
 
-    *this = ImageLayer{};
+    // Reset to the default-constructed state. Copy assignment is deleted on
+    // purpose (this type owns handles), so this is explicit rather than
+    // `*this = ImageLayer{}`.
+    device_         = VK_NULL_HANDLE;
+    physicalDevice_ = VK_NULL_HANDLE;
+    assets_         = nullptr;
+    cmdPool_        = VK_NULL_HANDLE;
+    queue_          = VK_NULL_HANDLE;
+    descLayout_     = VK_NULL_HANDLE;
+    descPool_       = VK_NULL_HANDLE;
+    pipelineLayout_ = VK_NULL_HANDLE;
+    pipeline_       = VK_NULL_HANDLE;
+    nextHandle_     = 1;
 }

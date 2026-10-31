@@ -14,6 +14,11 @@
 // top, so icons/text always sit visually above artwork.
 class ImageLayer {
 public:
+    // Owns Vulkan resources; cleanup() is explicit, so a copy would share them.
+    ImageLayer() = default;
+    ImageLayer(const ImageLayer&) = delete;
+    ImageLayer& operator=(const ImageLayer&) = delete;
+
     // Attach to an existing device + render pass. cmdPool/queue are reused
     // (borrowed, not owned) for the one-shot upload command buffer in
     // create_texture() — Renderer already owns a graphics command pool/queue

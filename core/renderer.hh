@@ -24,6 +24,11 @@ class TextFont;
 
 class Renderer {
 public:
+    // Owns Vulkan handles and their teardown. Copying one would duplicate the
+    // ownership and double-destroy it; the compiler must reject it.
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+
     // desiredSwapchainImages: how many swapchain images to request (clamped
     // to the surface's min/max). The default 4 exists for Android, where the
     // compositor can hold an image ~60ms mid-hitch (see create_swapchain());

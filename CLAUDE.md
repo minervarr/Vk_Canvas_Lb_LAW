@@ -2,9 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Direction and current phase:** read `docs/ROADMAP.md` before starting work.
+> It carries the quality goals, target architecture, audit findings and the next
+> action. The live checkpoint is in `../.opencode/status.md`.
+
 ## What this is
 
-`vulkan_canvas_engine` (vk_canvas) — a reusable, cross-platform Vulkan canvas/UI engine library: 2D primitives (compute-rasterized curves + analytic-SDF shape quads), MSDF/MTSDF text via the `vulkan_font_engine` submodule, image textures, immediate-mode widgets, and layout/animation/input helpers. Android + Windows backends today; Linux/Wayland planned. Licensed AGPLv3 (see `LICENSE`). Consumed by other apps (e.g. `matrix_player_windows`) — the `platform/` demos here exist to exercise the engine, but `core/` is the product. API-shaping decisions should favor consumers, not the demos.
+`vulkan_canvas_engine` (vk_canvas) — a reusable, cross-platform Vulkan canvas/UI engine library: 2D primitives (compute-rasterized curves + analytic-SDF shape quads), MSDF/MTSDF text via the `vulkan_font_engine` submodule, image textures, immediate-mode widgets, and layout/animation/input helpers. Android + Windows backends today; the Linux/Wayland backend builds `vk_canvas_wayland`. Licensed AGPLv3 (see `LICENSE`). Consumed by other apps (e.g. `matrix_player_windows`) — the `platform/` demos here exist to exercise the engine, but `core/` is the product. API-shaping decisions should favor consumers, not the demos.
 
 ## Build Commands
 
@@ -22,6 +26,9 @@ cd platform/android
 # Windows (vswhere -> vcvars64 -> Ninja -> cl)
 cd platform/windows
 ./Build.bat                  # produces platform/windows/build/vk_canvas.exe
+
+# Unit tests + dependency/header checks (desktop dev tree)
+./tools/audit.sh
 ```
 
 **Prerequisites:**
@@ -29,7 +36,7 @@ cd platform/windows
 - CMake 3.22.1+
 - FreeType and msdfgen sources — vendored inside the `vulkan_font_engine` submodule under `first_party/vulkan_font_engine/third_party/` (init submodules first)
 - Slang compiler (`slangc`) from the Vulkan SDK — resolved from `$VULKAN_SDK` (override with `-DVCE_SLANGC=...`); required for recompiling shaders
-- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/` — `layout_test`, `animated_float_test`, `frame_input_test`. Built by the Windows build (`Build.bat`), then run each from `platform/windows/build/<name>.exe`. Rendering has no automated tests (verified visually). Test sources `#undef NDEBUG` so asserts survive the Release build.
+- Unit tests: pure-logic modules have plain `assert()`-based test exes (no framework) in `core/tests/`. `dev/CMakeLists.txt` is a dev-only superbuild with CTest; `tools/audit.sh` runs the dependency/header checks and all 11 unit tests. On Windows, `Build.bat` still builds the test exes; run them from `platform/windows/build/<name>.exe`. Rendering has no automated suite yet; the GPU probes exit 77 without shaders/assets. Test sources `#undef NDEBUG` so asserts survive a Release build. See `docs/TESTING.md`.
 
 ## Shader Compilation
 
@@ -53,8 +60,11 @@ core/                      # vk_canvas_core STATIC lib — no platform SDK inclu
   renderer.* overlay.* canvas.* textarea.* widgets.*    (compiled)
   art_texture.*            # decode-a-file-into-a-texture helper (uses img_decode_kit)
   text_util.*              # truncate/wrap/center helpers on top of Canvas (see below)
-  canvas_host.* vulkan_state.* compute_context.* text_editor.* text_buffer.*
-  undo_redo.* pager.* plotview.* gesture.* archive.*      (WIP — moved, not compiled)
+  text_buffer.* undo_redo.* pager.* plotview.* gesture.*   (compiled)
+  layout.* animated_float.* frame_input.* output_target.*   (compiled)
+wip/                       # unported prototypes, not compiled, no supported API
+                           #   canvas_host vulkan_state compute_context
+                           #   text_editor archive font_weight
 shaders_src/               # vk_canvas's OWN 6 shaders (overlay/image/shape); the
                            #   ones shared with the font engine live in its own
                            #   shaders_src/ — see "Shader Compilation" above

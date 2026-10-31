@@ -16,7 +16,9 @@
 // Feed it from a GestureRecognizer (dragStart/dragTo/dragEnd) and tick update().
 // ---------------------------------------------------------------------------
 #pragma once
-#include "canvas.hh"
+#include "types.hh"  // Rect, Color
+
+class Canvas;
 
 class Pager {
 public:

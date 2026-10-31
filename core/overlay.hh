@@ -19,6 +19,11 @@
 // ---------------------------------------------------------------------------
 class OverlayRasterizer {
 public:
+    // Owns Vulkan resources; cleanup() is explicit, so a copy would share them.
+    OverlayRasterizer() = default;
+    OverlayRasterizer(const OverlayRasterizer&) = delete;
+    OverlayRasterizer& operator=(const OverlayRasterizer&) = delete;
+
     static constexpr uint32_t MAX_CURVES           = 32768;
     static constexpr uint32_t CURVE_FLOATS         = 20;
     static constexpr uint32_t TILE_SIZE            = 16;

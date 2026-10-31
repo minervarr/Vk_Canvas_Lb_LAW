@@ -51,17 +51,14 @@ add_library(vk_canvas_core STATIC
     # this directory's own headers.
     gesture.cc
     pager.cc
+    pager_draw.cc
     text_buffer.cc
     undo_redo.cc
     plotview.cc
 )
-# WIP — moved here but not yet ported to the platform seams, deliberately not
-# compiled: canvas_host vulkan_state compute_context text_editor archive
-#
-# text_editor stays out on purpose and is not in the same position as the five
-# above: it takes AInputEvent* and a VulkanState*, so it is an Android widget
-# rather than portable logic. A consumer wanting an editor builds one on
-# text_buffer + undo_redo, which are portable and now compiled.
+# Unported prototypes live in ../wip/ and are deliberately not part of this
+# target. core/ contains only code that builds and is tested; see
+# ../wip/README.md for what each prototype would need before it can return.
 
 add_dependencies(vk_canvas_core vk_canvas_check_composite_pc)
 
@@ -84,17 +81,56 @@ target_link_libraries(vk_canvas_core PUBLIC vk_font_core)
 # img_decode_kit PUBLIC-exposes img_decode.hh + the turbojpeg link chain.
 target_link_libraries(vk_canvas_core PUBLIC img_decode_kit)
 
-# text_cover_test pins the two text-edge formulas msdf_frag.slang implements.
-# The shader cannot be executed from here. Header only — no Vulkan, no font.
+# Pure-logic tests. They compile their module source directly, so they never
+# need a Vulkan device, a shader or a window. add_test() is emitted only when
+# the parent project enabled CTest (the dev superbuild under dev/ does); the
+# executables still build in a plain Debug configure, preserving the existing
+# Windows Build.bat behaviour.
 if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_executable(text_cover_test tests/text_cover_test.cc)
-    target_include_directories(text_cover_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_features(text_cover_test PRIVATE cxx_std_17)
-    if(MSVC)
-        target_compile_options(text_cover_test PRIVATE /W3 /utf-8)
-    else()
-        target_compile_options(text_cover_test PRIVATE -Wall -Wextra)
-    endif()
+    find_package(Vulkan REQUIRED)
+
+    function(vce_add_pure_test name)
+        add_executable(${name} tests/${name}.cc ${ARGN})
+        target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_features(${name} PRIVATE cxx_std_17)
+        if(MSVC)
+            target_compile_options(${name} PRIVATE /W3 /utf-8)
+        else()
+            target_compile_options(${name} PRIVATE -Wall -Wextra)
+        endif()
+        if(BUILD_TESTING)
+            add_test(NAME ${name} COMMAND $<TARGET_FILE:${name}>)
+            set_tests_properties(${name} PROPERTIES LABELS unit)
+        endif()
+    endfunction()
+
+    # text_cover_test pins the two text-edge formulas msdf_frag.slang implements.
+    # The shader cannot be executed from here. Header only — no Vulkan, no font.
+    vce_add_pure_test(text_cover_test)
+    vce_add_pure_test(layout_test layout.cc)
+    vce_add_pure_test(animated_float_test animated_float.cc)
+    vce_add_pure_test(frame_input_test frame_input.cc)
+    vce_add_pure_test(output_target_test output_target.cc)
+    # output_target.hh includes <vulkan/vulkan.h> for VkFormat/VkColorSpaceKHR;
+    # the test itself never calls the Vulkan API.
+    target_link_libraries(output_target_test PRIVATE Vulkan::Vulkan)
+
+    vce_add_pure_test(gesture_test gesture.cc)
+    vce_add_pure_test(text_buffer_test text_buffer.cc)
+    vce_add_pure_test(undo_redo_test undo_redo.cc text_buffer.cc)
+    # pager.cc is the page model; pager_draw.cc is the Canvas half and stays
+    # out of this test on purpose.
+    vce_add_pure_test(pager_test pager.cc)
+    # Canvas is an emitter; the test inspects the float records directly.
+    # canvas.cc references the font engine's text helpers, so link that, not
+    # the whole renderer.
+    vce_add_pure_test(canvas_records_test canvas.cc)
+    target_link_libraries(canvas_records_test PRIVATE vk_font_core)
+
+    # No executable work: the static_asserts are the test. Linking the core
+    # target supplies the Vulkan and font-engine include paths.
+    vce_add_pure_test(owner_semantics_test)
+    target_link_libraries(owner_semantics_test PRIVATE vk_canvas_core)
 
     # Pixel check of the same formulas, through the real shader and swapchain.
     # Skips (exit 77) without a headless surface, the built shaders, or the face.
@@ -103,7 +139,7 @@ if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_features(text_edge_probe PRIVATE cxx_std_17)
     target_compile_definitions(text_edge_probe PRIVATE
         TEXT_EDGE_ASSET_ROOT="${CMAKE_BINARY_DIR}/assets/"
-        TEXT_EDGE_FONT="${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern/NewCM10-Regular.otf")
+        TEXT_EDGE_FONT="${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts/newcomputermodern/NewCM10-Regular.otf")
     target_link_libraries(text_edge_probe PRIVATE vk_canvas_core)
     if(MSVC)
         target_compile_options(text_edge_probe PRIVATE /W3 /utf-8)

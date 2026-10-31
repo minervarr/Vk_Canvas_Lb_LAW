@@ -572,5 +572,41 @@ void OverlayRasterizer::cleanup() {
     if (descPool_)   vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (descLayout_) vkDestroyDescriptorSetLayout(device_, descLayout_, nullptr);
 
-    *this = OverlayRasterizer{};
+    // Reset to the default-constructed state. Copy assignment is deleted on
+    // purpose (this type owns handles), so this is explicit rather than
+    // `*this = OverlayRasterizer{}`.
+    encode_                 = OutputEncode::Srgb;
+    device_                 = VK_NULL_HANDLE;
+    physicalDevice_         = VK_NULL_HANDLE;
+    assets_                 = nullptr;
+    width_                  = 0;
+    height_                 = 0;
+    curveCount_             = 0;
+    hasWinding_             = 0;
+    descLayout_             = VK_NULL_HANDLE;
+    descPool_               = VK_NULL_HANDLE;
+    descSet_                = VK_NULL_HANDLE;
+    curveBuffer_            = VK_NULL_HANDLE;
+    curveBufferMemory_      = VK_NULL_HANDLE;
+    curveBufferMapped_      = nullptr;
+    tileBuffer_             = VK_NULL_HANDLE;
+    tileBufferMemory_       = VK_NULL_HANDLE;
+    rowBuffer_              = VK_NULL_HANDLE;
+    rowBufferMemory_        = VK_NULL_HANDLE;
+    outputImage_            = VK_NULL_HANDLE;
+    outputImageMemory_      = VK_NULL_HANDLE;
+    outputImageView_        = VK_NULL_HANDLE;
+    outputSampler_          = VK_NULL_HANDLE;
+    computePipelineLayout_  = VK_NULL_HANDLE;
+    tilingPipeline_         = VK_NULL_HANDLE;
+    coveragePipeline_       = VK_NULL_HANDLE;
+    compSetLayout_          = VK_NULL_HANDLE;
+    compPool_               = VK_NULL_HANDLE;
+    compSet_                = VK_NULL_HANDLE;
+    compLayout_             = VK_NULL_HANDLE;
+    compPipeline_           = VK_NULL_HANDLE;
+    lastCurves_.clear();
+    curvesDirty_            = true;
+    firstRun_               = true;
+    resourcesReady_         = false;
 }

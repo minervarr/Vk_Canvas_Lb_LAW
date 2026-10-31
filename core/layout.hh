@@ -1,7 +1,7 @@
 #pragma once
 #include <algorithm>
 
-#include "canvas.hh"  // Rect
+#include "types.hh"  // Rect
 
 // Resolution-robust layout math, pure and platform-agnostic — no Vulkan, no
 // Canvas draw calls. Pages compute their layout from the current surface size

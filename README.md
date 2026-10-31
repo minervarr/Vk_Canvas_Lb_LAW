@@ -1,6 +1,8 @@
 # vulkan_canvas_engine
 
-Cross-platform Vulkan canvas engine (Android + Windows; Linux/Wayland planned). Uses [vulkan_font_engine](https://github.com/minervarr/vulkan_font_engine) as a submodule for GPU text rendering.
+Cross-platform Vulkan canvas engine (Android, Windows and Linux/Wayland). Uses [vulkan_font_engine](https://github.com/minervarr/vulkan_font_engine) as a submodule for GPU text rendering.
+
+Direction, quality goals and the current phase: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Setup
 

@@ -184,6 +184,10 @@ void TextBuffer::move_to_line_col(int line, int col) {
 
 std::string_view TextBuffer::line_view(int li) {
     if (!line_cache_valid_) rebuild_lines();
+    // line_start()/line_end() clamp an invalid index to the first/last line,
+    // which would make an out-of-range view look like real content. The
+    // zero-copy accessor is the one that must say "no such line".
+    if (li < 0 || li >= static_cast<int>(line_starts_.size())) return {};
     size_t start = line_start(li);
     size_t end   = line_end(li);
     // Exclude the trailing newline
