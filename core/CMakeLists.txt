@@ -88,6 +88,14 @@ target_link_libraries(vk_canvas_draw PUBLIC vk_canvas_base vk_font_core)
 # ── gpu: Vulkan orchestration and the platform seam ──────────────────────────
 add_library(vk_canvas_gpu STATIC
     gpu/renderer.cc
+    gpu/renderer_api.cc
+    gpu/renderer_camera.cc
+    gpu/renderer_device.cc
+    gpu/renderer_readback.cc
+    gpu/renderer_swapchain.cc
+    gpu/renderer_text.cc
+    gpu/renderer_text_pipeline.cc
+    gpu/renderer_shapes.cc
     gpu/overlay.cc
     gpu/image_layer.cc
     gpu/output_target.cc
@@ -124,7 +132,7 @@ endif()
 add_custom_target(vk_canvas_check_composite_pc ALL
     COMMAND ${CMAKE_COMMAND}
             -DSHADER=${FONT_ENGINE_DIR}/shaders_src/composite_frag.slang
-            -DCPP=${VCE_CORE_GPU_DIR}/renderer.cc
+            -DCPP=${VCE_CORE_GPU_DIR}/renderer_impl.hh
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/check_composite_pc.cmake
     BYPRODUCTS ""
     COMMENT "Checking composite_frag.slang's push block against CompositePush")

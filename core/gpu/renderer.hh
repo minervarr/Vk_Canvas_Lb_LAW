@@ -7,16 +7,13 @@
 #include <vulkan/vulkan_android.h>
 #include <android/hardware_buffer.h>
 #endif
-#include <vector>
-#include <unordered_map>
-#include <mutex>
-#include <atomic>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
+#include <vector>
 #include "platform.hh"
 #include "canvas.hh"
-#include "overlay.hh"
-#include "image_layer.hh"
 #include "texture.hh"
 #include "output_target.hh"
 
@@ -50,9 +47,9 @@ public:
              PresentPolicy presentPolicy = PresentPolicy::Latency);
 
     // What we actually got, after capability resolution — not what was asked.
-    bool         hdrActive()    const { return output_.hdr; }
-    OutputTarget activeTarget() const { return output_.target; }
-    OutputEncode activeEncode() const { return output_.encode; }
+    bool         hdrActive()    const;
+    OutputTarget activeTarget() const;
+    OutputEncode activeEncode() const;
     ~Renderer();
 
     // Composite, in order: the camera frame (if any); background textured
@@ -112,31 +109,29 @@ public:
     // that passes non-empty msdfQuads.
     void initMsdf(const TextFont& font);
     // Handles a GPU-side glyph baker needs to write the atlas itself.
-    VkDevice         vkDevice() const { return device_; }
-    VkPhysicalDevice vkPhysicalDevice() const { return physical_dev_; }
-    VkCommandPool    vkCommandPool() const { return cmd_pool_; }
-    VkQueue          vkQueue() const { return queue_; }
-    VkImage          msdfAtlasImage() const { return msdfAtlasImage_; }
-    uint32_t         msdfAtlasLayers() const { return msdfAtlasLayers_; }
+    VkDevice         vkDevice() const;
+    VkPhysicalDevice vkPhysicalDevice() const;
+    VkCommandPool    vkCommandPool() const;
+    VkQueue          vkQueue() const;
+    VkImage          msdfAtlasImage() const;
+    uint32_t         msdfAtlasLayers() const;
     // Bumped every time the atlas IMAGE is (re)created, and therefore emptied.
     // A consumer that wrote pixels into it has to notice that and write them
     // again — and it cannot do so by comparing VkImage handles, because Vulkan
     // recycles them: destroying a 2-page atlas and creating a 3-page one hands
     // back the same handle value, the comparison says "unchanged", and every
     // glyph baked into the old image is silently gone.
-    uint32_t         msdfAtlasGeneration() const { return msdfAtlasGen_; }
+    uint32_t         msdfAtlasGeneration() const;
 
-    bool msdfReady() const { return msdfPipeline_ != VK_NULL_HANDLE; }
+    bool msdfReady() const;
 
     // Uploads `rgba` (w*h*4 bytes, straight alpha) as a sampled texture for
     // Canvas::image() draws. See ImageLayer::create_texture for details
     // (incl. the mips flag — pass false for textures never minified).
     TextureHandle create_texture(const uint8_t* rgba, uint32_t w, uint32_t h,
                                  bool mips = true,
-                                 TextureFormat fmt = TextureFormat::RGBA8_UNORM) {
-        return image_layer_.create_texture(rgba, w, h, mips, fmt);
-    }
-    void destroy_texture(TextureHandle handle) { image_layer_.destroy_texture(handle); }
+                                 TextureFormat fmt = TextureFormat::RGBA8_UNORM);
+    void destroy_texture(TextureHandle handle);
 
     // Capture seam: skip vkQueuePresentKHR entirely. A headless surface has
     // no compositor to hand the image to, and on current Mesa a headless
@@ -146,19 +141,19 @@ public:
     // is exactly what the readback's barrier expects. The swapchain-side
     // recreate that a failed present would trigger is skipped with it.
     // Off by default; capture hosts turn this on before the first draw().
-    void setPresentEnabled(bool on) { present_enabled_ = on; }
+    void setPresentEnabled(bool on);
 
-    uint32_t width()  const { return width_; }
-    uint32_t height() const { return height_; }
+    uint32_t width()  const;
+    uint32_t height() const;
 
     // What was actually chosen, for a log line, a diagnostics panel or a
     // consumer that must warn when it fell back to a CPU rasterizer. A software
     // device is legitimate (CI, capture on a machine with no GPU) but never a
     // silent accident.
-    const std::string&   deviceName()    const { return device_name_; }
-    VkPhysicalDeviceType deviceType()    const { return device_type_; }
-    bool                 isSoftwareDevice() const { return device_type_ == VK_PHYSICAL_DEVICE_TYPE_CPU; }
-    uint32_t             queueFamily()   const { return queue_family_; }
+    const std::string&   deviceName()    const;
+    VkPhysicalDeviceType deviceType()    const;
+    bool                 isSoftwareDevice() const;
+    uint32_t             queueFamily()   const;
 
     // Copy the most recently draw()n swapchain image back to host memory as
     // tightly-packed RGBA8 (width*height*4 bytes, straight from the
@@ -173,7 +168,7 @@ public:
     // on a dirty flag should keep rendering for this many frames (+1) after a
     // change, so every image in the swapchain's rotation receives it — else
     // the images skipped in between would present stale content.
-    uint32_t swapchainImageCount() const { return (uint32_t)swapchain_images_.size(); }
+    uint32_t swapchainImageCount() const;
 
     // Force an immediate swapchain rebuild at the surface's current extent.
     // draw() otherwise only discovers a resize lazily, via VK_SUBOPTIMAL_KHR
@@ -182,7 +177,7 @@ public:
     // a large size in one step (e.g. showing a fullscreen window) needs the
     // swapchain to already match before the next draw(), or that first frame
     // renders at the stale (smaller) extent and appears corrupted/skewed.
-    void notifyResized() { recreate_swapchain(); }
+    void notifyResized();
 
     // Frame pacing: update_camera_frame() (camera callback thread) sets a flag and
     // wakes the render loop, so the loop can present exactly once per camera frame
@@ -190,10 +185,10 @@ public:
     // rate to the 30fps content (vs ~60-120 half-duplicate presents/sec) stops
     // SurfaceFlinger hunting the LTPO refresh rate — the ~once-per-second ~90ms
     // vkWaitForFences stall seen only while recording.
-    void set_frame_waker(FrameWaker* waker) { waker_ = waker; }
-    bool consume_frame_ready() { return frame_ready_.exchange(false); }
+    void set_frame_waker(FrameWaker* waker);
+    bool consume_frame_ready();
 
-    const DeviceCaps& caps() const { return caps_; }
+    const DeviceCaps& caps() const;
 
     // ── The platform-neutral way in for a decoded frame ────────────────────
     //
@@ -215,15 +210,15 @@ public:
 
     // While recording the camera delivers HLG frames; this enables the shader's
     // HLG->SDR tone-map so the preview isn't washed out.
-    void set_camera_hlg(bool hlg) { camera_hlg_ = hlg ? 1.0f : 0.0f; }
+    void set_camera_hlg(bool hlg);
 
     // Focus-check loupe: draws the camera frame a second time, magnified about
     // the frame's centre, into a square inset. The wide view underneath is left
     // intact — the point is to judge focus without losing the framing. `zoom`
     // <= 1 turns it off. The caller is responsible for feeding a preview stream
     // with enough resolution to make the magnification worth looking at.
-    void set_camera_loupe(float zoom) { camera_loupe_zoom_ = zoom; }
-    float camera_loupe_zoom() const { return camera_loupe_zoom_; }
+    void set_camera_loupe(float zoom);
+    float camera_loupe_zoom() const;
     // Where the inset was last drawn (x, y, w, h in surface pixels), so an
     // overlay can frame it. False when the loupe is off or no camera frame has
     // been composited yet. The value is one frame old, which does not matter:
@@ -233,16 +228,9 @@ public:
     // which a pixel counts as an edge — smaller is more sensitive; <= 0 is off.
     // Peaking is only as truthful as the image it runs on, so it is at its most
     // accurate inside the loupe, where the bound stream is full-sensor.
-    void set_camera_peaking(float threshold, bool green = false) {
-        camera_peak_ = threshold;
-        camera_peak_color_ = green ? 1.0f : 0.0f;
-    }
+    void set_camera_peaking(float threshold, bool green = false);
 
-    bool camera_loupe_rect(float out[4]) const {
-        if (camera_loupe_zoom_ <= 1.0f || loupe_rect_[2] <= 0.0f) return false;
-        for (int i = 0; i < 4; ++i) out[i] = loupe_rect_[i];
-        return true;
-    }
+    bool camera_loupe_rect(float out[4]) const;
 #endif
 
     // ── Telling the engine what colour an external image actually is ────────
@@ -298,21 +286,11 @@ public:
     // Android camera preview has always needed and what this path used to do
     // unconditionally; a video consumer sets it from its container, where 0 is
     // the common answer.
-    void set_external_rotation(int degrees) {
-        int q = (degrees / 90) % 4;
-        if (q < 0) q += 4;
-        external_rotation_quadrant_ = q;
-    }
+    void set_external_rotation(int degrees);
 
-    void set_external_visible_size(uint32_t w, uint32_t h) {
-        external_visible_w_ = w;
-        external_visible_h_ = h;
-    }
+    void set_external_visible_size(uint32_t w, uint32_t h);
 
-    void set_external_transfer(ExternalTransfer t, float displayPeakNits = 1000.0f) {
-        external_transfer_ = t;
-        external_peak_nits_ = displayPeakNits;
-    }
+    void set_external_transfer(ExternalTransfer t, float displayPeakNits = 1000.0f);
 
     // Pixel aspect ratio: how wide a pixel is relative to its height.
     //
@@ -326,296 +304,9 @@ public:
     //
     // Applied to the picture's own width, before any rotation quadrant swaps
     // the axes. Ignored unless positive.
-    void set_external_pixel_aspect(float par) {
-        if (par > 0.0f) external_pixel_aspect_ = par;
-    }
+    void set_external_pixel_aspect(float par);
 
 private:
-    SurfaceProvider&  surface_provider_;
-    AssetReader&      assets_;
-    FrameWaker*       waker_ = nullptr;
-    std::atomic<bool> frame_ready_{false};
-
-    uint32_t width_  = 0;
-    uint32_t height_ = 0;
-    uint32_t desired_swapchain_images_ = 4;  // constructor arg; see create_swapchain()
-    float          camera_hlg_ = 0.0f;
-    float          camera_loupe_zoom_ = 1.0f;
-    float          loupe_rect_[4] = {0, 0, 0, 0};
-    float          camera_peak_ = 0.0f;
-    float          camera_peak_color_ = 0.0f;
-
-    DeviceCaps caps_{};
-
-    // Perf instrumentation (logged once per second).
-    int64_t pv_prev_ns_ = 0, pv_window_ns_ = 0, pv_max_gap_ns_ = 0; int pv_frames_ = 0;
-    int64_t dr_window_ns_ = 0, dr_max_ns_ = 0; int dr_frames_ = 0;
-
-    VkInstance       instance_       = VK_NULL_HANDLE;
-    VkSurfaceKHR     surface_        = VK_NULL_HANDLE;
-    VkPhysicalDevice physical_dev_   = VK_NULL_HANDLE;
-    VkDevice         device_         = VK_NULL_HANDLE;
-    VkQueue          queue_          = VK_NULL_HANDLE;
-    VkSwapchainKHR   swapchain_      = VK_NULL_HANDLE;
-
-    // Chosen together with physical_dev_: a graphics family that also supports
-    // presenting to THIS surface. 0 is the historical value and the fallback.
-    uint32_t             queue_family_ = 0;
-    std::string          device_name_;
-    VkPhysicalDeviceType device_type_ = VK_PHYSICAL_DEVICE_TYPE_OTHER;
-
-    // Swapchain pixel format/colorspace — resolved at create_swapchain() by
-    // pickTarget() (output_target.hh) from the ctor's requested target and the
-    // surface's own format enumeration. Falls back to the 8-bit SDR pin
-    // whenever the request can't be honored. Shared by the render pass and
-    // framebuffer views; output_.encode is also baked into every pipeline as
-    // the OUTPUT_ENCODE specialization constant.
-    OutputTarget     requested_output_ = OutputTarget::SdrSrgb;
-    PresentPolicy    present_policy_   = PresentPolicy::Latency;
-    OutputSelection  output_{};
-    bool             output_resolved_ = false;  // resolve_output_target() ran
-    VkFormat         swapchain_format_     = VK_FORMAT_R8G8B8A8_UNORM;
-    VkColorSpaceKHR  swapchain_colorspace_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    bool             ext_swapchain_colorspace_ = false;  // instance ext enabled
-
-    // Linear text composite. text_srgb_pass_ means the swapchain was created
-    // mutable and text is drawn in a second pass through an sRGB view, so the
-    // hardware decodes the page, blends, and encodes. text_linear_surface_
-    // is that pass, or a float linear swapchain in the same pass. Both false
-    // is the legacy UNORM encode (exact only on black). Decided once, before
-    // the first swapchain: the UI render pass's finalLayout and the text
-    // pipeline bake it in, and neither is rebuilt on resize. A resize must
-    // keep the mutable swapchain for as long as text_srgb_pass_ stays set.
-    // text_mutable_refused_ stops a failed first create from being retried
-    // on every resize.
-    bool             device_mutable_swapchain_ = false;
-    bool             text_srgb_pass_           = false;
-    bool             text_linear_surface_      = false;
-    bool             text_mutable_refused_     = false;
-    VkFormat         text_srgb_format_         = VK_FORMAT_UNDEFINED;
-    VkRenderPass     text_render_pass_         = VK_NULL_HANDLE;
-    std::vector<VkImageView>   text_image_views_;
-    std::vector<VkFramebuffer> text_framebuffers_;
-
-    VkRenderPass                 render_pass_ = VK_NULL_HANDLE;
-    std::vector<VkImage>         swapchain_images_;
-    std::vector<VkImageView>     swapchain_image_views_;
-    std::vector<VkFramebuffer>   framebuffers_;
-
-    VkCommandPool                cmd_pool_ = VK_NULL_HANDLE;
-    std::vector<VkCommandBuffer> cmd_buffers_;
-
-    // Two frames in flight: per-frame sync objects + per-frame copies of
-    // every persistently-mapped dynamic buffer the CPU writes each frame
-    // (MSDF text VBO, shape VBO). The overlay compute path stays single-
-    // buffered — draw() serializes when it's in use (see draw()'s comment).
-    static constexpr uint32_t kFramesInFlight = 2;
-    VkSemaphore image_available_sems_[kFramesInFlight] = {};
-    VkSemaphore render_finished_sems_[kFramesInFlight] = {};
-    VkFence     in_flight_fences_[kFramesInFlight]     = {};
-    uint32_t    frame_index_ = 0;
-    bool        present_enabled_ = true;   // capture seam, see setPresentEnabled
-    // Which frame-fence last submitted to each swapchain image — guards
-    // re-recording cmd_buffers_[image] while that image's prior frame runs.
-    std::vector<VkFence> image_fences_;
-    // The swapchain image index that draw() last rendered into, for
-    // readbackLastFrame(). UINT32_MAX until the first draw().
-    uint32_t    last_drawn_image_index_ = UINT32_MAX;
-
-    // The sampler conversion built for the external image. A plain Vulkan
-    // object, and the thing set_external_colour() guards against being created
-    // before it is told the truth — so it belongs with the description above
-    // rather than with the Android import below.
-    VkSamplerYcbcrConversion        ycbcr_conversion_ = VK_NULL_HANDLE;
-
-    // ── What the external image IS ─────────────────────────────────────────
-    //
-    // Outside the platform guard below, because every one of these describes
-    // the CONTENT rather than how it got here: its Y'CbCr matrix and range,
-    // its transfer function, its orientation, and how much of the buffer is
-    // actually picture. All of that is the same fact on any host. Only the
-    // import beneath it is per-platform.
-    // camera_hlg_ lives with the loupe state above: it is the preview's HLG
-    // flag, not a property of an imported video frame.
-    // Empty until set_external_colour() overrides the driver's suggestion.
-    bool                            external_colour_set_ = false;
-    VkSamplerYcbcrModelConversion   external_model_ = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY;
-    VkSamplerYcbcrRange             external_range_ = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
-    // Unset means "the driver's suggestion stands", which is why these are
-    // flags beside the values rather than a sentinel inside them: every
-    // VkChromaLocation is a legitimate answer.
-    bool                            external_siting_set_ = false;
-    VkChromaLocation                external_x_siting_ = VK_CHROMA_LOCATION_COSITED_EVEN;
-    VkChromaLocation                external_y_siting_ = VK_CHROMA_LOCATION_MIDPOINT;
-    ExternalTransfer                external_transfer_ = ExternalTransfer::Sdr;
-    float                           external_peak_nits_ = 1000.0f;
-    int                             external_rotation_quadrant_ = 1;
-    uint32_t                        external_visible_w_ = 0;
-    uint32_t                        external_visible_h_ = 0;
-    float                           external_pixel_aspect_ = 1.0f;
-
-#if defined(__ANDROID__)
-    // AHardwareBuffer camera import (Android-only external images).
-    PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID_ = nullptr;
-    PFN_vkCreateSamplerYcbcrConversion vkCreateSamplerYcbcrConversion_ = nullptr;
-    PFN_vkDestroySamplerYcbcrConversion vkDestroySamplerYcbcrConversion_ = nullptr;
-
-    std::mutex hwb_mutex_;
-    AHardwareBuffer* pending_hwb_ = nullptr;
-    std::function<void()> current_release_cb_;
-    std::function<void()> pending_release_cb_;
-
-    struct HwbCache {
-        VkImage image = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        VkImageView view = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
-    };
-    std::unordered_map<AHardwareBuffer*, HwbCache> hwb_cache_;
-    // Bind order, oldest first — the eviction queue for the above. A plain
-    // vector: it holds at most kMaxCachedHwb entries and is walked, not
-    // searched, so a map would cost more than it saved.
-    std::vector<AHardwareBuffer*> hwb_lru_;
-    // How many external images may be cached at once, and therefore the size
-    // of the descriptor pool backing them. A camera needs a handful; a video
-    // decoder's AImageReader was measured handing out 10 distinct buffers in
-    // the first second, so this is sized for a stream and bounded by eviction.
-    static constexpr size_t kMaxCachedHwb = 32;
-
-    AHardwareBuffer* current_hwb_ = nullptr;
-    VkSampler hwb_sampler_ = VK_NULL_HANDLE;
-    VkImage hwb_image_ = VK_NULL_HANDLE;
-    VkDeviceMemory hwb_memory_ = VK_NULL_HANDLE;
-    VkImageView hwb_view_ = VK_NULL_HANDLE;
-
-    uint64_t last_external_format_ = 0;
-
-    // Camera composite pipeline
-    VkDescriptorSetLayout desc_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
-
-    VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
-
-    void setup_hwb_resources(AHardwareBuffer* hwb);
-    void cleanup_hwb_resources();
-    void bind_hwb(AHardwareBuffer* hwb);
-    void touch_hwb(AHardwareBuffer* hwb);
-#endif
-
-    // UI overlay (canvas curve records rasterised + composited over the camera).
-    OverlayRasterizer overlay_;
-    // Textured quads (album art, icons) composited as a background layer.
-    ImageLayer image_layer_;
-
-    // ── MSDF text pipeline ──────────────────────────────────────────────────
-    //
-    // Where the per-frame text VBO STARTS. It used to be a hard ceiling, and
-    // the overflow path was `if (verts > kMaxMsdfVerts) verts = kMaxMsdfVerts`
-    // — a silent truncation that is not even a clean one: 16384 is not a
-    // multiple of the 6 vertices in a glyph quad, so the clamp left four
-    // orphan vertices behind, i.e. one malformed triangle at whatever UV the
-    // glyph it cut in half happened to carry. A dense screen at a high
-    // resolution reaches 2730 glyphs easily, so this was a real ceiling, and
-    // "the text stops halfway down the page" is not a failure mode worth
-    // keeping. The buffer grows instead; see ensureMsdfVboCapacity().
-    static constexpr uint32_t kInitialMsdfVerts = 16384;
-
-    VkImage             msdfAtlasImage_    = VK_NULL_HANDLE;
-    VkDeviceMemory      msdfAtlasMemory_   = VK_NULL_HANDLE;
-    VkImageView         msdfAtlasView_     = VK_NULL_HANDLE;
-    VkSampler           msdfAtlasSampler_  = VK_NULL_HANDLE;
-    uint32_t            msdfAtlasW_        = 0;
-    uint32_t            msdfAtlasH_        = 0;
-    uint32_t            msdfAtlasLayers_   = 1;   // atlas pages, as array layers
-    uint32_t            msdfAtlasGen_      = 0;   // ++ on every image (re)creation
-    float               msdfPxRange_      = 4.0f;
-    float               msdfIsMtsdf_      = 0.0f;  // 0 = MSDF, 1 = MTSDF, 2 = raster
-    VkFormat            msdfAtlasFormat_  = VK_FORMAT_R8G8B8A8_UNORM;
-
-    VkBuffer            msdfVbo_[kFramesInFlight]       = {};
-    VkDeviceMemory      msdfVboMemory_[kFramesInFlight] = {};
-    void*               msdfVboMapped_[kFramesInFlight] = {};
-    uint32_t            msdfVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
-    uint32_t            msdfVertCount_     = 0;  // for the frame being recorded
-
-    // Make frame slot `frame`'s text VBO hold at least `verts` vertices,
-    // reallocating it if it does not. Only legal once that slot's fence has
-    // been waited on — draw() does exactly that before it writes the buffer.
-    bool ensureMsdfVboCapacity(uint32_t frame, uint32_t verts);
-
-    VkDescriptorSetLayout msdfSetLayout_   = VK_NULL_HANDLE;
-    VkDescriptorPool    msdfDescPool_      = VK_NULL_HANDLE;
-    VkDescriptorSet     msdfDescSet_       = VK_NULL_HANDLE;
-    VkPipelineLayout    msdfPipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline          msdfPipeline_      = VK_NULL_HANDLE;
-
-    void createMsdfPipeline();
-    // `pixels` holds `layers` pages of w*h*channels, one after another, and
-    // they become the layers of one 2D array image.
-    void uploadMsdfAtlas(const uint8_t* pixels, uint32_t w, uint32_t h,
-                         uint32_t layers, float pxRange, uint32_t channels);
-
-    // Re-upload only the pages the font reports as changed, keeping the image,
-    // view, sampler, descriptor set and pipeline. Only valid when the atlas's
-    // shape is unchanged — initMsdf() decides that.
-    void updateMsdfAtlasPages(const TextFont& font);
-    void recordMsdfDraw(VkCommandBuffer cmd, uint32_t frame);
-    void cleanupMsdf();
-
-    // ── SDF shape pipeline ─────────────────────────────────────────────────
-    // Primitives (rounded rects / capsules / triangles) drawn as per-shape
-    // quads whose fragment shader evaluates the analytic SDF — the "MSDF for
-    // shapes" fast path. Skips the compute rasterizer's tiling/coverage
-    // passes and their screen-size buffers entirely; each shape touches only
-    // its own pixels. Vertex layout (14 floats, see Canvas::useShapes()):
-    //   pos.xy  rgba  data0.xyzw  data1.xyzw
-    static constexpr uint32_t kShapeFloatsPerVert = 14;
-    static constexpr uint32_t kShapeVertsPerQuad  = 6;
-    // Where the per-frame shape VBO STARTS. It used to be a hard ceiling
-    // (`if (verts > kMaxShapeVerts) verts = kMaxShapeVerts`), and that
-    // silent truncation is how a bitmap UI vanished mid-glyph: Terminus is
-    // one rect per pixel-run, so 2048 quads is a few dozen letters. The
-    // text VBO already grows; this one does too. See ensureShapeVboCapacity().
-    static constexpr uint32_t kInitialShapeVerts = kShapeVertsPerQuad * 2048;
-
-    VkBuffer         shapeVbo_[kFramesInFlight]       = {};
-    VkDeviceMemory   shapeVboMemory_[kFramesInFlight] = {};
-    void*            shapeVboMapped_[kFramesInFlight] = {};
-    uint32_t         shapeVboVerts_[kFramesInFlight]  = {};  // capacity, in vertices
-    uint32_t         shapeVertCount_ = 0;  // for the frame being recorded
-    uint32_t         shapeFrontFirst_ = 0;
-    uint32_t         shapeFrontCount_ = 0;
-    VkPipelineLayout shapePipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline       shapePipeline_       = VK_NULL_HANDLE;
-
-    void initShapes();
-    void recordShapeDraw(VkCommandBuffer cmd, uint32_t frame,
-                         uint32_t firstVert, uint32_t vertCount);
-    void cleanupShapes();
-    bool ensureShapeVboCapacity(uint32_t frame, uint32_t verts);
-
-    void create_instance();
-    void create_surface();
-    void pick_physical_device();
-    void create_logical_device();
-    // Resolves the output target once, from the constructor, before the first
-    // create_swapchain(). See the definition for why it must not re-run.
-    void resolve_output_target();
-    void resolve_text_composite();
-    void create_swapchain();
-    void create_render_pass();
-    void create_framebuffers();
-    void create_sync_objects();
-    void create_command_buffers();
-
-    // Destroys framebuffers/image-views/swapchain and recreates them (plus
-    // overlay_'s size-dependent resources) at the surface's current extent.
-    // Called on VK_ERROR_OUT_OF_DATE_KHR/VK_SUBOPTIMAL_KHR from draw(). No-op
-    // if the surface is currently 0x0 (minimized) — retried next draw() call.
-    void recreate_swapchain();
-    void destroy_swapchain_resources();
-
-    uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
-    void cleanup();
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
