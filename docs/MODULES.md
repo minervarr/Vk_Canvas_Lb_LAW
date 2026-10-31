@@ -38,9 +38,11 @@ Files are module-relative. `base/`, `input/` and `layout/` compile into
 
 ## `ui/` toolkit
 
-Built as `vk_canvas_ui`, which links `vk_canvas_draw` and `vk_canvas_base` and
-never Vulkan. `vk_canvas_core` still links it for the transition cycle; new
-consumers link `vk_canvas_ui` explicitly.
+Built as `vk_canvas_ui`, which links `vk_canvas_draw` and `vk_canvas_base`.
+Its sources and headers include no Vulkan and no `gpu/` header; the final link
+still carries libvulkan because the font-engine submodule's archive does.
+`vk_canvas_core` still links it for the transition cycle; new consumers link
+`vk_canvas_ui` explicitly.
 
 | Module | Files | Lines | Depends on | Tests | Notes |
 |---|---|---|---|---|---|
