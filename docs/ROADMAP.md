@@ -18,11 +18,11 @@ sync.
   Canvas emission, single-pass `wrapText`, allocation-free context frame, and
   the measured-zero allocation test. Details and measurements in
   `docs/PERFORMANCE.md`. The `app_shell` repository has been folded in and the
-  Vk dev tree builds and tests it (27/27 CTest); Matrix_Player is migrated and
-  builds on Linux and Android. VideoPlayer and whisper_ui_cpp remain.
-- **Next action:** migrate VideoPlayer and whisper_ui_cpp to the merged tree,
-  then archive `minervarr/App_shell`. After that, none scheduled. Phase 7
-  remains a deferred generator gate.
+  Vk dev tree builds and tests it (27/27 CTest); all three consumers are
+  migrated and build on Linux and Android. Only the archive remains.
+- **Next action:** archive `minervarr/App_shell` (no code change; GitHub
+  settings). After that, none scheduled. Phase 7 remains a deferred generator
+  gate.
 - **Blocking decisions:** none. The reference machine and lavapipe policy are
   recorded in `docs/PERFORMANCE.md`; the umbrella transition and the `archive`
   quarantine are recorded in ADR 0001. `app_shell/` is covered by the root
@@ -518,12 +518,14 @@ Work items:
       and `computeUiMetrics()` calls pass the measured
       `kMinReadableTextSizePx`. Linux `matrix_player` and Android
       `assembleDebug` build.
-- [ ] Migrate VideoPlayer: bump the vk pin, drop the App_shell submodule and
-      `.gitmodules` entry, change `add_subdirectory(framework/app_shell ...)`
-      to `.../vk_canvas/app_shell`, and move the Android Gradle `java.srcDirs`
-      entry.
-- [ ] Migrate whisper_ui_cpp the same way.
-- [ ] Archive `minervarr/App_shell`; do not delete it.
+- [x] VideoPlayer migrated (pin `03c9cf7`): the submodule is gone, paths and
+      Gradle point at `framework/vk_canvas/app_shell`, and the compute shaders
+      use the explicit stage. Linux `video_player` and Android `assembleDebug`
+      build.
+- [x] whisper_ui_cpp migrated (pin `a5eb662`) the same way. Linux
+      `whisper_destilado` and Android `assembleDebug` build.
+- [ ] Archive `minervarr/App_shell`; do not delete it. (`gh` is not installed
+      here; this is a GitHub settings action.)
 
 Exit: one checkout and one `ctest` cover both libraries; `check_deps` enforces
 the app_shell layer rules; `audit.sh` no longer looks outside the repository;
