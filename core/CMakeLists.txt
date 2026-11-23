@@ -206,10 +206,11 @@ endif()
 
 # Pure-logic tests. They compile their module source directly, so they never
 # need a Vulkan device, a shader or a window. add_test() is emitted only when
-# the parent project enabled CTest (the dev superbuild under dev/ does); the
-# executables still build in a plain Debug configure, preserving the existing
-# Windows Build.bat behaviour.
-if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+# the parent project enabled CTest. The dev superbuild opts in explicitly;
+# consumers do not inherit framework test targets (and their generic names)
+# merely because they configure Debug.
+option(VCE_BUILD_TESTS "Build vk_canvas's pure tests in this tree" OFF)
+if(VCE_BUILD_TESTS AND NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(VCE_CORE_INCLUDE_DIRS
         ${VCE_CORE_BASE_DIR}
         ${VCE_CORE_INPUT_DIR}

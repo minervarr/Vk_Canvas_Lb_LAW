@@ -164,7 +164,8 @@ endif()
 # repositories uses. They COMPILE the sources rather than linking app_shell, so
 # a test can never quietly start depending on Vulkan; ui_metrics_test is the one
 # that needs an include path at all, for layout.hh and the generated floor.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
+option(VCE_BUILD_TESTS "Build vk_canvas's pure tests in this tree" OFF)
+if(VCE_BUILD_TESTS AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ANDROID)
     add_executable(ui_metrics_test tests/ui_metrics_test.cc ui_metrics.cc
         ${VK_CANVAS_DIR}/core/layout/type_scale.cc)
     target_include_directories(ui_metrics_test PRIVATE

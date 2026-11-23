@@ -23,6 +23,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CTest)
 
+# This is the one tree that wants every framework test. Consumer projects leave
+# this OFF so their Debug configure neither builds framework test executables
+# nor collides with their own test target names.
+set(VCE_BUILD_TESTS ON CACHE BOOL "Build vk_canvas's pure tests in this tree" FORCE)
+
 set(VK_CANVAS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/.. CACHE PATH
     "Vk_Canvas source root (the directory containing core/)")
 

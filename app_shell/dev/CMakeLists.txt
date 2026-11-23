@@ -23,6 +23,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CTest)
 
+set(VCE_BUILD_TESTS ON CACHE BOOL "Build vk_canvas's pure tests in this tree" FORCE)
+
 option(APP_SHELL_DEV_BUILD_FUZZ
     "Build the libFuzzer harness under dev/fuzz (clang only)" OFF)
 

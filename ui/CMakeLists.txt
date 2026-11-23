@@ -67,7 +67,8 @@ target_link_libraries(vk_canvas_ui PUBLIC
 # CPU-only widget tests. They link the UI target (which links draw+font) but no
 # renderer object; the tests exercise geometry and state transitions, not
 # pixels. The loader appears on the link line only through vk_font_core.
-if(NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+option(VCE_BUILD_TESTS "Build vk_canvas's pure tests in this tree" OFF)
+if(VCE_BUILD_TESTS AND NOT ANDROID AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     function(vce_add_ui_test name)
         add_executable(${name} tests/${name}.cc)
         target_link_libraries(${name} PRIVATE vk_canvas_ui)
